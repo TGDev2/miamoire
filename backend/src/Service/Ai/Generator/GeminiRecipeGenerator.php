@@ -86,14 +86,60 @@ class GeminiRecipeGenerator implements RecipeGeneratorInterface
             });
         }
 
-        $text = $payload['output_text'] ?? null;
+        $text = $this->extractText($payload);
 
-        if (!is_string($text) || '' === trim($text)) {
-            $this->logger->error('Réponse Gemini inexploitable', ['body' => $payload]);
+        if (null === $text) {
+            $this->logger->error('Réponse Gemini inexploitable', [
+                'status' => $payload['status'] ?? null,
+                'body' => $payload,
+            ]);
 
             throw new StockException('Réponse inexploitable du générateur de recettes.');
         }
 
         return $text;
+    }
+
+    /**
+     * Le texte vit dans `steps[].content[].text`.
+     *
+     * `output_text` est une commodité des SDK, absente de la réponse REST ; le
+     * premier step est un `thought` sans contenu, d'où le parcours complet plutôt
+     * qu'un accès direct au premier élément.
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function extractText(array $payload): ?string
+    {
+        // Conservé au cas où l'API exposerait un jour ce raccourci.
+        if (is_string($payload['output_text'] ?? null) && '' !== trim($payload['output_text'])) {
+            return $payload['output_text'];
+        }
+
+        if (!is_array($payload['steps'] ?? null)) {
+            return null;
+        }
+
+        $latest = null;
+
+        foreach ($payload['steps'] as $step) {
+            if (!is_array($step) || !is_array($step['content'] ?? null)) {
+                continue;
+            }
+
+            $parts = [];
+            foreach ($step['content'] as $block) {
+                if (is_array($block) && 'text' === ($block['type'] ?? null) && is_string($block['text'] ?? null)) {
+                    $parts[] = $block['text'];
+                }
+            }
+
+            // On retient le dernier bloc de texte produit par le modèle.
+            if ([] !== $parts) {
+                $latest = implode('', $parts);
+            }
+        }
+
+        return null !== $latest && '' !== trim($latest) ? $latest : null;
     }
 }

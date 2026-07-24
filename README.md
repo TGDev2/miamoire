@@ -124,7 +124,7 @@ La seconde option évite toute règle de pare-feu : le trafic passe par le câbl
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 36 tests
+cd backend && php vendor/bin/phpunit    # 43 tests
 cd mobile  && npx tsc --noEmit
 ```
 
