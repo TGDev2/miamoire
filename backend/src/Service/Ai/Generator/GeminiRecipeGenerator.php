@@ -1,0 +1,99 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Service\Ai\Generator;
+
+use App\Exception\StockException;
+use Psr\Log\LoggerInterface;
+use Symfony\Contracts\HttpClient\Exception\ExceptionInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+
+/**
+ * Google Gemini — palier gratuit, sans carte bancaire.
+ *
+ * L'endpoint « interactions » accepte un schéma JSON standard : le même
+ * RecipeSchema sert donc aux deux fournisseurs, sans conversion.
+ */
+class GeminiRecipeGenerator implements RecipeGeneratorInterface
+{
+    private const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+
+    public function __construct(
+        private readonly HttpClientInterface $httpClient,
+        private readonly LoggerInterface $logger,
+        private readonly string $apiKey,
+        private readonly string $model,
+    ) {
+    }
+
+    public function isConfigured(): bool
+    {
+        return '' !== trim($this->apiKey);
+    }
+
+    public function label(): string
+    {
+        return 'Google Gemini';
+    }
+
+    public function configurationHint(): string
+    {
+        return 'GEMINI_API_KEY';
+    }
+
+    public function generate(string $systemPrompt, string $userPayload, array $schema): string
+    {
+        try {
+            $response = $this->httpClient->request('POST', self::ENDPOINT, [
+                'headers' => [
+                    'x-goog-api-key' => $this->apiKey,
+                    'Content-Type' => 'application/json',
+                ],
+                'json' => [
+                    'model' => $this->model,
+                    'system_instruction' => $systemPrompt,
+                    'input' => $userPayload,
+                    'response_format' => [
+                        'type' => 'text',
+                        'mime_type' => 'application/json',
+                        'schema' => $schema,
+                    ],
+                ],
+                'timeout' => 90,
+            ]);
+
+            $status = $response->getStatusCode();
+            /** @var array<string, mixed> $payload */
+            $payload = $response->toArray(false);
+        } catch (ExceptionInterface $exception) {
+            $this->logger->error('Appel Gemini impossible', ['error' => $exception->getMessage()]);
+
+            throw new StockException(
+                'Le service de recettes est injoignable. Vérifiez votre connexion et réessayez.',
+            );
+        }
+
+        if ($status >= 400) {
+            $message = $payload['error']['message'] ?? 'erreur inconnue';
+            $this->logger->error('Gemini a refusé la requête', ['status' => $status, 'body' => $payload]);
+
+            throw new StockException(match ($status) {
+                400 => 'Requête refusée par Gemini. Vérifiez que GEMINI_MODEL désigne un modèle existant.',
+                401, 403 => 'Clé GEMINI_API_KEY invalide ou sans accès à ce modèle.',
+                429 => 'Quota gratuit Gemini atteint. Réessayez dans quelques minutes.',
+                default => sprintf('Le générateur de recettes a échoué (%d) : %s', $status, $message),
+            });
+        }
+
+        $text = $payload['output_text'] ?? null;
+
+        if (!is_string($text) || '' === trim($text)) {
+            $this->logger->error('Réponse Gemini inexploitable', ['body' => $payload]);
+
+            throw new StockException('Réponse inexploitable du générateur de recettes.');
+        }
+
+        return $text;
+    }
+}

@@ -65,15 +65,30 @@ php bin/console doctrine:migrations:migrate
 php -S 0.0.0.0:8000 -t public public/index.php
 ```
 
-Créez `backend/.env.local` avec votre clé Claude — elle n'est jamais versionnée
-ni embarquée dans l'application mobile :
+### Clé du générateur de recettes
+
+Deux fournisseurs sont branchés, au choix, dans `backend/.env.local` — jamais
+versionné, jamais embarqué dans l'application mobile :
 
 ```dotenv
+# Gratuit, sans carte bancaire : https://aistudio.google.com/apikey
+RECIPE_PROVIDER=gemini
+GEMINI_API_KEY=AIza...
+```
+
+```dotenv
+# Payant, propositions de meilleure qualité
+RECIPE_PROVIDER=claude
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Sans cette clé, tout fonctionne sauf l'onglet « Cuisiner », qui affiche un message
-explicite.
+Sans clé, tout fonctionne sauf l'onglet « Cuisiner », qui affiche un message
+nommant précisément la variable à renseigner.
+
+L'appel au modèle est isolé derrière `RecipeGeneratorInterface` : la logique
+métier — inventaire structuré, consignes, validation de la proposition de
+consommation — est identique quel que soit le fournisseur. En ajouter un
+troisième revient à écrire une classe.
 
 ### Application mobile
 
@@ -109,7 +124,7 @@ La seconde option évite toute règle de pare-feu : le trafic passe par le câbl
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 29 tests
+cd backend && php vendor/bin/phpunit    # 36 tests
 cd mobile  && npx tsc --noEmit
 ```
 

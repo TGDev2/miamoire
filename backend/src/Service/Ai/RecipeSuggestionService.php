@@ -4,12 +4,10 @@ declare(strict_types=1);
 
 namespace App\Service\Ai;
 
-use Anthropic\Client;
-use Anthropic\Core\Exceptions\APIException;
 use App\Entity\Household;
 use App\Exception\StockException;
+use App\Service\Ai\Generator\RecipeGeneratorFactory;
 use App\Service\Inventory\InventoryAggregator;
-use Psr\Log\LoggerInterface;
 
 /**
  * Génération de propositions culinaires à partir de l'inventaire réel.
@@ -17,35 +15,30 @@ use Psr\Log\LoggerInterface;
  * L'IA ne modifie JAMAIS le stock : elle renvoie une proposition de
  * consommation que l'utilisateur devra confirmer explicitement
  * (voir RecipeConfirmationService).
+ *
+ * Le fournisseur de modèle est interchangeable — voir RecipeGeneratorFactory.
  */
 class RecipeSuggestionService
 {
-    private const MODEL = 'claude-opus-5';
-    private const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
-
     public function __construct(
-        private readonly Client $client,
+        private readonly RecipeGeneratorFactory $generators,
         private readonly InventoryAggregator $aggregator,
-        private readonly LoggerInterface $logger,
-        private readonly string $effort,
-        private readonly string $anthropicApiKey,
     ) {
     }
 
-    /** @return array{recipes: list<array<string, mixed>>, inventory: list<array<string, mixed>>} */
+    /** @return array{recipes: list<array<string, mixed>>, inventory: list<array<string, mixed>>, provider: string} */
     public function suggest(Household $household, RecipeRequest $request): array
     {
-        if ('' === trim($this->anthropicApiKey)) {
-            throw new StockException(
-                'Le générateur de recettes n\'est pas configuré : renseignez ANTHROPIC_API_KEY dans backend/.env.local.',
-            );
-        }
+        // Lève une erreur explicite si aucune clé n'est configurée.
+        $generator = $this->generators->create();
 
         $inventory = $this->aggregator->aggregate($household);
 
         if ([] === $inventory) {
             throw new StockException('Votre inventaire est vide : ajoutez au moins un aliment avant de demander une recette.');
         }
+
+        $inventoryPayload = array_map(static fn ($line) => $line->toAiPayload(), $inventory);
 
         $payload = [
             'people' => $request->people,
@@ -54,74 +47,39 @@ class RecipeSuggestionService
             'availableEquipment' => $request->equipment,
             'dietaryExclusions' => $request->exclusions,
             'allowExtraIngredients' => $request->allowExtraIngredients,
-            'inventory' => array_map(
-                static fn ($line) => $line->toAiPayload(),
-                $inventory,
-            ),
+            'inventory' => $inventoryPayload,
         ];
 
-        $raw = $this->callModel(json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE));
+        $raw = $generator->generate(
+            $this->systemPrompt(),
+            json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
+            RecipeSchema::definition(),
+        );
 
-        /** @var array{recipes?: list<array<string, mixed>>} $decoded */
-        $decoded = json_decode($raw, true, 512, \JSON_THROW_ON_ERROR);
+        try {
+            /** @var array{recipes?: list<array<string, mixed>>} $decoded */
+            $decoded = json_decode($this->stripCodeFence($raw), true, 512, \JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            throw new StockException('Réponse illisible du générateur de recettes. Réessayez.');
+        }
 
         return [
             'recipes' => array_slice($decoded['recipes'] ?? [], 0, 3),
-            'inventory' => array_map(
-                static fn ($line) => $line->toAiPayload(),
-                $inventory,
-            ),
+            'inventory' => $inventoryPayload,
+            'provider' => $generator->label(),
         ];
     }
 
-    private function callModel(string $userPayload): string
+    /** Certains modèles encadrent le JSON par ```json malgré la consigne. */
+    private function stripCodeFence(string $raw): string
     {
-        $arguments = [
-            'model' => self::MODEL,
-            'maxTokens' => 16000,
-            'system' => [[
-                'type' => 'text',
-                'text' => $this->systemPrompt(),
-                'cacheControl' => ['type' => 'ephemeral'],
-            ]],
-            'messages' => [['role' => 'user', 'content' => $userPayload]],
-            'outputConfig' => [
-                'effort' => $this->effort,
-                'format' => [
-                    'type' => 'json_schema',
-                    'schema' => RecipeSchema::definition(),
-                ],
-            ],
-        ];
+        $trimmed = trim($raw);
 
-        try {
-            // Les classificateurs de sûreté peuvent refuser une requête ; le
-            // paramètre `fallbacks` la rejoue automatiquement sur un autre modèle.
-            $message = $this->client->beta->messages->create(...[
-                ...$arguments,
-                'betas' => [self::FALLBACK_BETA],
-                'fallbacks' => 'default',
-            ]);
-        } catch (APIException $exception) {
-            // Si la bêta n'est pas activée sur la clé, on reste fonctionnel sans elle.
-            $this->logger->warning('Repli sur l\'appel standard sans fallbacks serveur', [
-                'error' => $exception->getMessage(),
-            ]);
-
-            $message = $this->client->messages->create(...$arguments);
+        if (str_starts_with($trimmed, '```')) {
+            $trimmed = preg_replace('/^```[a-z]*\s*|\s*```$/i', '', $trimmed) ?? $trimmed;
         }
 
-        if ('refusal' === $message->stopReason) {
-            throw new StockException('Le générateur de recettes n\'a pas pu traiter cette demande. Reformulez vos contraintes.');
-        }
-
-        foreach ($message->content as $block) {
-            if ('text' === $block->type) {
-                return $block->text;
-            }
-        }
-
-        throw new StockException('Réponse inexploitable du générateur de recettes.');
+        return trim($trimmed);
     }
 
     private function systemPrompt(): string
@@ -169,8 +127,8 @@ class RecipeSuggestionService
               de l'inventaire (une masse ne devient pas un volume).
             - N'y fais figurer que ce qui est réellement consommé par la recette.
 
-            Rédige des étapes courtes et concrètes. Reste factuel : pas d'introduction,
-            pas de commentaire hors du schéma JSON demandé.
+            Rédige des étapes courtes et concrètes. Réponds uniquement par le JSON demandé,
+            sans texte d'introduction ni bloc de code.
             PROMPT;
     }
 }
