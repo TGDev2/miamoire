@@ -1,0 +1,28 @@
+# Configuration des services applicatifs.
+# Les paramètres d'infrastructure vivent dans .env, pas ici.
+
+parameters:
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        bind:
+            bool $debug: '%kernel.debug%'
+            string $baseUrl: '%env(OPENFOODFACTS_BASE_URL)%'
+            string $userAgent: '%env(OPENFOODFACTS_USER_AGENT)%'
+            int $cacheTtlDays: '%env(int:PRODUCT_CACHE_TTL_DAYS)%'
+            string $effort: '%env(ANTHROPIC_EFFORT)%'
+            string $anthropicApiKey: '%env(ANTHROPIC_API_KEY)%'
+
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+
+    # La clé d'API reste côté serveur : elle n'est jamais exposée à l'application mobile.
+    Anthropic\Client:
+        arguments:
+            $apiKey: '%env(ANTHROPIC_API_KEY)%'

@@ -1,0 +1,24 @@
+# Dépendances
+/backend/vendor/
+/mobile/node_modules/
+
+# Secrets et environnement local
+/backend/.env.local
+/backend/.env.*.local
+/backend/config/jwt/*.pem
+.env.local
+
+# Build et cache
+/backend/var/
+/mobile/.expo/
+/mobile/dist/
+/mobile/android/
+/mobile/ios/
+*.apk
+*.aab
+
+# Outils
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

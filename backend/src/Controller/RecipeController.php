@@ -1,0 +1,61 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Controller;
+
+use App\Http\JsonPayload;
+use App\Service\Ai\RecipeConfirmationService;
+use App\Service\Ai\RecipeRequest;
+use App\Service\Ai\RecipeSuggestionService;
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\Routing\Attribute\Route;
+
+#[Route('/api/recipes')]
+class RecipeController extends AbstractApiController
+{
+    /** Génère des propositions. Aucune écriture en stock à cette étape. */
+    #[Route('/suggest', methods: ['POST'])]
+    public function suggest(Request $request, RecipeSuggestionService $service): JsonResponse
+    {
+        $payload = JsonPayload::fromRequest($request);
+        $user = $this->currentUser();
+
+        // Les exclusions du profil s'appliquent par défaut, la requête peut les compléter.
+        $exclusions = array_values(array_unique(array_merge(
+            $user->getDietaryExclusions(),
+            $payload->stringList('exclusions'),
+        )));
+
+        $result = $service->suggest($user->getHousehold(), new RecipeRequest(
+            people: max(1, min(20, $payload->int('people', 2) ?? 2)),
+            mealType: $payload->string('mealType'),
+            maxMinutes: $payload->int('maxMinutes'),
+            equipment: $payload->stringList('equipment'),
+            exclusions: $exclusions,
+            allowExtraIngredients: $payload->bool('allowExtraIngredients'),
+        ));
+
+        return $this->json($result);
+    }
+
+    /**
+     * Applique la déduction après confirmation explicite de l'utilisateur.
+     * Chaque ligne est revalidée contre le stock réel avant écriture.
+     */
+    #[Route('/confirm', methods: ['POST'])]
+    public function confirm(Request $request, RecipeConfirmationService $service): JsonResponse
+    {
+        $payload = JsonPayload::fromRequest($request);
+
+        $result = $service->confirm(
+            $this->currentHousehold(),
+            $this->currentUser(),
+            $payload->objectList('stockConsumptionProposal'),
+            $payload->string('recipeName'),
+        );
+
+        return $this->json($result);
+    }
+}
