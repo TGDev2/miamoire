@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../src/api/client';
-import type { Product, Reference, Unit } from '../src/api/types';
+import type { Product, ProductTraitValue, Reference, Unit } from '../src/api/types';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
 import { colors, radius, spacing } from '../src/theme';
 
@@ -23,6 +23,7 @@ export default function AddScreen() {
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState<Unit>('g');
   const [location, setLocation] = useState('pantry');
+  const [traits, setTraits] = useState<ProductTraitValue[]>([]);
   const [expiration, setExpiration] = useState<Date | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [note, setNote] = useState('');
@@ -45,6 +46,8 @@ export default function AddScreen() {
             setProduct(found.product);
             setName(found.product.name);
             setBrand(found.product.brand ?? '');
+            // L'état déjà déduit du libellé par le serveur reste modifiable ici.
+            setTraits(found.product.traits);
             if (found.product.packageQuantity) setQuantity(String(found.product.packageQuantity));
             if (found.product.packageUnit) setUnit(found.product.packageUnit);
           } catch (exception) {
@@ -102,6 +105,8 @@ export default function AddScreen() {
         quantityPerPackage: perPackage,
         unit,
         storageLocation: location,
+        // Sans sélection, le serveur déduit l'état du libellé plutôt que de le vider.
+        traits: traits.length > 0 ? traits : undefined,
         expirationDate: expiration ? toIsoDate(expiration) : null,
         note: note.trim() || undefined,
       });
@@ -199,6 +204,28 @@ export default function AddScreen() {
           Total ajouté au stock : {formatNumber(total)} {unit}
         </Text>
       ) : null}
+
+      <SectionTitle>Dans quel état est-il ?</SectionTitle>
+      <Text style={styles.help}>
+        Ce que les recettes doivent savoir : des pommes de terre en conserve ne s'épluchent
+        pas, un légume surgelé se décongèle.
+      </Text>
+      <View style={styles.chips}>
+        {reference?.productTraits.map((option) => (
+          <Chip
+            key={option.value}
+            label={option.label}
+            selected={traits.includes(option.value)}
+            onPress={() =>
+              setTraits((current) =>
+                current.includes(option.value)
+                  ? current.filter((trait) => trait !== option.value)
+                  : [...current, option.value],
+              )
+            }
+          />
+        ))}
+      </View>
 
       <SectionTitle>Où est-il rangé ?</SectionTitle>
       <View style={styles.chips}>
@@ -311,6 +338,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
+  help: { fontSize: 13, color: colors.inkMuted, lineHeight: 19, marginBottom: spacing.md },
   total: {
     fontSize: 15,
     fontWeight: '600',

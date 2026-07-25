@@ -14,6 +14,7 @@ import {
 import { api } from '../../src/api/client';
 import type { Reference, StockItem } from '../../src/api/types';
 import { Badge, Chip, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
+import { syncExpiryNotifications } from '../../src/notifications/expiry';
 import { colors, radius, spacing, statusPresentation } from '../../src/theme';
 
 const EXPIRY_FILTER_DAYS = 3;
@@ -59,6 +60,27 @@ export default function StockScreen() {
     useCallback(() => {
       load();
     }, [load]),
+  );
+
+  // Les alertes se programment sur l'inventaire ENTIER, pas sur la liste filtrée :
+  // filtrer sur « Bientôt périmés » ne doit pas annuler les alertes des autres lots.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      (async () => {
+        try {
+          const all = await api.stockItems();
+          if (!cancelled) await syncExpiryNotifications(all.items);
+        } catch {
+          // Une alerte non programmée ne doit jamais empêcher de consulter son stock.
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
 
   if (loading) return <Loader label="Chargement du stock…" />;

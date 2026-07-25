@@ -1,5 +1,24 @@
 export type Unit = 'g' | 'kg' | 'ml' | 'cl' | 'l' | 'piece' | 'portion';
 export type StorageLocation = 'pantry' | 'fridge' | 'freezer';
+
+/**
+ * L'état réel d'un produit, au-delà de son nom.
+ *
+ * Des pommes de terre en conserve sont déjà pelées et cuites : sans cette
+ * information, la recette générée commence par « épluchez les pommes de terre ».
+ */
+export type ProductTraitValue =
+  | 'canned'
+  | 'frozen'
+  | 'dried'
+  | 'peeled'
+  | 'precooked'
+  | 'cooked'
+  | 'ready_to_eat'
+  | 'sliced'
+  | 'sweetened'
+  | 'unsweetened';
+
 export type StockStatus = 'sealed' | 'opened' | 'running_low' | 'expiring_soon' | 'expired' | 'empty';
 export type Feasibility = 'ready' | 'adapted' | 'needs_shopping';
 
@@ -11,6 +30,7 @@ export interface Product {
   ingredientKey: string;
   brand: string | null;
   category: string | null;
+  traits: ProductTraitValue[];
   packageQuantity: number | null;
   packageUnit: Unit | null;
   imageUrl: string | null;
@@ -79,6 +99,7 @@ export interface Reference {
   units: Array<ReferenceOption & { family: string; isDiscrete: boolean }>;
   storageLocations: ReferenceOption[];
   fillLevels: Array<ReferenceOption & { ratio: number | null }>;
+  productTraits: Array<ReferenceOption & { value: ProductTraitValue }>;
   categories: string[];
   mealTypes: ReferenceOption[];
   equipment: ReferenceOption[];
@@ -93,6 +114,7 @@ export interface InventoryIngredient {
   expiresSoon: boolean;
   earliestExpiration: string | null;
   category: string | null;
+  traits: ProductTraitValue[];
   locations: StorageLocation[];
   lotCount: number;
 }

@@ -1,13 +1,40 @@
-import { Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { RecipeProvider } from '../src/recipes/RecipeContext';
 import { SessionProvider } from '../src/session/SessionContext';
 import { colors } from '../src/theme';
 
+// Une alerte de péremption doit s'afficher même si l'application est ouverte :
+// c'est souvent à ce moment-là qu'on décide du repas.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
+
 export default function RootLayout() {
+  const router = useRouter();
+
+  // Toucher l'alerte doit mener à l'aliment concerné, pas à l'écran d'accueil.
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const { stockItemId } = response.notification.request.content.data as {
+        stockItemId?: string;
+      };
+
+      if (stockItemId) router.push(`/item/${stockItemId}`);
+    });
+
+    return () => subscription.remove();
+  }, [router]);
+
   return (
     <SafeAreaProvider>
       <SessionProvider>

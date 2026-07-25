@@ -9,6 +9,7 @@ use App\Entity\Member;
 use App\Entity\Product;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
+use App\Enum\ProductTrait;
 use App\Service\UnitConverter;
 
 /** Mise en forme des entités pour l'API. Une seule source de vérité pour le contrat JSON. */
@@ -54,6 +55,7 @@ class ApiPresenter
             'ingredientKey' => $product->getIngredientKey(),
             'brand' => $product->getBrand(),
             'category' => $product->getCategory(),
+            'traits' => ProductTrait::toValues($product->getTraits()),
             'packageQuantity' => $product->getPackageQuantity(),
             'packageUnit' => $product->getPackageUnit()?->value,
             'imageUrl' => $product->getImageUrl(),

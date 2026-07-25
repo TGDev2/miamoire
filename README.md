@@ -49,14 +49,46 @@ garantie apportée est l'**isolation** : un foyer ne peut jamais lire ni modifie
 le stock d'un autre, et un membre ne peut pas signer un mouvement dans un foyer
 auquel il n'appartient pas (`RequestContext`, couvert par `RequestContextTest`).
 
-> ⚠️ Toute personne ayant accès au réseau local peut lister les foyers et lire
-> leur stock. C'est un choix assumé pour un usage familial ; ne pas exposer l'API
-> sur Internet en l'état.
+> ⚠️ Toute personne ayant accès au réseau peut lister les foyers et lire leur stock.
+> C'est un choix assumé pour un usage familial. Pour joindre l'API hors du domicile,
+> passer par Tailscale (voir plus bas) : le réseau privé y tient lieu
+> d'authentification. Ne jamais rediriger le port 8000 de la box vers le PC.
+
+## Un produit n'est pas qu'un nom
+
+Des pommes de terre en conserve sont déjà pelées et cuites. Tant que le générateur
+de recettes ne recevait que le libellé, il répondait « Épluchez les pommes de terre ».
+
+Chaque `Product` porte donc une liste de **traits** — `canned`, `frozen`, `peeled`,
+`precooked`, `sliced`… Ils sont déduits du libellé et de la catégorie à la création
+(`ProductTraitDetector`), puis corrigeables d'un geste dans l'application.
+
+Chaque trait porte sa propre consigne, dans `App\Enum\ProductTrait` :
+
+```
+canned (En conserve) : déjà cuit, pelé et paré — ne demande ni épluchage,
+                       ni parage, ni cuisson longue.
+```
+
+Le glossaire envoyé au modèle est construit depuis l'enum : ajouter un trait suffit
+à l'enseigner au générateur, sans toucher au prompt.
+
+La détection reste volontairement conservatrice. `boîte` seul n'est pas une conserve
+(une « boîte de 6 œufs » n'en est pas une), `sucre` seul n'est pas un produit sucré,
+et la frontière de mot autour de `cuit` évite de déclarer un biscuit « déjà cuit ».
+Un faux positif égarerait le générateur aussi sûrement qu'une absence d'information.
+
+Pour compléter les produits enregistrés avant cette fonctionnalité :
+
+```bash
+php bin/console app:products:detect-traits --dry-run   # aperçu
+php bin/console app:products:detect-traits             # application
+```
 
 ## L'IA ne modifie jamais l'inventaire
 
 Le générateur de recettes reçoit un inventaire **structuré** (clé stable, quantité,
-unité, urgence de péremption), pas une liste de noms. Il renvoie une
+unité, état du produit, urgence de péremption), pas une liste de noms. Il renvoie une
 `stockConsumptionProposal`.
 
 Cette proposition est **revalidée intégralement côté serveur** avant toute écriture :
@@ -120,36 +152,100 @@ npx expo start          # puis scanner le QR code avec Expo Go
 En développement, l'adresse de l'API est déduite de celle du bundler Expo :
 rien à configurer tant que le téléphone et l'ordinateur sont sur le même Wi-Fi.
 
-### APK autonome
+## Alertes de péremption
+
+Trois jours avant la date limite, à 9 h, le téléphone prévient de ce qu'il faut
+consommer. Toucher l'alerte ouvre directement la fiche de l'aliment.
+
+Les notifications sont **locales** : chaque téléphone programme les siennes à partir
+du stock qu'il vient d'afficher, sans jeton d'appareil ni tâche planifiée côté
+serveur. Elles fonctionnent donc hors connexion, et chaque membre du foyer autorise
+les siennes depuis l'onglet Profil.
+
+À chaque passage sur l'onglet Stock, les alertes sont annulées puis reprogrammées
+en bloc à partir de l'inventaire entier — jamais de la liste filtrée à l'écran.
+L'inventaire reste la seule source de vérité ; aucun état parallèle ne peut mentir.
+
+> Un lot enregistré alors qu'il périme dans moins de trois jours n'a pas d'alerte :
+> l'instant est déjà passé. Il apparaît en revanche d'emblée en rouge dans la liste
+> et sous le filtre « Bientôt périmés ».
+
+## Utiliser l'application hors du domicile
+
+L'API n'a ni compte ni mot de passe : la publier sur Internet reviendrait à ouvrir
+son stock — et sa base — à qui trouve l'adresse. **Tailscale** résout le problème
+sans rien changer à ce modèle : il crée un réseau privé chiffré entre les seuls
+appareils que vous autorisez. L'API devient joignable en 4G, en 5G et depuis
+n'importe quel Wi-Fi, tout en restant invisible du reste d'Internet.
+
+1. Installer Tailscale sur le PC et sur chaque téléphone, se connecter avec le même
+   compte : <https://tailscale.com/download>
+2. Activer **MagicDNS** dans l'admin Tailscale — la machine devient joignable par son
+   nom plutôt que par une IP.
+3. Lancer l'API en écoutant sur toutes les interfaces :
+   `php -S 0.0.0.0:8000 -t public public/index.php`
+4. Dans l'application, onglet **Profil → Serveur**, saisir `<nom-machine>:8000`, puis
+   **Tester la connexion**.
+
+Aucune redirection de port sur la box, aucune règle de pare-feu entrante, aucun
+certificat à gérer. Le bouton « Tester la connexion » interroge `GET /api/health` :
+c'est ce qui distingue, depuis le téléphone, une adresse fausse d'un PC éteint.
+
+## Installer l'application sur les téléphones du foyer
+
+`eas.json` décrit un profil `preview` en **distribution interne** : Expo compile
+l'APK dans le cloud et renvoie un lien accompagné d'un QR code. Chaque membre le
+scanne, télécharge et installe — sans câble, sans ordinateur.
+
+```bash
+npm install -g eas-cli
+eas login
+cd mobile
+eas build --platform android --profile preview
+```
+
+Renseigner d'abord `EXPO_PUBLIC_API_URL` dans `eas.json` avec le nom Tailscale du PC.
+Ce n'est qu'un défaut : **l'adresse du serveur reste modifiable dans l'application**,
+donc un même build couvre les trois façons de joindre l'API.
+
+| Contexte | Adresse à saisir | Prérequis |
+| --- | --- | --- |
+| Hors du domicile (4G/5G) | `<nom-machine>:8000` | Tailscale actif des deux côtés |
+| Wi-Fi domestique | `192.168.x.x:8000` | Port 8000 autorisé en entrée dans le pare-feu |
+| USB | `localhost:8000` | `adb reverse tcp:8000 tcp:8000` |
+
+`autoIncrement` est activé : sans un `versionCode` croissant, Android refuse
+d'installer une nouvelle version par-dessus la précédente.
+
+### APK compilé localement
 
 ```bash
 cd mobile
-npx expo prebuild --platform android --clean
+npx expo prebuild --platform android
 cd android
 EXPO_PUBLIC_API_URL="http://<IP-DU-PC>:8000/api" ./gradlew assembleRelease
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-**L'adresse du serveur reste modifiable dans l'application** (écran de connexion,
-puis onglet Profil). Un même APK couvre donc les deux façons de joindre l'API :
+Deux réglages indispensables vivent dans `app.json`, via `expo-build-properties`, et
+non dans le dossier `android/` — celui-ci est régénéré à chaque `prebuild`, ce qui
+effacerait toute correction faite à la main :
 
-| Contexte | Adresse à saisir | Prérequis |
-| --- | --- | --- |
-| Wi-Fi | `192.168.x.x:8000` | Port 8000 autorisé en entrée dans le pare-feu |
-| USB | `localhost:8000` | `adb reverse tcp:8000 tcp:8000` |
-
-La seconde option évite toute règle de pare-feu : le trafic passe par le câble.
+- `usesCleartextTraffic` — sans lui, l'APK de production rejette silencieusement
+  tous les appels HTTP vers l'API locale ;
+- `buildArchs: ["arm64-v8a"]` — compiler les quatre ABI est du temps perdu.
 
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 50 tests
+cd backend && php vendor/bin/phpunit    # 62 tests
 cd mobile  && npx tsc --noEmit
 ```
 
 Les tests couvrent la logique dont une erreur corromprait l'inventaire :
-conversion d'unités, normalisation des noms d'ingrédients, allocation FEFO,
-et chaque mouvement de stock.
+conversion d'unités, correction d'unité entre familles, normalisation des noms
+d'ingrédients, détection de l'état des produits, allocation FEFO, et chaque
+mouvement de stock.
 
 ## API
 
@@ -158,6 +254,7 @@ Toutes les routes sont sous `/api`. Les routes de stock exigent l'en-tête
 
 | Méthode | Route | Rôle |
 | --- | --- | --- |
+| `GET` | `/health` | Serveur joignable ? Seule route sans en-tête `X-Household` |
 | `GET` `POST` | `/households` | Liste et création de foyers |
 | `GET` `PATCH` `DELETE` | `/households/{id}` | Nom et exclusions alimentaires du foyer |
 | `POST` | `/households/{id}/members` | Ajoute un prénom au foyer |
@@ -170,6 +267,7 @@ Toutes les routes sont sous `/api`. Les routes de stock exigent l'en-tête
 | `POST` | `/stock-items/{id}/consume` | `all` · `package` · `units` · `quantity` |
 | `POST` | `/stock-items/{id}/add` | Réapprovisionnement |
 | `POST` | `/stock-items/{id}/correct` | Quantité exacte ou estimation |
+| `POST` | `/stock-items/{id}/unit` | Répare une unité mal saisie |
 | `POST` | `/stock-items/{id}/open` | Entamé / fermé |
 | `POST` | `/stock-items/{id}/discard` | Produit jeté |
 | `GET` | `/stock-items/{id}/movements` | Journal du lot |
@@ -190,6 +288,10 @@ Toutes les routes sont sous `/api`. Les routes de stock exigent l'en-tête
 - **Unités hétérogènes** — conversions uniquement à l'intérieur d'une famille
   (masse, volume, unité, portion). Convertir des grammes en litres demanderait une
   densité inconnue : c'est refusé plutôt que deviné.
+- **Unité mal choisie à la saisie** — « g » au lieu de « unité » se répare depuis la
+  fiche. Entre deux familles, aucune conversion n'existe : la quantité restante est
+  redemandée plutôt que devinée. Un mouvement de correction en garde la trace, et le
+  conditionnement de référence d'un produit saisi à la main suit la correction.
 - **Plusieurs lots, plusieurs dates** — consommation FEFO par défaut.
 - **Plat maison sans code-barres** — saisie libre avec nom, quantité et unité.
 - **Consommation supérieure au stock** — bornée au restant ; le mouvement journalisé

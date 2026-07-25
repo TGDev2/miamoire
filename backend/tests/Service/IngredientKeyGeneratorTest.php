@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Service;
 
 use App\Service\IngredientKeyGenerator;
+use App\Service\TextNormalizer;
 use PHPUnit\Framework\TestCase;
 
 class IngredientKeyGeneratorTest extends TestCase
@@ -13,7 +14,7 @@ class IngredientKeyGeneratorTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->generator = new IngredientKeyGenerator();
+        $this->generator = new IngredientKeyGenerator(new TextNormalizer());
     }
 
     /**

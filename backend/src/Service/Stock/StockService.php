@@ -11,6 +11,7 @@ use App\Entity\Member;
 use App\Entity\StockMovement;
 use App\Enum\FillLevel;
 use App\Enum\MovementType;
+use App\Enum\ProductSource;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Exception\StockException;
@@ -181,6 +182,82 @@ class StockService
         return $movement;
     }
 
+    /**
+     * Répare une unité mal saisie — « g » choisi au lieu de « unité » à l'ajout.
+     *
+     * Deux situations distinctes :
+     *
+     * - même famille (g → kg) : la quantité physique ne change pas, on la convertit ;
+     * - familles différentes (g → unité) : aucune conversion n'existe, la nouvelle
+     *   quantité devient obligatoire. On refuse plutôt que de deviner.
+     *
+     * Le mouvement journalisé porte une quantité nulle : un écart entre deux familles
+     * n'aurait aucun sens. C'est son motif qui rend le journal lisible.
+     */
+    public function changeUnit(
+        StockItem $item,
+        Unit $newUnit,
+        ?float $newQuantity,
+        Member $author,
+    ): ?StockMovement {
+        $currentUnit = $item->getUnit();
+
+        if ($currentUnit === $newUnit && null === $newQuantity) {
+            return null;
+        }
+
+        $sameFamily = $this->converter->canConvert($currentUnit, $newUnit);
+
+        if (!$sameFamily && null === $newQuantity) {
+            throw new StockException(sprintf(
+                'Passer de « %s » à « %s » ne se convertit pas : indiquez la quantité restante en %s.',
+                $currentUnit->label(),
+                $newUnit->label(),
+                $newUnit->label(),
+            ));
+        }
+
+        if (null !== $newQuantity && $newQuantity < 0) {
+            throw new StockException('La quantité corrigée ne peut pas être négative.');
+        }
+
+        $previousLabel = sprintf('%s %s', $this->format($item->getRemainingQuantity()), $currentUnit->label());
+
+        if (null !== $newQuantity) {
+            $item->setInitialQuantity($newQuantity);
+            $item->setRemainingQuantity($newQuantity);
+        } else {
+            $item->setInitialQuantity($this->converter->convert($item->getInitialQuantity(), $currentUnit, $newUnit));
+            $item->setRemainingQuantity($this->converter->convert($item->getRemainingQuantity(), $currentUnit, $newUnit));
+        }
+
+        $item->setUnit($newUnit);
+
+        // Le conditionnement de référence d'un produit saisi à la main suit la correction :
+        // le prochain ajout du même aliment repartira de la bonne unité. Les fiches
+        // Open Food Facts, elles, sont partagées entre foyers et ne sont jamais réécrites ici.
+        $product = $item->getProduct();
+        if (ProductSource::Manual === $product->getSource()) {
+            $product->setPackageUnit($newUnit);
+        }
+
+        $movement = $this->record(
+            $item,
+            MovementType::Correction,
+            0.0,
+            $author,
+            sprintf(
+                'Unité corrigée : %s → %s %s',
+                $previousLabel,
+                $this->format($item->getRemainingQuantity()),
+                $newUnit->label(),
+            ),
+        );
+        $this->entityManager->flush();
+
+        return $movement;
+    }
+
     /** Correction approximative : « plein », « environ la moitié », « presque vide ». */
     public function applyFillLevel(StockItem $item, FillLevel $level, Member $author): ?StockMovement
     {
@@ -235,6 +312,14 @@ class StockService
     {
         $this->entityManager->remove($item);
         $this->entityManager->flush();
+    }
+
+    /** « 1500 » plutôt que « 1500.0 », « 1.5 » plutôt que « 1.500 ». */
+    private function format(float $quantity): string
+    {
+        $rounded = round($quantity, 3);
+
+        return rtrim(rtrim(number_format($rounded, 3, ',', ''), '0'), ',');
     }
 
     private function record(

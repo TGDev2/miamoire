@@ -26,7 +26,7 @@ class InventoryAggregator
     /** @return list<InventoryLine> */
     public function aggregate(Household $household, int $expiringWithinDays = 3): array
     {
-        /** @var array<string, array{label: string, base: float, unit: \App\Enum\Unit, expiresSoon: bool, earliest: ?\DateTimeImmutable, category: ?string, locations: array<string, true>, lots: int}> $grouped */
+        /** @var array<string, array{label: string, base: float, unit: \App\Enum\Unit, expiresSoon: bool, earliest: ?\DateTimeImmutable, category: ?string, locations: array<string, true>, lots: int, traits: array<string, \App\Enum\ProductTrait>, notes: array<string, true>}> $grouped */
         $grouped = [];
 
         foreach ($this->stockItems->findAvailable($household) as $item) {
@@ -43,6 +43,8 @@ class InventoryAggregator
                     'category' => $product->getCategory(),
                     'locations' => [],
                     'lots' => 0,
+                    'traits' => [],
+                    'notes' => [],
                 ];
             }
 
@@ -54,6 +56,16 @@ class InventoryAggregator
             $grouped[$key]['base'] += $this->converter->toBase($item->getRemainingQuantity(), $item->getUnit());
             $grouped[$key]['lots']++;
             $grouped[$key]['locations'][$item->getStorageLocation()->value] = true;
+
+            // Union des états : deux lots d'une même clé peuvent différer (frais et surgelé).
+            foreach ($product->getTraits() as $trait) {
+                $grouped[$key]['traits'][$trait->value] = $trait;
+            }
+
+            $note = $item->getNote();
+            if (null !== $note && '' !== trim($note)) {
+                $grouped[$key]['notes'][trim($note)] = true;
+            }
 
             if ($item->isExpiringSoon($expiringWithinDays)) {
                 $grouped[$key]['expiresSoon'] = true;
@@ -79,6 +91,8 @@ class InventoryAggregator
                 category: $data['category'],
                 locations: array_keys($data['locations']),
                 lotCount: $data['lots'],
+                traits: array_values($data['traits']),
+                notes: array_keys($data['notes']),
             );
         }
 

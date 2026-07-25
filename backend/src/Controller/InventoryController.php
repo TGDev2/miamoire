@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Enum\ProductTrait;
 use App\Http\RequestContext;
 use App\Repository\StockItemRepository;
 use App\Service\Inventory\InventoryAggregator;
@@ -39,6 +40,7 @@ class InventoryController extends AbstractApiController
                     'expiresSoon' => $line->expiresSoon,
                     'earliestExpiration' => $line->earliestExpiration?->format('Y-m-d'),
                     'category' => $line->category,
+                    'traits' => ProductTrait::toValues($line->traits),
                     'locations' => $line->locations,
                     'lotCount' => $line->lotCount,
                 ],

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Ai;
 
 use App\Entity\Household;
+use App\Enum\ProductTrait;
 use App\Exception\StockException;
 use App\Service\Ai\Generator\RecipeGeneratorFactory;
 use App\Service\Inventory\InventoryAggregator;
@@ -70,6 +71,18 @@ class RecipeSuggestionService
         ];
     }
 
+    /**
+     * Le glossaire est construit depuis l'enum : ajouter un trait suffit à
+     * l'enseigner au modèle, sans toucher au prompt.
+     */
+    private function traitGlossary(): string
+    {
+        return implode("\n", array_map(
+            static fn (ProductTrait $trait) => sprintf('- `%s` (%s) : %s.', $trait->value, $trait->label(), $trait->instruction()),
+            ProductTrait::cases(),
+        ));
+    }
+
     /** Certains modèles encadrent le JSON par ```json malgré la consigne. */
     private function stripCodeFence(string $raw): string
     {
@@ -85,6 +98,7 @@ class RecipeSuggestionService
     private function systemPrompt(): string
     {
         $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
+        $traits = $this->traitGlossary();
 
         return <<<PROMPT
             Tu es un assistant culinaire intégré à une application de gestion de stock alimentaire.
@@ -95,7 +109,12 @@ class RecipeSuggestionService
             d'ajouter des ingrédients manquants, et l'inventaire du foyer.
 
             Chaque ligne d'inventaire porte une clé stable `key`, un libellé, une quantité,
-            une unité et un indicateur `expiresSoon`.
+            une unité et un indicateur `expiresSoon`. Elle peut aussi porter `traits`,
+            `category` et `notes`, qui décrivent l'état réel de l'aliment.
+
+            Signification des `traits` :
+
+            {$traits}
 
             Règles impératives :
 
@@ -116,6 +135,11 @@ class RecipeSuggestionService
             6. Respecte `maxPreparationMinutes` et n'utilise que les équipements listés
                quand la liste n'est pas vide.
             7. N'utilise jamais un ingrédient figurant dans `dietaryExclusions`.
+            8. Les `traits` et les `notes` décrivent l'aliment tel qu'il est réellement dans
+               le placard. N'écris JAMAIS une étape de préparation déjà faite : des pommes de
+               terre `canned` ne s'épluchent pas et ne se cuisent pas trente minutes, elles
+               s'égouttent et se réchauffent. Adapte aussi le temps de préparation en
+               conséquence.
 
             À propos de `stockConsumptionProposal` :
 

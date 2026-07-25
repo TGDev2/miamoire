@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Entity\Product;
 use App\Enum\FillLevel;
+use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Http\ApiPresenter;
@@ -64,6 +65,12 @@ class StockItemController extends AbstractApiController
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
         $product = $this->resolveProduct($payload, $lookup, $products);
+
+        // Un état saisi explicitement prime sur celui déduit du libellé, quelle que
+        // soit l'origine du produit — code-barres, fiche existante ou saisie libre.
+        if ($payload->has('traits')) {
+            $product->setTraits(ProductTrait::fromValues($payload->stringList('traits')));
+        }
 
         $unit = $payload->enum('unit', Unit::class) ?? $product->getPackageUnit() ?? Unit::Piece;
 
@@ -128,6 +135,11 @@ class StockItemController extends AbstractApiController
 
         if ($payload->has('name')) {
             $item->getProduct()->setName($payload->requiredString('name'));
+        }
+
+        // L'état du produit (en conserve, épluché…) conditionne les étapes de recette.
+        if ($payload->has('traits')) {
+            $item->getProduct()->setTraits(ProductTrait::fromValues($payload->stringList('traits')));
         }
 
         if ($payload->has('isOpened')) {
@@ -243,6 +255,35 @@ class StockItemController extends AbstractApiController
                 $payload->string('reason'),
             );
         }
+
+        return $this->json($presenter->stockItem($item));
+    }
+
+    /**
+     * Répare une unité mal choisie à la saisie — « g » au lieu de « unité ».
+     *
+     * `quantity` n'est requis que si la nouvelle unité appartient à une autre
+     * famille : convertir des grammes en unités demanderait un poids unitaire
+     * qu'on n'a pas. C'est refusé plutôt que deviné.
+     */
+    #[Route('/{id}/unit', methods: ['POST'])]
+    public function changeUnit(
+        string $id,
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $item = $this->ownedStockItem($stockItems, $context, $id);
+        $payload = JsonPayload::fromRequest($request);
+
+        $stockService->changeUnit(
+            $item,
+            $payload->requiredEnum('unit', Unit::class),
+            $payload->float('quantity'),
+            $context->requireMember(),
+        );
 
         return $this->json($presenter->stockItem($item));
     }

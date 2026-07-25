@@ -27,9 +27,13 @@ class IngredientKeyGenerator
     /** Quantités et conditionnements collés au nom commercial. */
     private const PACKAGING_PATTERN = '/\b\d+[\.,]?\d*\s*(g|kg|ml|cl|l|litres?|grammes?|pieces?|x)\b/iu';
 
+    public function __construct(private readonly TextNormalizer $normalizer)
+    {
+    }
+
     public function generate(string $rawName): string
     {
-        $value = $this->toAscii($rawName);
+        $value = $this->normalizer->toAscii($rawName);
         $value = preg_replace(self::PACKAGING_PATTERN, ' ', $value) ?? $value;
         $value = preg_replace('/[^a-z0-9]+/', ' ', $value) ?? $value;
 
@@ -46,23 +50,6 @@ class IngredientKeyGenerator
         $words = array_slice($words, 0, 3);
 
         return '' === implode('', $words) ? 'inconnu' : implode('-', $words);
-    }
-
-    private function toAscii(string $value): string
-    {
-        if (class_exists(\Transliterator::class)) {
-            $transliterator = \Transliterator::create('Any-Latin; Latin-ASCII; Lower()');
-            if (null !== $transliterator) {
-                $converted = $transliterator->transliterate($value);
-                if (false !== $converted) {
-                    return $converted;
-                }
-            }
-        }
-
-        $converted = @iconv('UTF-8', 'ASCII//TRANSLIT', $value);
-
-        return mb_strtolower(false === $converted ? $value : $converted);
     }
 
     /**

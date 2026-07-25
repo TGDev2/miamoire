@@ -6,6 +6,7 @@ import type {
   InventorySummary,
   Member,
   Product,
+  ProductTraitValue,
   Reference,
   StockItem,
   StockMovement,
@@ -99,6 +100,8 @@ export interface CreateStockItemInput {
   expirationDate?: string | null;
   note?: string;
   quantityIsEstimated?: boolean;
+  /** Omis, l'état est déduit du libellé côté serveur. */
+  traits?: ProductTraitValue[];
 }
 
 export interface StockFilters {
@@ -109,6 +112,9 @@ export interface StockFilters {
 }
 
 export const api = {
+  /** Seule route qui répond sans foyer : elle sert à vérifier que le serveur est joignable. */
+  health: () => request<{ status: string; time: string }>('/health', { anonymous: true }),
+
   households: () => request<{ households: Household[] }>('/households', { anonymous: true }),
 
   createHousehold: (name: string, firstName: string) =>
@@ -172,6 +178,15 @@ export const api = {
 
   correct: (id: string, body: Record<string, unknown>) =>
     request<StockItem>(`/stock-items/${id}/correct`, { method: 'POST', body }),
+
+  /**
+   * Répare une unité mal choisie à la saisie.
+   *
+   * `quantity` n'est requis que pour changer de famille d'unité (g → unité) :
+   * aucune conversion n'existe alors, le serveur refuse plutôt que de deviner.
+   */
+  changeUnit: (id: string, unit: Unit, quantity?: number) =>
+    request<StockItem>(`/stock-items/${id}/unit`, { method: 'POST', body: { unit, quantity } }),
 
   setOpened: (id: string, isOpened: boolean) =>
     request<StockItem>(`/stock-items/${id}/open`, { method: 'POST', body: { isOpened } }),

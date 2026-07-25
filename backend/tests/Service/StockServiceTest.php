@@ -142,6 +142,68 @@ class StockServiceTest extends TestCase
         self::assertSame(-800.0, $movement->getQuantity());
     }
 
+    /** Même famille : la quantité physique ne change pas, seule son expression change. */
+    public function testChangingToACompatibleUnitConvertsTheQuantity(): void
+    {
+        $item = $this->item(1500, Unit::Gram);
+
+        $movement = $this->service->changeUnit($item, Unit::Kilogram, null, $this->member);
+
+        self::assertSame(Unit::Kilogram, $item->getUnit());
+        self::assertSame(1.5, $item->getRemainingQuantity());
+        self::assertSame(1.5, $item->getInitialQuantity());
+        self::assertInstanceOf(\App\Entity\StockMovement::class, $movement);
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame(0.0, $movement->getQuantity(), 'Rien n\'a été consommé ni ajouté.');
+    }
+
+    /** Le cas signalé : « g » choisi au lieu de « unité ». Deviner un poids unitaire est exclu. */
+    public function testChangingUnitFamilyWithoutQuantityIsRejected(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+
+        $this->expectException(StockException::class);
+        $this->expectExceptionMessage('unité');
+
+        $this->service->changeUnit($item, Unit::Piece, null, $this->member);
+    }
+
+    public function testChangingUnitFamilyRewritesTheQuantity(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+
+        $movement = $this->service->changeUnit($item, Unit::Piece, 2, $this->member);
+
+        self::assertSame(Unit::Piece, $item->getUnit());
+        self::assertSame(2.0, $item->getRemainingQuantity());
+        self::assertSame(2.0, $item->getInitialQuantity(), 'Le lot est redéfini, pas complété.');
+        self::assertNotNull($movement);
+        self::assertStringContainsString('500 g → 2 unité', (string) $movement->getReason());
+    }
+
+    /** Le prochain ajout du même aliment doit repartir de l'unité corrigée. */
+    public function testManualProductPackagingFollowsTheCorrection(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+
+        $this->service->changeUnit($item, Unit::Piece, 2, $this->member);
+
+        self::assertSame(Unit::Piece, $item->getProduct()->getPackageUnit());
+    }
+
+    /** Une fiche Open Food Facts est partagée entre foyers : elle n'est jamais réécrite ici. */
+    public function testOpenFoodFactsProductPackagingIsLeftUntouched(): void
+    {
+        $product = new Product('Riz', 'riz', ProductSource::OpenFoodFacts);
+        $product->setPackageUnit(Unit::Gram);
+        $item = new StockItem($this->household, $product, 500, Unit::Gram, StorageLocation::Pantry);
+
+        $this->service->changeUnit($item, Unit::Piece, 2, $this->member);
+
+        self::assertSame(Unit::Piece, $item->getUnit());
+        self::assertSame(Unit::Gram, $product->getPackageUnit());
+    }
+
     public function testRunningLowThresholdReflectsWhatIsLeft(): void
     {
         $item = $this->item(1000, Unit::Gram);

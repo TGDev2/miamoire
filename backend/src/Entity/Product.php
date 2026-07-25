@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Entity;
 
 use App\Enum\ProductSource;
+use App\Enum\ProductTrait;
 use App\Enum\Unit;
 use App\Repository\ProductRepository;
 use Doctrine\ORM\Mapping as ORM;
@@ -41,6 +42,17 @@ class Product
 
     #[ORM\Column(length: 120, nullable: true)]
     private ?string $category = null;
+
+    /**
+     * État réel du produit — en conserve, épluché, surgelé…
+     *
+     * Sans lui, une recette faite de pommes de terre en conserve commencerait par
+     * « épluchez les pommes de terre ». Détecté à la création, corrigeable à la main.
+     *
+     * @var list<string> valeurs de ProductTrait
+     */
+    #[ORM\Column(type: 'json')]
+    private array $traits = [];
 
     #[ORM\Column(type: 'float', nullable: true)]
     private ?float $packageQuantity = null;
@@ -123,6 +135,18 @@ class Product
     public function setCategory(?string $category): void
     {
         $this->category = $category;
+    }
+
+    /** @return list<ProductTrait> */
+    public function getTraits(): array
+    {
+        return ProductTrait::fromValues($this->traits);
+    }
+
+    /** @param list<ProductTrait> $traits */
+    public function setTraits(array $traits): void
+    {
+        $this->traits = ProductTrait::toValues($traits);
     }
 
     public function getPackageQuantity(): ?float

@@ -5,6 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { api } from '../../src/api/client';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../../src/components/ui';
+import { clearExpiryNotifications, ensureExpiryAlerts } from '../../src/notifications/expiry';
 import { useSession } from '../../src/session/SessionContext';
 import { colors, radius, spacing } from '../../src/theme';
 
@@ -17,6 +18,7 @@ export default function ProfileScreen() {
   const [newMember, setNewMember] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [alertStatus, setAlertStatus] = useState('Autorisation non vérifiée sur ce téléphone.');
 
   if (!household) return <Loader />;
 
@@ -164,6 +166,26 @@ export default function ProfileScreen() {
         }}
       />
 
+      <SectionTitle>Alertes de péremption</SectionTitle>
+      <Text style={styles.help}>
+        Trois jours avant la date limite, à 9 h, ce téléphone vous prévient de ce qu'il faut
+        consommer. Les alertes sont programmées sur l'appareil : chaque membre du foyer
+        autorise les siennes.
+      </Text>
+      <Text style={styles.help}>{alertStatus}</Text>
+      <Button
+        label="Vérifier l'autorisation"
+        variant="secondary"
+        onPress={async () => {
+          const granted = await ensureExpiryAlerts();
+          setAlertStatus(
+            granted
+              ? 'Alertes autorisées sur ce téléphone.'
+              : 'Alertes refusées. Autorisez les notifications de Food dans les réglages Android.',
+          );
+        }}
+      />
+
       <SectionTitle>Serveur</SectionTitle>
       <ServerAddressField />
 
@@ -175,6 +197,8 @@ export default function ProfileScreen() {
         label="Choisir un autre foyer"
         variant="danger"
         onPress={async () => {
+          // Les alertes portent sur le stock du foyer quitté : elles n'ont plus lieu d'être.
+          await clearExpiryNotifications();
           await leave();
           router.replace('/setup');
         }}

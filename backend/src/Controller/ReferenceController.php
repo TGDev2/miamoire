@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Enum\FillLevel;
+use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Http\RequestContext;
@@ -43,6 +44,13 @@ class ReferenceController extends AbstractApiController
                     'ratio' => $level->ratio(),
                 ],
                 FillLevel::cases(),
+            ),
+            'productTraits' => array_map(
+                static fn (ProductTrait $trait): array => [
+                    'value' => $trait->value,
+                    'label' => $trait->label(),
+                ],
+                ProductTrait::cases(),
             ),
             'categories' => $stockItems->findUsedCategories($context->household()),
             'mealTypes' => [

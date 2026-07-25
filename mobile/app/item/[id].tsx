@@ -5,6 +5,8 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 
 import { api } from '../../src/api/client';
 import type { Reference, StockItem, StockMovement } from '../../src/api/types';
+
+type ReferenceUnit = Reference['units'][number];
 import {
   Badge,
   Button,
@@ -30,6 +32,9 @@ export default function StockItemScreen() {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [showPicker, setShowPicker] = useState(false);
+  /** Unité choisie mais pas encore appliquée : elle attend une quantité. */
+  const [pendingUnit, setPendingUnit] = useState<ReferenceUnit | null>(null);
+  const [pendingQuantity, setPendingQuantity] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +107,12 @@ export default function StockItemScreen() {
 
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
 
+  // Deux unités d'une même famille se convertissent ; entre familles, il faut redonner la quantité.
+  const currentUnitFamily = reference?.units.find((option) => option.value === item.unit)?.family;
+  const traitLabels = (reference?.productTraits ?? [])
+    .filter((option) => item.product.traits.includes(option.value))
+    .map((option) => option.label);
+
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
@@ -130,6 +141,9 @@ export default function StockItemScreen() {
         </Text>
         {item.addedBy ? (
           <Text style={styles.meta}>Enregistré par {item.addedBy}</Text>
+        ) : null}
+        {traitLabels.length > 0 ? (
+          <Text style={styles.meta}>{traitLabels.join(' · ')}</Text>
         ) : null}
         {item.isOpened ? <Text style={styles.meta}>Entamé</Text> : null}
         {item.quantityIsEstimated ? (
@@ -269,6 +283,91 @@ export default function StockItemScreen() {
                 }
               />
             ))}
+          </View>
+
+          <Text style={styles.label}>Unité</Text>
+          <Text style={styles.help}>
+            Une unité choisie par erreur se répare ici. Passer d'une masse à des unités
+            n'a pas d'équivalence : la quantité restante doit alors être redonnée.
+          </Text>
+          <View style={styles.chips}>
+            {reference?.units.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={item.unit === option.value}
+                onPress={() => {
+                  if (item.unit === option.value) return;
+
+                  if (option.family === currentUnitFamily) {
+                    setPendingUnit(null);
+                    run(() => api.changeUnit(id, option.value as StockItem['unit']));
+                    return;
+                  }
+
+                  setPendingUnit(option);
+                  setPendingQuantity(String(item.remainingQuantity));
+                }}
+              />
+            ))}
+          </View>
+
+          {pendingUnit ? (
+            <View style={styles.pendingUnit}>
+              <Field
+                label={`Quantité restante en ${pendingUnit.label}`}
+                value={pendingQuantity}
+                onChangeText={setPendingQuantity}
+                keyboardType="decimal-pad"
+                hint={`Combien reste-t-il réellement, exprimé en ${pendingUnit.label} ?`}
+              />
+              <View style={styles.pendingRow}>
+                <Button
+                  label={`Passer en ${pendingUnit.label}`}
+                  onPress={() => {
+                    const value = Number(pendingQuantity.replace(',', '.'));
+                    if (!Number.isFinite(value) || value < 0) {
+                      setError('Indiquez une quantité valide.');
+                      return;
+                    }
+                    const unit = pendingUnit.value as StockItem['unit'];
+                    setPendingUnit(null);
+                    run(() => api.changeUnit(id, unit, value));
+                  }}
+                  disabled={busy}
+                  style={styles.grow}
+                />
+                <Button label="Annuler" variant="ghost" onPress={() => setPendingUnit(null)} />
+              </View>
+            </View>
+          ) : null}
+
+          <Text style={styles.label}>État du produit</Text>
+          <Text style={styles.help}>
+            Ce que les recettes doivent savoir : une conserve ne s'épluche pas, un surgelé
+            se décongèle.
+          </Text>
+          <View style={styles.chips}>
+            {reference?.productTraits.map((option) => {
+              const selected = item.product.traits.includes(option.value);
+
+              return (
+                <Chip
+                  key={option.value}
+                  label={option.label}
+                  selected={selected}
+                  onPress={() =>
+                    run(() =>
+                      api.updateStockItem(id, {
+                        traits: selected
+                          ? item.product.traits.filter((trait) => trait !== option.value)
+                          : [...item.product.traits, option.value],
+                      }),
+                    )
+                  }
+                />
+              );
+            })}
           </View>
 
           <Text style={styles.label}>Date de péremption</Text>
@@ -438,6 +537,15 @@ const styles = StyleSheet.create({
   gridItem: {},
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   spaced: { marginTop: spacing.sm },
+  grow: { flex: 1 },
+  pendingUnit: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  pendingRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
   dateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg },
   dateButton: {
     flex: 1,

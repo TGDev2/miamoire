@@ -5,9 +5,11 @@
   "dependencies": {
     "@react-native-community/datetimepicker": "9.1.0",
     "expo": "~57.0.8",
+    "expo-build-properties": "~57.0.7",
     "expo-camera": "~57.0.3",
     "expo-constants": "~57.0.7",
     "expo-linking": "~57.0.4",
+    "expo-notifications": "~57.0.7",
     "expo-router": "~57.0.8",
     "expo-secure-store": "~57.0.1",
     "expo-status-bar": "~57.0.1",
@@ -21,6 +23,12 @@
   "devDependencies": {
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
+  },
+  "comments": {
+    "overrides": "react-dom n'est tiré que par les outils de développement web d'Expo, jamais embarqué dans l'APK. Laissé libre, npm y installe une version exigeant un React plus récent que celui imposé par le SDK 57, et toute installation échoue. On l'aligne donc sur la version de React du projet."
+  },
+  "overrides": {
+    "react-dom": "19.2.3"
   },
   "scripts": {
     "start": "expo start",

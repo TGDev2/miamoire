@@ -24,6 +24,7 @@ class ProductLookupService
         private readonly ProductRepository $products,
         private readonly OpenFoodFactsClient $client,
         private readonly IngredientKeyGenerator $keyGenerator,
+        private readonly ProductTraitDetector $traitDetector,
         private readonly EntityManagerInterface $entityManager,
         private readonly int $cacheTtlDays,
     ) {
@@ -74,6 +75,7 @@ class ProductLookupService
         $product->setPackageQuantity($packageQuantity);
         $product->setPackageUnit($packageUnit);
         $product->setBarcode(null !== $barcode && '' !== $barcode ? $barcode : null);
+        $product->setTraits($this->traitDetector->detect($name, $category));
 
         $this->entityManager->persist($product);
         $this->entityManager->flush();
@@ -88,6 +90,11 @@ class ProductLookupService
         $product->setIngredientKey($this->keyGenerator->generate($remote->name));
         $product->setBrand($remote->brand);
         $product->setCategory($remote->category);
+
+        // Un rafraîchissement du cache ne doit pas effacer ce que l'utilisateur a corrigé.
+        if ([] === $product->getTraits()) {
+            $product->setTraits($this->traitDetector->detect($remote->name, $remote->category));
+        }
         $product->setPackageQuantity($remote->packageQuantity);
         $product->setPackageUnit($remote->packageUnit);
         $product->setImageUrl($remote->imageUrl);
