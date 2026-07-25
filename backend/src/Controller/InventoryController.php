@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Http\RequestContext;
 use App\Repository\StockItemRepository;
 use App\Service\Inventory\InventoryAggregator;
 use App\Service\Inventory\InventoryLine;
@@ -16,10 +17,11 @@ class InventoryController extends AbstractApiController
     /** Inventaire agrégé par ingrédient — c'est aussi ce qui est envoyé à l'IA. */
     #[Route('/summary', methods: ['GET'])]
     public function summary(
+        RequestContext $context,
         InventoryAggregator $aggregator,
         StockItemRepository $stockItems,
     ): JsonResponse {
-        $household = $this->currentHousehold();
+        $household = $context->household();
         $lines = $aggregator->aggregate($household);
         $items = $stockItems->findAvailable($household);
 

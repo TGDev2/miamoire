@@ -2,8 +2,8 @@ import { Redirect, Tabs } from 'expo-router';
 import React from 'react';
 import { Text } from 'react-native';
 
-import { useAuth } from '../../src/auth/AuthContext';
 import { Loader } from '../../src/components/ui';
+import { useSession } from '../../src/session/SessionContext';
 import { colors } from '../../src/theme';
 
 function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
@@ -11,10 +11,10 @@ function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
 }
 
 export default function TabsLayout() {
-  const { token, isLoading } = useAuth();
+  const { isReady, isLoading } = useSession();
 
   if (isLoading) return <Loader />;
-  if (!token) return <Redirect href="/login" />;
+  if (!isReady) return <Redirect href="/setup" />;
 
   return (
     <Tabs

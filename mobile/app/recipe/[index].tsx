@@ -4,13 +4,11 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
 import type { RecipeIngredient } from '../../src/api/types';
-import { useToken } from '../../src/auth/AuthContext';
 import { Badge, Button, Card, EmptyState, ErrorBanner, SectionTitle } from '../../src/components/ui';
 import { useRecipes } from '../../src/recipes/RecipeContext';
 import { colors, feasibilityPresentation, radius, spacing } from '../../src/theme';
 
 export default function RecipeDetailScreen() {
-  const token = useToken();
   const router = useRouter();
   const { index } = useLocalSearchParams<{ index: string }>();
   const { suggestion } = useRecipes();
@@ -56,7 +54,6 @@ export default function RecipeDetailScreen() {
     setBusy(true);
     try {
       const result = await api.confirmRecipe(
-        token,
         recipe!.recipeName,
         recipe!.stockConsumptionProposal,
       );

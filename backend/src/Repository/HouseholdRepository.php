@@ -15,4 +15,19 @@ class HouseholdRepository extends ServiceEntityRepository
     {
         parent::__construct($registry, Household::class);
     }
+
+    /**
+     * Foyers avec leurs membres, pour l'écran de sélection au premier lancement.
+     *
+     * @return list<Household>
+     */
+    public function findAllWithCounts(): array
+    {
+        return $this->createQueryBuilder('h')
+            ->addSelect('m')
+            ->leftJoin('h.members', 'm')
+            ->orderBy('h.name', 'ASC')
+            ->getQuery()
+            ->getResult();
+    }
 }

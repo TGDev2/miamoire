@@ -7,6 +7,7 @@ namespace App\Controller;
 use App\Enum\FillLevel;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
+use App\Http\RequestContext;
 use App\Repository\StockItemRepository;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Attribute\Route;
@@ -16,7 +17,7 @@ use Symfony\Component\Routing\Attribute\Route;
 class ReferenceController extends AbstractApiController
 {
     #[Route('', methods: ['GET'])]
-    public function index(StockItemRepository $stockItems): JsonResponse
+    public function index(RequestContext $context, StockItemRepository $stockItems): JsonResponse
     {
         return $this->json([
             'units' => array_map(
@@ -43,7 +44,7 @@ class ReferenceController extends AbstractApiController
                 ],
                 FillLevel::cases(),
             ),
-            'categories' => $stockItems->findUsedCategories($this->currentHousehold()),
+            'categories' => $stockItems->findUsedCategories($context->household()),
             'mealTypes' => [
                 ['value' => 'breakfast', 'label' => 'Petit-déjeuner'],
                 ['value' => 'lunch', 'label' => 'Déjeuner'],

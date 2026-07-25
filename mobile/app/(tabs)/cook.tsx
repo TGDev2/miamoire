@@ -3,8 +3,8 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
+import { useSession } from '../../src/session/SessionContext';
 import type { InventorySummary, Reference } from '../../src/api/types';
-import { useAuth, useToken } from '../../src/auth/AuthContext';
 import { Button, Card, Chip, ErrorBanner, Loader, SectionTitle } from '../../src/components/ui';
 import { useRecipes } from '../../src/recipes/RecipeContext';
 import { colors, radius, spacing } from '../../src/theme';
@@ -12,9 +12,8 @@ import { colors, radius, spacing } from '../../src/theme';
 const TIME_OPTIONS = [15, 30, 45, 60];
 
 export default function CookScreen() {
-  const token = useToken();
   const router = useRouter();
-  const { user } = useAuth();
+  const { household } = useSession();
   const { setSuggestion } = useRecipes();
 
   const [reference, setReference] = useState<Reference | null>(null);
@@ -30,7 +29,7 @@ export default function CookScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [ref, inv] = await Promise.all([api.reference(token), api.inventory(token)]);
+      const [ref, inv] = await Promise.all([api.reference(), api.inventory()]);
       setReference(ref);
       setInventory(inv);
     } catch (exception) {
@@ -38,7 +37,7 @@ export default function CookScreen() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -56,7 +55,7 @@ export default function CookScreen() {
     setError(null);
     setBusy(true);
     try {
-      const result = await api.suggestRecipes(token, {
+      const result = await api.suggestRecipes({
         people,
         mealType,
         maxMinutes,
@@ -161,9 +160,9 @@ export default function CookScreen() {
         />
       </View>
 
-      {user && user.dietaryExclusions.length > 0 ? (
+      {household && household.dietaryExclusions.length > 0 ? (
         <Text style={styles.exclusions}>
-          Exclusions appliquées : {user.dietaryExclusions.join(', ')}
+          Exclusions appliquées : {household.dietaryExclusions.join(', ')}
         </Text>
       ) : null}
 

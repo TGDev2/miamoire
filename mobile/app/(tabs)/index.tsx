@@ -13,14 +13,12 @@ import {
 
 import { api } from '../../src/api/client';
 import type { Reference, StockItem } from '../../src/api/types';
-import { useToken } from '../../src/auth/AuthContext';
 import { Badge, Chip, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
 import { colors, radius, spacing, statusPresentation } from '../../src/theme';
 
 const EXPIRY_FILTER_DAYS = 3;
 
 export default function StockScreen() {
-  const token = useToken();
   const router = useRouter();
 
   const [items, setItems] = useState<StockItem[]>([]);
@@ -37,13 +35,13 @@ export default function StockScreen() {
     setError(null);
     try {
       const [stock, ref] = await Promise.all([
-        api.stockItems(token, {
+        api.stockItems({
           search: search || undefined,
           location: location ?? undefined,
           category: category ?? undefined,
           expiringWithinDays: urgentOnly ? EXPIRY_FILTER_DAYS : undefined,
         }),
-        api.reference(token),
+        api.reference(),
       ]);
       setItems(stock.items);
       setReference(ref);
@@ -53,7 +51,7 @@ export default function StockScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [token, search, location, category, urgentOnly]);
+  }, [search, location, category, urgentOnly]);
 
   // Le stock change depuis d'autres écrans (scan, consommation, recette) :
   // on recharge à chaque retour sur l'onglet.
@@ -159,7 +157,10 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
           {item.quantityIsEstimated ? ' · estimé' : ''}
         </Text>
 
-        <Text style={styles.rowExpiry}>{formatExpiry(item)}</Text>
+        <Text style={styles.rowExpiry}>
+          {formatExpiry(item)}
+          {item.addedBy ? ` · ajouté par ${item.addedBy}` : ''}
+        </Text>
       </View>
 
       <Badge

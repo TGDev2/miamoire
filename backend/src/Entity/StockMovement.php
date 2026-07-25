@@ -50,9 +50,10 @@ class StockMovement
     #[ORM\Column(type: 'string', length: 255, nullable: true)]
     private ?string $reason = null;
 
-    #[ORM\ManyToOne(targetEntity: User::class)]
+    /** Qui a fait le geste. Nullable : un membre supprimé ne doit pas effacer l'historique. */
+    #[ORM\ManyToOne(targetEntity: Member::class)]
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
-    private ?User $createdBy = null;
+    private ?Member $createdBy = null;
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
@@ -64,7 +65,7 @@ class StockMovement
         Unit $unit,
         float $remainingAfter,
         ?string $reason = null,
-        ?User $createdBy = null,
+        ?Member $createdBy = null,
     ) {
         $this->id = Uuid::v7();
         $this->stockItem = $stockItem;
@@ -114,7 +115,7 @@ class StockMovement
         return $this->reason;
     }
 
-    public function getCreatedBy(): ?User
+    public function getCreatedBy(): ?Member
     {
         return $this->createdBy;
     }

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Ai;
 
 use App\Entity\Household;
-use App\Entity\User;
+use App\Entity\Member;
 use App\Enum\Unit;
 use App\Exception\StockException;
 use App\Service\Stock\FefoAllocator;
@@ -35,7 +35,7 @@ class RecipeConfirmationService
      */
     public function confirm(
         Household $household,
-        User $author,
+        Member $author,
         array $proposal,
         ?string $recipeName = null,
     ): array {

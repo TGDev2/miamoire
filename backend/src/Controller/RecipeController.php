@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Http\JsonPayload;
+use App\Http\RequestContext;
 use App\Service\Ai\RecipeConfirmationService;
 use App\Service\Ai\RecipeRequest;
 use App\Service\Ai\RecipeSuggestionService;
@@ -17,18 +18,21 @@ class RecipeController extends AbstractApiController
 {
     /** Génère des propositions. Aucune écriture en stock à cette étape. */
     #[Route('/suggest', methods: ['POST'])]
-    public function suggest(Request $request, RecipeSuggestionService $service): JsonResponse
-    {
+    public function suggest(
+        Request $request,
+        RequestContext $context,
+        RecipeSuggestionService $service,
+    ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
-        $user = $this->currentUser();
+        $household = $context->household();
 
-        // Les exclusions du profil s'appliquent par défaut, la requête peut les compléter.
+        // Les exclusions du foyer s'appliquent par défaut, la requête peut les compléter.
         $exclusions = array_values(array_unique(array_merge(
-            $user->getDietaryExclusions(),
+            $household->getDietaryExclusions(),
             $payload->stringList('exclusions'),
         )));
 
-        $result = $service->suggest($user->getHousehold(), new RecipeRequest(
+        $result = $service->suggest($household, new RecipeRequest(
             people: max(1, min(20, $payload->int('people', 2) ?? 2)),
             mealType: $payload->string('mealType'),
             maxMinutes: $payload->int('maxMinutes'),
@@ -45,13 +49,16 @@ class RecipeController extends AbstractApiController
      * Chaque ligne est revalidée contre le stock réel avant écriture.
      */
     #[Route('/confirm', methods: ['POST'])]
-    public function confirm(Request $request, RecipeConfirmationService $service): JsonResponse
-    {
+    public function confirm(
+        Request $request,
+        RequestContext $context,
+        RecipeConfirmationService $service,
+    ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
 
         $result = $service->confirm(
-            $this->currentHousehold(),
-            $this->currentUser(),
+            $context->household(),
+            $context->requireMember(),
             $payload->objectList('stockConsumptionProposal'),
             $payload->string('recipeName'),
         );

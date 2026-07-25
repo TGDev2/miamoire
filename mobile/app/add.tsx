@@ -5,12 +5,10 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import { ApiError, api } from '../src/api/client';
 import type { Product, Reference, Unit } from '../src/api/types';
-import { useToken } from '../src/auth/AuthContext';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
 import { colors, radius, spacing } from '../src/theme';
 
 export default function AddScreen() {
-  const token = useToken();
   const router = useRouter();
   const { barcode } = useLocalSearchParams<{ barcode?: string }>();
 
@@ -36,12 +34,12 @@ export default function AddScreen() {
 
     (async () => {
       try {
-        const ref = await api.reference(token);
+        const ref = await api.reference();
         if (!cancelled) setReference(ref);
 
         if (barcode) {
           try {
-            const found = await api.lookupBarcode(token, barcode);
+            const found = await api.lookupBarcode(barcode);
             if (cancelled) return;
 
             setProduct(found.product);
@@ -72,7 +70,7 @@ export default function AddScreen() {
     return () => {
       cancelled = true;
     };
-  }, [token, barcode]);
+  }, [barcode]);
 
   const total = useMemo(() => {
     const count = Number(packages.replace(',', '.')) || 0;
@@ -95,7 +93,7 @@ export default function AddScreen() {
 
     setBusy(true);
     try {
-      await api.createStockItem(token, {
+      await api.createStockItem({
         productId: product?.id,
         barcode: product ? undefined : barcode,
         name: product ? undefined : name.trim(),

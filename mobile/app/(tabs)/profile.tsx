@@ -1,39 +1,31 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
-import { useAuth, useToken } from '../../src/auth/AuthContext';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
-import {
-  Button,
-  Card,
-  Chip,
-  ErrorBanner,
-  Field,
-  Loader,
-  SectionTitle,
-} from '../../src/components/ui';
-import { colors, spacing } from '../../src/theme';
+import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../../src/components/ui';
+import { useSession } from '../../src/session/SessionContext';
+import { colors, radius, spacing } from '../../src/theme';
 
 export default function ProfileScreen() {
-  const token = useToken();
   const router = useRouter();
-  const { user, signOut, refreshUser } = useAuth();
+  const { household, member, selectMember, refresh, leave } = useSession();
 
-  const [householdName, setHouseholdName] = useState(user?.household.name ?? '');
+  const [householdName, setHouseholdName] = useState(household?.name ?? '');
   const [exclusion, setExclusion] = useState('');
+  const [newMember, setNewMember] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (!user) return <Loader />;
+  if (!household) return <Loader />;
 
-  async function save(body: Record<string, unknown>) {
+  async function run(action: () => Promise<unknown>) {
     setError(null);
     setBusy(true);
     try {
-      await api.updateProfile(token, body);
-      await refreshUser();
+      await action();
+      await refresh();
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Enregistrement impossible.');
     } finally {
@@ -41,12 +33,23 @@ export default function ProfileScreen() {
     }
   }
 
-  function addExclusion() {
-    const value = exclusion.trim();
-    if (!value) return;
-
-    setExclusion('');
-    save({ dietaryExclusions: [...user!.dietaryExclusions, value] });
+  function confirmRemoveMember(id: string, firstName: string) {
+    Alert.alert(
+      `Retirer ${firstName} du foyer ?`,
+      'Les produits déjà enregistrés restent en stock ; seule l\'attribution disparaît.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Retirer',
+          style: 'destructive',
+          onPress: () =>
+            run(async () => {
+              await api.removeMember(household!.id, id);
+              if (member?.id === id) await selectMember(null);
+            }),
+        },
+      ],
+    );
   }
 
   return (
@@ -54,43 +57,92 @@ export default function ProfileScreen() {
       <ErrorBanner message={error} />
 
       <Card>
-        <Text style={styles.name}>{user.name}</Text>
-        <Text style={styles.email}>{user.email}</Text>
+        <Text style={styles.label}>Foyer</Text>
+        <Text style={styles.name}>{household.name}</Text>
+        <Text style={styles.label}>Vous êtes</Text>
+        <Text style={styles.name}>{member?.firstName ?? 'personne'}</Text>
       </Card>
 
-      <SectionTitle>Foyer</SectionTitle>
-      <Field label="Nom du foyer" value={householdName} onChangeText={setHouseholdName} />
-      <Button
-        label="Enregistrer"
-        variant="secondary"
-        onPress={() => save({ householdName })}
-        loading={busy}
-      />
-
-      <Text style={styles.members}>
-        {user.household.members.length} membre(s) :{' '}
-        {user.household.members.map((member) => member.name).join(', ')}
-      </Text>
-
-      <SectionTitle>Exclusions alimentaires</SectionTitle>
+      <SectionTitle>Qui utilise l'application ?</SectionTitle>
       <Text style={styles.help}>
-        Ces aliments ne seront jamais proposés dans les recettes générées.
+        Le prénom sélectionné signe les produits que vous ajoutez et consommez.
       </Text>
 
       <View style={styles.chips}>
-        {user.dietaryExclusions.map((entry) => (
+        {household.members.map((entry) => (
+          <Chip
+            key={entry.id}
+            label={entry.firstName}
+            selected={member?.id === entry.id}
+            onPress={() => selectMember(entry)}
+          />
+        ))}
+      </View>
+
+      {household.members.map((entry) => (
+        <Pressable
+          key={`remove-${entry.id}`}
+          onPress={() => confirmRemoveMember(entry.id, entry.firstName)}
+          style={styles.removeRow}
+        >
+          <Text style={styles.removeText}>Retirer {entry.firstName} du foyer</Text>
+        </Pressable>
+      ))}
+
+      <Field
+        label="Ajouter une personne"
+        value={newMember}
+        onChangeText={setNewMember}
+        placeholder="Prénom"
+        returnKeyType="done"
+        onSubmitEditing={() => {
+          if (newMember.trim()) {
+            run(() => api.addMember(household.id, newMember.trim()));
+            setNewMember('');
+          }
+        }}
+      />
+      <Button
+        label="Ajouter"
+        variant="secondary"
+        loading={busy}
+        onPress={() => {
+          if (!newMember.trim()) return;
+          run(() => api.addMember(household.id, newMember.trim()));
+          setNewMember('');
+        }}
+      />
+
+      <SectionTitle>Nom du foyer</SectionTitle>
+      <Field label="Nom" value={householdName} onChangeText={setHouseholdName} />
+      <Button
+        label="Enregistrer"
+        variant="secondary"
+        loading={busy}
+        onPress={() => run(() => api.updateHousehold(household.id, { name: householdName }))}
+      />
+
+      <SectionTitle>Exclusions alimentaires</SectionTitle>
+      <Text style={styles.help}>
+        Ces aliments ne seront jamais proposés dans les recettes générées pour ce foyer.
+      </Text>
+
+      <View style={styles.chips}>
+        {household.dietaryExclusions.map((entry) => (
           <Chip
             key={entry}
             label={`${entry}  ✕`}
             selected
             onPress={() =>
-              save({
-                dietaryExclusions: user.dietaryExclusions.filter((value) => value !== entry),
-              })
+              run(() =>
+                api.updateHousehold(household.id, {
+                  dietaryExclusions: household.dietaryExclusions.filter((v) => v !== entry),
+                }),
+              )
             }
           />
         ))}
-        {user.dietaryExclusions.length === 0 ? (
+        {household.dietaryExclusions.length === 0 ? (
           <Text style={styles.help}>Aucune exclusion enregistrée.</Text>
         ) : null}
       </View>
@@ -100,28 +152,31 @@ export default function ProfileScreen() {
         value={exclusion}
         onChangeText={setExclusion}
         placeholder="arachide, lactose, porc…"
-        onSubmitEditing={addExclusion}
         returnKeyType="done"
+        onSubmitEditing={() => {
+          if (!exclusion.trim()) return;
+          run(() =>
+            api.updateHousehold(household.id, {
+              dietaryExclusions: [...household.dietaryExclusions, exclusion.trim()],
+            }),
+          );
+          setExclusion('');
+        }}
       />
-      <Button label="Ajouter" variant="secondary" onPress={addExclusion} loading={busy} />
-
-      <SectionTitle>Emplacements</SectionTitle>
-      <Card>
-        <Text style={styles.help}>
-          Placard, réfrigérateur et congélateur sont disponibles à l'ajout de chaque aliment.
-        </Text>
-      </Card>
 
       <SectionTitle>Serveur</SectionTitle>
       <ServerAddressField />
 
-      <SectionTitle>Session</SectionTitle>
+      <SectionTitle>Changer de foyer</SectionTitle>
+      <Text style={styles.help}>
+        Le stock de chaque foyer reste strictement séparé. Changer de foyer ne supprime rien.
+      </Text>
       <Button
-        label="Se déconnecter"
+        label="Choisir un autre foyer"
         variant="danger"
         onPress={async () => {
-          await signOut();
-          router.replace('/login');
+          await leave();
+          router.replace('/setup');
         }}
       />
     </ScrollView>
@@ -130,15 +185,17 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
+  label: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.inkMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: spacing.sm,
+  },
   name: { fontSize: 20, fontWeight: '800', color: colors.ink },
-  email: { fontSize: 14, color: colors.inkMuted, marginTop: 2 },
-  members: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.md },
   help: { fontSize: 13, color: colors.inkMuted, lineHeight: 19, marginBottom: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  server: {
-    marginTop: spacing.xxl,
-    fontSize: 11,
-    color: colors.inkMuted,
-    textAlign: 'center',
-  },
+  removeRow: { paddingVertical: spacing.xs },
+  removeText: { fontSize: 13, color: colors.danger },
 });

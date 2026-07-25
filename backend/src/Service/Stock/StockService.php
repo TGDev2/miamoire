@@ -7,8 +7,8 @@ namespace App\Service\Stock;
 use App\Entity\Household;
 use App\Entity\Product;
 use App\Entity\StockItem;
+use App\Entity\Member;
 use App\Entity\StockMovement;
-use App\Entity\User;
 use App\Enum\FillLevel;
 use App\Enum\MovementType;
 use App\Enum\StorageLocation;
@@ -32,7 +32,7 @@ class StockService
 
     public function add(
         Household $household,
-        User $author,
+        Member $author,
         Product $product,
         int $numberOfPackages,
         float $quantityPerPackage,
@@ -58,6 +58,7 @@ class StockService
         $item->setExpirationDate($expirationDate);
         $item->setNote($note);
         $item->setQuantityIsEstimated($quantityIsEstimated);
+        $item->setAddedBy($author);
 
         $this->entityManager->persist($item);
         $this->record($item, MovementType::Addition, $total, $author, 'Ajout au stock');
@@ -74,7 +75,7 @@ class StockService
         StockItem $item,
         float $quantity,
         Unit $unit,
-        User $author,
+        Member $author,
         ?string $reason = null,
     ): StockMovement {
         if ($quantity <= 0) {
@@ -96,13 +97,13 @@ class StockService
         return $movement;
     }
 
-    public function consumeAll(StockItem $item, User $author, ?string $reason = null): StockMovement
+    public function consumeAll(StockItem $item, Member $author, ?string $reason = null): StockMovement
     {
         return $this->consume($item, $item->getRemainingQuantity(), $item->getUnit(), $author, $reason ?? 'Tout consommé');
     }
 
     /** Retire un exemplaire entier (une bouteille, un paquet). */
-    public function consumeOnePackage(StockItem $item, User $author): StockMovement
+    public function consumeOnePackage(StockItem $item, Member $author): StockMovement
     {
         $packageSize = $item->getNumberOfPackages() > 0
             ? $item->getInitialQuantity() / $item->getNumberOfPackages()
@@ -118,7 +119,7 @@ class StockService
     }
 
     /** Boutons -1 / +1 des produits comptés à l'unité (œufs, yaourts). */
-    public function adjustDiscreteUnits(StockItem $item, int $delta, User $author): StockMovement
+    public function adjustDiscreteUnits(StockItem $item, int $delta, Member $author): StockMovement
     {
         if (0 === $delta) {
             throw new StockException('L\'ajustement doit être différent de zéro.');
@@ -134,7 +135,7 @@ class StockService
         StockItem $item,
         float $quantity,
         Unit $unit,
-        User $author,
+        Member $author,
         ?string $reason = null,
     ): StockMovement {
         if ($quantity <= 0) {
@@ -160,7 +161,7 @@ class StockService
         StockItem $item,
         float $newQuantity,
         Unit $unit,
-        User $author,
+        Member $author,
         ?string $reason = null,
     ): StockMovement {
         if ($newQuantity < 0) {
@@ -181,7 +182,7 @@ class StockService
     }
 
     /** Correction approximative : « plein », « environ la moitié », « presque vide ». */
-    public function applyFillLevel(StockItem $item, FillLevel $level, User $author): ?StockMovement
+    public function applyFillLevel(StockItem $item, FillLevel $level, Member $author): ?StockMovement
     {
         $ratio = $level->ratio();
 
@@ -215,7 +216,7 @@ class StockService
     }
 
     /** Produit jeté : le stock tombe à zéro mais la ligne et son historique subsistent. */
-    public function discard(StockItem $item, User $author, ?string $reason = null): StockMovement
+    public function discard(StockItem $item, Member $author, ?string $reason = null): StockMovement
     {
         if ($item->isEmpty()) {
             throw new StockException('Ce produit est déjà épuisé.');
@@ -240,7 +241,7 @@ class StockService
         StockItem $item,
         MovementType $type,
         float $signedQuantity,
-        User $author,
+        Member $author,
         ?string $reason,
     ): StockMovement {
         $movement = new StockMovement(

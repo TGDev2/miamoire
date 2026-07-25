@@ -69,6 +69,11 @@ class StockItem
     #[ORM\Column(type: 'text', nullable: true)]
     private ?string $note = null;
 
+    /** Qui a enregistré ce produit. Dénormalisé ici pour éviter une requête par ligne d'inventaire. */
+    #[ORM\ManyToOne(targetEntity: Member::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?Member $addedBy = null;
+
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
@@ -228,6 +233,16 @@ class StockItem
     public function setNote(?string $note): void
     {
         $this->note = $note;
+    }
+
+    public function getAddedBy(): ?Member
+    {
+        return $this->addedBy;
+    }
+
+    public function setAddedBy(?Member $addedBy): void
+    {
+        $this->addedBy = $addedBy;
     }
 
     public function getCreatedAt(): \DateTimeImmutable

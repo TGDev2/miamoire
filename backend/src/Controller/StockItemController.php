@@ -10,6 +10,7 @@ use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
+use App\Http\RequestContext;
 use App\Repository\ProductRepository;
 use App\Repository\StockItemRepository;
 use App\Repository\StockMovementRepository;
@@ -29,13 +30,14 @@ class StockItemController extends AbstractApiController
     #[Route('', methods: ['GET'])]
     public function list(
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         ApiPresenter $presenter,
     ): JsonResponse {
         $location = $request->query->getString('location');
         $expiring = $request->query->get('expiringWithinDays');
 
-        $items = $stockItems->search($this->currentHousehold(), [
+        $items = $stockItems->search($context->household(), [
             'location' => '' !== $location ? StorageLocation::tryFrom($location) : null,
             'category' => $request->query->getString('category') ?: null,
             'search' => $request->query->getString('search') ?: null,
@@ -54,6 +56,7 @@ class StockItemController extends AbstractApiController
     #[Route('', methods: ['POST'])]
     public function create(
         Request $request,
+        RequestContext $context,
         StockService $stockService,
         ProductLookupService $lookup,
         ProductRepository $products,
@@ -65,8 +68,8 @@ class StockItemController extends AbstractApiController
         $unit = $payload->enum('unit', Unit::class) ?? $product->getPackageUnit() ?? Unit::Piece;
 
         $item = $stockService->add(
-            household: $this->currentHousehold(),
-            author: $this->currentUser(),
+            household: $context->household(),
+            author: $context->requireMember(),
             product: $product,
             numberOfPackages: $payload->int('numberOfPackages', 1) ?? 1,
             quantityPerPackage: $payload->float('quantityPerPackage')
@@ -84,9 +87,13 @@ class StockItemController extends AbstractApiController
     }
 
     #[Route('/{id}', methods: ['GET'])]
-    public function show(string $id, StockItemRepository $stockItems, ApiPresenter $presenter): JsonResponse
-    {
-        return $this->json($presenter->stockItem($this->ownedStockItem($stockItems, $id)));
+    public function show(
+        string $id,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        return $this->json($presenter->stockItem($this->ownedStockItem($stockItems, $context, $id)));
     }
 
     /** Modifications sans impact quantitatif : emplacement, dates, nom, état ouvert. */
@@ -94,12 +101,13 @@ class StockItemController extends AbstractApiController
     public function update(
         string $id,
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
         EntityManagerInterface $entityManager,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
+        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
 
         if ($payload->has('storageLocation')) {
@@ -132,7 +140,7 @@ class StockItemController extends AbstractApiController
                 $item,
                 $payload->requiredFloat('remainingQuantity'),
                 $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-                $this->currentUser(),
+                $context->requireMember(),
                 $payload->string('reason'),
             );
         }
@@ -145,10 +153,11 @@ class StockItemController extends AbstractApiController
     #[Route('/{id}', methods: ['DELETE'])]
     public function delete(
         string $id,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
     ): JsonResponse {
-        $stockService->delete($this->ownedStockItem($stockItems, $id));
+        $stockService->delete($this->ownedStockItem($stockItems, $context, $id));
 
         return $this->json(null, Response::HTTP_NO_CONTENT);
     }
@@ -157,24 +166,25 @@ class StockItemController extends AbstractApiController
     public function consume(
         string $id,
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
+        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
         $mode = $payload->string('mode', 'quantity');
-        $user = $this->currentUser();
+        $member = $context->requireMember();
 
         match ($mode) {
-            'all' => $stockService->consumeAll($item, $user, $payload->string('reason')),
-            'package' => $stockService->consumeOnePackage($item, $user),
-            'units' => $stockService->adjustDiscreteUnits($item, $payload->int('delta', -1) ?? -1, $user),
+            'all' => $stockService->consumeAll($item, $member, $payload->string('reason')),
+            'package' => $stockService->consumeOnePackage($item, $member),
+            'units' => $stockService->adjustDiscreteUnits($item, $payload->int('delta', -1) ?? -1, $member),
             'quantity' => $stockService->consume(
                 $item,
                 $payload->requiredFloat('quantity'),
                 $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-                $user,
+                $member,
                 $payload->string('reason'),
             ),
             default => throw new BadRequestHttpException(sprintf('Mode de consommation « %s » inconnu.', $mode)),
@@ -187,18 +197,19 @@ class StockItemController extends AbstractApiController
     public function addQuantity(
         string $id,
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
+        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
 
         $stockService->addQuantity(
             $item,
             $payload->requiredFloat('quantity'),
             $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-            $this->currentUser(),
+            $context->requireMember(),
             $payload->string('reason'),
         );
 
@@ -209,25 +220,26 @@ class StockItemController extends AbstractApiController
     public function correct(
         string $id,
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
+        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
-        $user = $this->currentUser();
+        $member = $context->requireMember();
 
         // Correction approximative (« environ la moitié ») ou quantité exacte.
         $fillLevel = $payload->enum('fillLevel', FillLevel::class);
 
         if (null !== $fillLevel) {
-            $stockService->applyFillLevel($item, $fillLevel, $user);
+            $stockService->applyFillLevel($item, $fillLevel, $member);
         } else {
             $stockService->correct(
                 $item,
                 $payload->requiredFloat('quantity'),
                 $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-                $user,
+                $member,
                 $payload->string('reason'),
             );
         }
@@ -239,11 +251,12 @@ class StockItemController extends AbstractApiController
     public function open(
         string $id,
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
+        $item = $this->ownedStockItem($stockItems, $context, $id);
         $stockService->markOpened($item, JsonPayload::fromRequest($request)->bool('isOpened', true));
 
         return $this->json($presenter->stockItem($item));
@@ -253,12 +266,17 @@ class StockItemController extends AbstractApiController
     public function discard(
         string $id,
         Request $request,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
-        $stockService->discard($item, $this->currentUser(), JsonPayload::fromRequest($request)->string('reason'));
+        $item = $this->ownedStockItem($stockItems, $context, $id);
+        $stockService->discard(
+            $item,
+            $context->requireMember(),
+            JsonPayload::fromRequest($request)->string('reason'),
+        );
 
         return $this->json($presenter->stockItem($item));
     }
@@ -266,11 +284,12 @@ class StockItemController extends AbstractApiController
     #[Route('/{id}/movements', methods: ['GET'])]
     public function movements(
         string $id,
+        RequestContext $context,
         StockItemRepository $stockItems,
         StockMovementRepository $movements,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $id);
+        $item = $this->ownedStockItem($stockItems, $context, $id);
 
         return $this->json([
             'movements' => array_map(

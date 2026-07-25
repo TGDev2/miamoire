@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\Http;
 
+use App\Entity\Household;
+use App\Entity\Member;
 use App\Entity\Product;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
-use App\Entity\User;
 use App\Service\UnitConverter;
 
 /** Mise en forme des entités pour l'API. Une seule source de vérité pour le contrat JSON. */
@@ -18,25 +19,27 @@ class ApiPresenter
     }
 
     /** @return array<string, mixed> */
-    public function user(User $user): array
+    public function household(Household $household): array
     {
         return [
-            'id' => (string) $user->getId(),
-            'email' => $user->getEmail(),
-            'name' => $user->getName(),
-            'dietaryExclusions' => $user->getDietaryExclusions(),
-            'household' => [
-                'id' => (string) $user->getHousehold()->getId(),
-                'name' => $user->getHousehold()->getName(),
-                'members' => array_map(
-                    static fn (User $member): array => [
-                        'id' => (string) $member->getId(),
-                        'name' => $member->getName(),
-                        'email' => $member->getEmail(),
-                    ],
-                    $user->getHousehold()->getMembers()->toArray(),
-                ),
-            ],
+            'id' => (string) $household->getId(),
+            'name' => $household->getName(),
+            'dietaryExclusions' => $household->getDietaryExclusions(),
+            'createdAt' => $household->getCreatedAt()->format(\DATE_ATOM),
+            'members' => array_map(
+                fn (Member $member) => $this->member($member),
+                $household->getMembers()->toArray(),
+            ),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function member(Member $member): array
+    {
+        return [
+            'id' => (string) $member->getId(),
+            'firstName' => $member->getFirstName(),
+            'householdId' => (string) $member->getHousehold()->getId(),
         ];
     }
 
@@ -84,6 +87,7 @@ class ApiPresenter
             'quantityIsEstimated' => $item->isQuantityEstimated(),
             'status' => $item->getStatus(),
             'note' => $item->getNote(),
+            'addedBy' => $item->getAddedBy()?->getFirstName(),
             'updatedAt' => $item->getUpdatedAt()->format(\DATE_ATOM),
         ];
     }
@@ -99,8 +103,9 @@ class ApiPresenter
             'unit' => $movement->getUnit()->value,
             'remainingAfter' => $movement->getRemainingAfter(),
             'reason' => $movement->getReason(),
-            'author' => $movement->getCreatedBy()?->getName(),
+            'author' => $movement->getCreatedBy()?->getFirstName(),
             'createdAt' => $movement->getCreatedAt()->format(\DATE_ATOM),
         ];
     }
+
 }

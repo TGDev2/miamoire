@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Tests\Service;
 
 use App\Entity\Household;
+use App\Entity\Member;
 use App\Entity\Product;
 use App\Entity\StockItem;
-use App\Entity\User;
 use App\Enum\FillLevel;
 use App\Enum\MovementType;
 use App\Enum\ProductSource;
@@ -23,12 +23,12 @@ class StockServiceTest extends TestCase
 {
     private StockService $service;
     private Household $household;
-    private User $user;
+    private Member $member;
 
     protected function setUp(): void
     {
         $this->household = new Household('Foyer de test');
-        $this->user = new User('test@example.fr', 'Test', $this->household);
+        $this->member = new Member($this->household, 'Test');
         $this->service = new StockService(
             $this->createMock(EntityManagerInterface::class),
             new UnitConverter(),
@@ -40,7 +40,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(1000, Unit::Gram);
 
-        $movement = $this->service->consume($item, 250, Unit::Gram, $this->user);
+        $movement = $this->service->consume($item, 250, Unit::Gram, $this->member);
 
         self::assertSame(750.0, $item->getRemainingQuantity());
         self::assertSame(MovementType::Consumption, $movement->getType());
@@ -53,7 +53,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(300, Unit::Gram);
 
-        $movement = $this->service->consume($item, 1000, Unit::Gram, $this->user);
+        $movement = $this->service->consume($item, 1000, Unit::Gram, $this->member);
 
         self::assertSame(0.0, $item->getRemainingQuantity());
         self::assertSame(-300.0, $movement->getQuantity(), 'Le mouvement porte la quantité réellement retirée.');
@@ -63,7 +63,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(2000, Unit::Gram);
 
-        $this->service->consume($item, 1.5, Unit::Kilogram, $this->user);
+        $this->service->consume($item, 1.5, Unit::Kilogram, $this->member);
 
         self::assertSame(500.0, $item->getRemainingQuantity());
     }
@@ -71,10 +71,10 @@ class StockServiceTest extends TestCase
     public function testConsumingAnEmptyItemIsRejected(): void
     {
         $item = $this->item(100, Unit::Gram);
-        $this->service->consumeAll($item, $this->user);
+        $this->service->consumeAll($item, $this->member);
 
         $this->expectException(StockException::class);
-        $this->service->consume($item, 1, Unit::Gram, $this->user);
+        $this->service->consume($item, 1, Unit::Gram, $this->member);
     }
 
     public function testRemovingOnePackageRemovesOnlyThatPackage(): void
@@ -82,7 +82,7 @@ class StockServiceTest extends TestCase
         $item = $this->item(1500, Unit::Gram);
         $item->setNumberOfPackages(3);
 
-        $this->service->consumeOnePackage($item, $this->user);
+        $this->service->consumeOnePackage($item, $this->member);
 
         self::assertSame(1000.0, $item->getRemainingQuantity());
     }
@@ -91,10 +91,10 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(6, Unit::Piece);
 
-        $this->service->adjustDiscreteUnits($item, -1, $this->user);
+        $this->service->adjustDiscreteUnits($item, -1, $this->member);
         self::assertSame(5.0, $item->getRemainingQuantity());
 
-        $this->service->adjustDiscreteUnits($item, 1, $this->user);
+        $this->service->adjustDiscreteUnits($item, 1, $this->member);
         self::assertSame(6.0, $item->getRemainingQuantity());
     }
 
@@ -103,7 +103,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(1000, Unit::Gram);
 
-        $movement = $this->service->correct($item, 400, Unit::Gram, $this->user, 'Recomptage');
+        $movement = $this->service->correct($item, 400, Unit::Gram, $this->member, 'Recomptage');
 
         self::assertSame(400.0, $item->getRemainingQuantity());
         self::assertSame(MovementType::Correction, $movement->getType());
@@ -114,7 +114,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(1000, Unit::Gram);
 
-        $this->service->applyFillLevel($item, FillLevel::Half, $this->user);
+        $this->service->applyFillLevel($item, FillLevel::Half, $this->member);
 
         self::assertSame(500.0, $item->getRemainingQuantity());
         self::assertTrue($item->isQuantityEstimated());
@@ -124,7 +124,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(1000, Unit::Gram);
 
-        $movement = $this->service->applyFillLevel($item, FillLevel::Unknown, $this->user);
+        $movement = $this->service->applyFillLevel($item, FillLevel::Unknown, $this->member);
 
         self::assertNull($movement, 'Une quantité inconnue ne doit pas inventer un chiffre.');
         self::assertSame(1000.0, $item->getRemainingQuantity());
@@ -135,7 +135,7 @@ class StockServiceTest extends TestCase
     {
         $item = $this->item(800, Unit::Gram);
 
-        $movement = $this->service->discard($item, $this->user, 'Moisi');
+        $movement = $this->service->discard($item, $this->member, 'Moisi');
 
         self::assertSame(0.0, $item->getRemainingQuantity());
         self::assertSame(MovementType::Deletion, $movement->getType());
@@ -147,7 +147,7 @@ class StockServiceTest extends TestCase
         $item = $this->item(1000, Unit::Gram);
         self::assertFalse($item->isRunningLow());
 
-        $this->service->consume($item, 850, Unit::Gram, $this->user);
+        $this->service->consume($item, 850, Unit::Gram, $this->member);
         self::assertTrue($item->isRunningLow());
         self::assertSame('running_low', $item->getStatus());
     }

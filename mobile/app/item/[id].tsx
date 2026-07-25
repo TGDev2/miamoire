@@ -5,7 +5,6 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 
 import { api } from '../../src/api/client';
 import type { Reference, StockItem, StockMovement } from '../../src/api/types';
-import { useToken } from '../../src/auth/AuthContext';
 import {
   Badge,
   Button,
@@ -19,7 +18,6 @@ import {
 import { colors, radius, spacing, statusPresentation } from '../../src/theme';
 
 export default function StockItemScreen() {
-  const token = useToken();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
 
@@ -36,9 +34,9 @@ export default function StockItemScreen() {
   const load = useCallback(async () => {
     try {
       const [detail, history, ref] = await Promise.all([
-        api.stockItem(token, id),
-        api.movements(token, id),
-        api.reference(token),
+        api.stockItem(id),
+        api.movements(id),
+        api.reference(),
       ]);
       setItem(detail);
       setEditName(detail.product.name);
@@ -47,7 +45,7 @@ export default function StockItemScreen() {
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Chargement impossible.');
     }
-  }, [token, id]);
+  }, [id]);
 
   useEffect(() => {
     load();
@@ -84,7 +82,7 @@ export default function StockItemScreen() {
           style: 'destructive',
           onPress: () =>
             run(async () => {
-              await api.deleteStockItem(token, id);
+              await api.deleteStockItem(id);
               router.back();
             }),
         },
@@ -130,6 +128,9 @@ export default function StockItemScreen() {
             ? `À consommer avant le ${formatDate(item.expirationDate)}`
             : 'Aucune date limite renseignée'}
         </Text>
+        {item.addedBy ? (
+          <Text style={styles.meta}>Enregistré par {item.addedBy}</Text>
+        ) : null}
         {item.isOpened ? <Text style={styles.meta}>Entamé</Text> : null}
         {item.quantityIsEstimated ? (
           <Text style={styles.meta}>Quantité estimée, pas mesurée</Text>
@@ -143,7 +144,7 @@ export default function StockItemScreen() {
         <View style={styles.stepper}>
           <Pressable
             style={styles.stepperButton}
-            onPress={() => run(() => api.consume(token, id, { mode: 'units', delta: -1 }))}
+            onPress={() => run(() => api.consume(id, { mode: 'units', delta: -1 }))}
             disabled={busy}
           >
             <Text style={styles.stepperGlyph}>−1</Text>
@@ -153,7 +154,7 @@ export default function StockItemScreen() {
           </Text>
           <Pressable
             style={styles.stepperButton}
-            onPress={() => run(() => api.addQuantity(token, id, { quantity: 1 }))}
+            onPress={() => run(() => api.addQuantity(id, { quantity: 1 }))}
             disabled={busy}
           >
             <Text style={styles.stepperGlyph}>+1</Text>
@@ -178,7 +179,7 @@ export default function StockItemScreen() {
               setError('Indiquez une quantité valide.');
               return;
             }
-            run(() => api.consume(token, id, { mode: 'quantity', quantity: value }));
+            run(() => api.consume(id, { mode: 'quantity', quantity: value }));
           }}
           disabled={busy}
           style={styles.amountButton}
@@ -189,21 +190,21 @@ export default function StockItemScreen() {
         <Button
           label="Tout consommer"
           variant="secondary"
-          onPress={() => run(() => api.consume(token, id, { mode: 'all' }))}
+          onPress={() => run(() => api.consume(id, { mode: 'all' }))}
           disabled={busy}
           style={styles.gridItem}
         />
         <Button
           label="Retirer un exemplaire"
           variant="secondary"
-          onPress={() => run(() => api.consume(token, id, { mode: 'package' }))}
+          onPress={() => run(() => api.consume(id, { mode: 'package' }))}
           disabled={busy}
           style={styles.gridItem}
         />
         <Button
           label={item.isOpened ? 'Marquer comme fermé' : 'Marquer comme entamé'}
           variant="secondary"
-          onPress={() => run(() => api.setOpened(token, id, !item.isOpened))}
+          onPress={() => run(() => api.setOpened(id, !item.isOpened))}
           disabled={busy}
           style={styles.gridItem}
         />
@@ -216,7 +217,7 @@ export default function StockItemScreen() {
               setError('Saisissez d\'abord une quantité dans le champ ci-dessus.');
               return;
             }
-            run(() => api.addQuantity(token, id, { quantity: value }));
+            run(() => api.addQuantity(id, { quantity: value }));
           }}
           disabled={busy}
           style={styles.gridItem}
@@ -233,7 +234,7 @@ export default function StockItemScreen() {
             key={level.value}
             label={level.label}
             selected={false}
-            onPress={() => run(() => api.correct(token, id, { fillLevel: level.value }))}
+            onPress={() => run(() => api.correct(id, { fillLevel: level.value }))}
           />
         ))}
       </View>
@@ -246,7 +247,7 @@ export default function StockItemScreen() {
             setError('Saisissez la quantité exacte dans le champ « Consommer » ci-dessus.');
             return;
           }
-          run(() => api.correct(token, id, { quantity: value }));
+          run(() => api.correct(id, { quantity: value }));
         }}
         disabled={busy}
       />
@@ -264,7 +265,7 @@ export default function StockItemScreen() {
                 label={option.label}
                 selected={item.storageLocation === option.value}
                 onPress={() =>
-                  run(() => api.updateStockItem(token, id, { storageLocation: option.value }))
+                  run(() => api.updateStockItem(id, { storageLocation: option.value }))
                 }
               />
             ))}
@@ -279,7 +280,7 @@ export default function StockItemScreen() {
             </Pressable>
             {item.expirationDate ? (
               <Pressable
-                onPress={() => run(() => api.updateStockItem(token, id, { expirationDate: null }))}
+                onPress={() => run(() => api.updateStockItem(id, { expirationDate: null }))}
               >
                 <Text style={styles.clearText}>Effacer</Text>
               </Pressable>
@@ -294,7 +295,7 @@ export default function StockItemScreen() {
                 setShowPicker(false);
                 if (event.type === 'set' && selected) {
                   run(() =>
-                    api.updateStockItem(token, id, { expirationDate: toIsoDate(selected) }),
+                    api.updateStockItem(id, { expirationDate: toIsoDate(selected) }),
                   );
                 }
               }}
@@ -303,7 +304,7 @@ export default function StockItemScreen() {
 
           <Button
             label="Enregistrer le nom"
-            onPress={() => run(() => api.updateStockItem(token, id, { name: editName }))}
+            onPress={() => run(() => api.updateStockItem(id, { name: editName }))}
             disabled={busy}
           />
           <Button
@@ -321,7 +322,7 @@ export default function StockItemScreen() {
       <Button
         label="Jeter le produit"
         variant="danger"
-        onPress={() => run(() => api.discard(token, id, 'Produit jeté'))}
+        onPress={() => run(() => api.discard(id, 'Produit jeté'))}
         disabled={busy || item.remainingQuantity <= 0}
       />
       <Button

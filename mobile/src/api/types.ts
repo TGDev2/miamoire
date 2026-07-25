@@ -38,6 +38,8 @@ export interface StockItem {
   quantityIsEstimated: boolean;
   status: StockStatus;
   note: string | null;
+  /** Prénom de la personne qui a enregistré ce produit. */
+  addedBy: string | null;
   updatedAt: string;
 }
 
@@ -53,18 +55,19 @@ export interface StockMovement {
   createdAt: string;
 }
 
-export interface HouseholdMember {
+export interface Member {
   id: string;
-  name: string;
-  email: string;
+  firstName: string;
+  householdId: string;
 }
 
-export interface CurrentUser {
+/** Un foyer : le périmètre d'isolation du stock. Aucun compte, aucun mot de passe. */
+export interface Household {
   id: string;
-  email: string;
   name: string;
   dietaryExclusions: string[];
-  household: { id: string; name: string; members: HouseholdMember[] };
+  createdAt: string;
+  members: Member[];
 }
 
 export interface ReferenceOption {

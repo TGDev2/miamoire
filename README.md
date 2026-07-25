@@ -33,6 +33,26 @@ Aucune quantité ne change sans qu'un `StockMovement` soit écrit. On n'écrase 
 silencieusement « 1 000 g » par « 700 g » : le journal conserve que 300 g ont été
 consommés, ce qui rend les corrections et l'audit possibles.
 
+## Pas de comptes : des foyers et des prénoms
+
+L'application est destinée à une seule famille sur son réseau local. Il n'y a donc
+ni mot de passe, ni session, ni compte.
+
+- Un **foyer** porte un nom et **isole complètement le stock**. Deux foyers ne
+  partagent ni inventaire, ni mouvements, ni membres — seule la table `Product`,
+  qui ne contient aucune quantité, leur est commune.
+- Un **membre** est un simple prénom. Il ne donne aucun droit : il sert à savoir
+  qui a enregistré ou consommé un produit.
+
+L'application transmet deux en-têtes, `X-Household` et `X-Member`. La seule
+garantie apportée est l'**isolation** : un foyer ne peut jamais lire ni modifier
+le stock d'un autre, et un membre ne peut pas signer un mouvement dans un foyer
+auquel il n'appartient pas (`RequestContext`, couvert par `RequestContextTest`).
+
+> ⚠️ Toute personne ayant accès au réseau local peut lister les foyers et lire
+> leur stock. C'est un choix assumé pour un usage familial ; ne pas exposer l'API
+> sur Internet en l'état.
+
 ## L'IA ne modifie jamais l'inventaire
 
 Le générateur de recettes reçoit un inventaire **structuré** (clé stable, quantité,
@@ -60,7 +80,6 @@ docker compose up -d          # PostgreSQL 16 sur le port 5433
 ```bash
 cd backend
 composer install
-php bin/console lexik:jwt:generate-keypair    # une seule fois
 php bin/console doctrine:migrations:migrate
 php -S 0.0.0.0:8000 -t public public/index.php
 ```
@@ -124,7 +143,7 @@ La seconde option évite toute règle de pare-feu : le trafic passe par le câbl
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 43 tests
+cd backend && php vendor/bin/phpunit    # 50 tests
 cd mobile  && npx tsc --noEmit
 ```
 
@@ -134,13 +153,15 @@ et chaque mouvement de stock.
 
 ## API
 
-Toutes les routes sont sous `/api` et exigent un jeton JWT, sauf `/api/auth/*`.
+Toutes les routes sont sous `/api`. Les routes de stock exigent l'en-tête
+`X-Household` ; celles qui écrivent exigent en plus `X-Member`.
 
 | Méthode | Route | Rôle |
 | --- | --- | --- |
-| `POST` | `/auth/register` | Crée un compte et son foyer |
-| `POST` | `/auth/login` | Renvoie un JWT |
-| `GET` `PATCH` | `/me` | Profil, foyer, exclusions alimentaires |
+| `GET` `POST` | `/households` | Liste et création de foyers |
+| `GET` `PATCH` `DELETE` | `/households/{id}` | Nom et exclusions alimentaires du foyer |
+| `POST` | `/households/{id}/members` | Ajoute un prénom au foyer |
+| `DELETE` | `/households/{id}/members/{memberId}` | Retire un membre (l'historique subsiste) |
 | `GET` | `/reference` | Unités, emplacements, catégories, équipements |
 | `GET` | `/products/barcode/{barcode}` | Résolution d'un code-barres (cache puis Open Food Facts) |
 | `POST` | `/products` | Création manuelle d'un produit |
