@@ -4,6 +4,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { api, setIdentity, setUnauthorizedHandler } from '../api/client';
 import { loadApiBaseUrl } from '../api/config';
 import type { Household, Member } from '../api/types';
+import { formatAccessKey } from './accessKey';
 
 const HOUSEHOLD_KEY = 'food.householdId';
 const MEMBER_KEY = 'food.memberId';
@@ -18,6 +19,8 @@ interface SessionState {
   /** Prêt à utiliser l'application : un foyer ouvert ET une personne identifiée. */
   isReady: boolean;
   enterHousehold: (household: Household, accessKey: string) => Promise<void>;
+  /** Remplace le code après une régénération, sans quitter le foyer. */
+  updateAccessKey: (accessKey: string) => Promise<void>;
   selectMember: (member: Member | null) => Promise<void>;
   refresh: () => Promise<void>;
   leave: () => Promise<void>;
@@ -75,15 +78,40 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  /** Entrer dans un foyer : à la création comme à l'adhésion, le code fait foi. */
+  /**
+   * Entrer dans un foyer : à la création comme à l'adhésion, le code fait foi.
+   *
+   * Il est remis dans sa forme canonique avant d'être conservé : un code tapé à la
+   * main serait sinon repartagé exactement comme il a été saisi, en minuscules et
+   * sans tirets.
+   */
   const enterHousehold = useCallback(async (next: Household, key: string) => {
+    const canonical = formatAccessKey(key);
+
     await SecureStore.setItemAsync(HOUSEHOLD_KEY, next.id);
-    await SecureStore.setItemAsync(ACCESS_KEY, key);
+    await SecureStore.setItemAsync(ACCESS_KEY, canonical);
     await SecureStore.deleteItemAsync(MEMBER_KEY);
-    setIdentity(next.id, null, key);
+    setIdentity(next.id, null, canonical);
     setHousehold(next);
-    setAccessKey(key);
+    setAccessKey(canonical);
     setMember(null);
+  }, []);
+
+  /**
+   * L'identité est relue du stockage sécurisé, jamais de l'état de rendu.
+   *
+   * `enterHousehold` puis `selectMember` s'enchaînent dans la même action à la
+   * création d'un foyer : la seconde s'exécuterait avec le `accessKey` du rendu
+   * précédent — encore vide — et effacerait le code côté client. La requête
+   * suivante partirait sans code, recevrait un 401, et déconnecterait aussitôt.
+   */
+  const storedIdentity = useCallback(async (memberId: string | null) => {
+    const [householdId, key] = await Promise.all([
+      SecureStore.getItemAsync(HOUSEHOLD_KEY),
+      SecureStore.getItemAsync(ACCESS_KEY),
+    ]);
+
+    setIdentity(householdId, memberId, key);
   }, []);
 
   const selectMember = useCallback(
@@ -94,9 +122,27 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         await SecureStore.deleteItemAsync(MEMBER_KEY);
       }
       setMember(next);
-      setIdentity(await SecureStore.getItemAsync(HOUSEHOLD_KEY), next?.id ?? null, accessKey);
+      await storedIdentity(next?.id ?? null);
     },
-    [accessKey],
+    [storedIdentity],
+  );
+
+  /**
+   * Remplace le seul code, sans quitter le foyer ni oublier qui l'on est.
+   *
+   * Passer par `enterHousehold` remettrait le membre à zéro, ce qui renverrait
+   * l'utilisateur vers l'écran de mise en route — et le nouveau code, affiché une
+   * fois et une seule, serait perdu en chemin.
+   */
+  const updateAccessKey = useCallback(
+    async (key: string) => {
+      const canonical = formatAccessKey(key);
+
+      await SecureStore.setItemAsync(ACCESS_KEY, canonical);
+      setAccessKey(canonical);
+      await storedIdentity(await SecureStore.getItemAsync(MEMBER_KEY));
+    },
+    [storedIdentity],
   );
 
   const refresh = useCallback(async () => {
@@ -107,8 +153,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
     const found = loaded.members.find((entry) => entry.id === member?.id) ?? null;
     setMember(found);
-    setIdentity(loaded.id, found?.id ?? null, accessKey);
-  }, [household, member, accessKey]);
+    await storedIdentity(found?.id ?? null);
+  }, [household, member, storedIdentity]);
 
   const leave = useCallback(async () => {
     await SecureStore.deleteItemAsync(HOUSEHOLD_KEY);
@@ -138,11 +184,22 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       isReady: null !== household && null !== member,
       enterHousehold,
+      updateAccessKey,
       selectMember,
       refresh,
       leave,
     }),
-    [household, member, accessKey, isLoading, enterHousehold, selectMember, refresh, leave],
+    [
+      household,
+      member,
+      accessKey,
+      isLoading,
+      enterHousehold,
+      updateAccessKey,
+      selectMember,
+      refresh,
+      leave,
+    ],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

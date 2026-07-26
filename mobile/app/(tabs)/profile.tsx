@@ -11,7 +11,7 @@ import { colors, radius, spacing } from '../../src/theme';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { household, member, accessKey, enterHousehold, selectMember, refresh, leave } =
+  const { household, member, accessKey, updateAccessKey, selectMember, refresh, leave } =
     useSession();
 
   const [householdName, setHouseholdName] = useState(household?.name ?? '');
@@ -50,12 +50,8 @@ export default function ProfileScreen() {
           style: 'destructive',
           onPress: () =>
             run(async () => {
-              const previousMember = member;
               const updated = await api.rotateHouseholdKey(household!.id);
-              // enterHousehold repart d'un foyer sans personne choisie : on
-              // rétablit le prénom pour ne pas éjecter l'utilisateur de l'écran.
-              await enterHousehold(updated, updated.accessKey);
-              if (previousMember) await selectMember(previousMember);
+              await updateAccessKey(updated.accessKey);
               setIssuedKey(updated.accessKey);
             }),
         },
@@ -203,7 +199,7 @@ export default function ProfileScreen() {
       {accessKey ? (
         <>
           <View style={styles.codeBox}>
-            <Text selectable style={styles.codeText}>
+            <Text selectable numberOfLines={1} adjustsFontSizeToFit style={styles.codeText}>
               {issuedKey ?? accessKey}
             </Text>
           </View>

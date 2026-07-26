@@ -9,13 +9,14 @@ import { Button, Field } from './ui';
 /**
  * Adresse du serveur, modifiable depuis l'application.
  *
- * Un même APK couvre les trois façons de joindre l'API, sans recompilation :
- * l'IP du PC sur le Wi-Fi, le nom Tailscale depuis n'importe quel réseau (4G, 5G,
- * Wi-Fi extérieur), ou `localhost` avec `adb reverse` en USB.
+ * En usage normal, elle n'a pas à être touchée : l'adresse publique de l'API est
+ * intégrée au build. Le champ existe pour le développement — pointer vers l'API
+ * qui tourne sur le PC, par son IP en Wi-Fi ou par `adb reverse` en USB — et pour
+ * dépanner si l'adresse embarquée devient obsolète.
  *
- * Le test de connexion existe pour répondre depuis le téléphone à la seule question
- * qui compte quand rien ne s'affiche : est-ce l'adresse qui est fausse, ou le
- * serveur qui ne répond pas ?
+ * Le test de connexion répond depuis le téléphone à la seule question qui compte
+ * quand rien ne s'affiche : est-ce l'adresse qui est fausse, ou le serveur qui ne
+ * répond pas ?
  */
 export function ServerAddressField() {
   const [value, setValue] = useState(getApiBaseUrl());
@@ -58,8 +59,8 @@ export function ServerAddressField() {
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
-        placeholder="mon-pc:8000"
-        hint="Nom Tailscale hors du domicile, IP du PC en Wi-Fi, localhost:8000 en USB."
+        placeholder="https://mon-api.exemple.dev"
+        hint="Adresse publique de l'API. En développement : IP du PC en Wi-Fi, ou localhost:8000 en USB."
       />
 
       <View style={styles.row}>

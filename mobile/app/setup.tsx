@@ -67,9 +67,15 @@ export default function SetupScreen() {
 
     run(async () => {
       const created = await api.createHousehold(newHousehold.trim(), newHouseholdOwner.trim());
+
+      // Le garde-fou AVANT d'ouvrir le foyer : `enterHousehold` et `selectMember`
+      // attendent chacun le stockage sécurisé, donc l'effet de redirection tourne
+      // entre les deux. Renseigné après, le code n'aurait jamais été affiché —
+      // et il n'existe qu'ici, le serveur n'en garde qu'une empreinte.
+      setIssuedKey(created.accessKey);
+
       await enterHousehold(created, created.accessKey);
       if (created.members[0]) await selectMember(created.members[0]);
-      setIssuedKey(created.accessKey);
     });
   }
 
@@ -112,7 +118,9 @@ export default function SetupScreen() {
         </Text>
 
         <View style={styles.codeBox}>
-          <Text selectable style={styles.codeText}>
+          {/* Un code coupé en deux se recopie mal : il tient sur une ligne, quitte
+              à rétrécir sur les écrans étroits. */}
+          <Text selectable numberOfLines={1} adjustsFontSizeToFit style={styles.codeText}>
             {issuedKey}
           </Text>
         </View>
@@ -283,10 +291,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   codeText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     color: colors.primary,
-    letterSpacing: 1,
+    letterSpacing: 0.5,
     textAlign: 'center',
   },
   codeReminder: {
