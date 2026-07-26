@@ -28,6 +28,17 @@ class Household
     #[ORM\Column(length: 120)]
     private string $name;
 
+    /**
+     * Empreinte SHA-256 du code d'accès — jamais le code lui-même.
+     *
+     * Nullable uniquement pour les foyers créés avant l'ouverture de l'API sur
+     * Internet. `RequestContext` les refuse tant que `app:households:issue-keys`
+     * ne leur a pas délivré de code : une valeur absente ne doit jamais valoir
+     * autorisation.
+     */
+    #[ORM\Column(length: 64, unique: true, nullable: true)]
+    private ?string $accessKeyHash = null;
+
     /** @var list<string> Exclusions communes au foyer, appliquées aux recettes générées. */
     #[ORM\Column(type: 'json')]
     private array $dietaryExclusions = [];
@@ -61,6 +72,21 @@ class Household
     public function setName(string $name): void
     {
         $this->name = $name;
+    }
+
+    public function getAccessKeyHash(): ?string
+    {
+        return $this->accessKeyHash;
+    }
+
+    public function setAccessKeyHash(string $accessKeyHash): void
+    {
+        $this->accessKeyHash = $accessKeyHash;
+    }
+
+    public function hasAccessKey(): bool
+    {
+        return null !== $this->accessKeyHash && '' !== $this->accessKeyHash;
     }
 
     /** @return list<string> */

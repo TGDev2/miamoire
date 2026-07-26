@@ -5,6 +5,13 @@ framework:
     # Note that the session will be started ONLY if you read or write from it.
     session: true
 
+    # Derrière le répartiteur de charge d'un hébergeur, toutes les requêtes
+    # semblent venir de sa propre adresse. Sans cette déclaration, la limitation
+    # de débit compterait tous les visiteurs comme un seul, et Symfony se croirait
+    # en HTTP alors que la plateforme termine le TLS.
+    trusted_proxies: '%env(TRUSTED_PROXIES)%'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port']
+
     #esi: true
     #fragments: true
 

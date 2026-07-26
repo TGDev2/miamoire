@@ -8,33 +8,49 @@ use App\Entity\Household;
 use App\Entity\Member;
 use App\Repository\HouseholdRepository;
 use App\Repository\MemberRepository;
+use App\Service\HouseholdAccessKey;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\HttpKernel\Exception\UnauthorizedHttpException;
 use Symfony\Component\Uid\Uuid;
 
 /**
- * Remplace l'authentification par une simple désignation du foyer et du membre.
+ * Remplace les comptes par un code de foyer et un prénom.
  *
- * L'application est destinée à une seule famille sur son réseau local : il n'y a
- * ni compte, ni mot de passe. En contrepartie, la seule garantie apportée ici est
- * l'ISOLATION : un foyer ne peut jamais lire ni modifier le stock d'un autre,
- * et un membre ne peut pas être attribué à un foyer auquel il n'appartient pas.
+ * Il n'y a ni e-mail, ni mot de passe : le foyer est une porte dont chaque membre
+ * a la clé. Deux garanties sont apportées ici, et elles le sont en un seul endroit :
+ *
+ * - AUTHENTIFICATION : sans le code du foyer, aucune donnée n'est lisible ni
+ *   modifiable. L'identifiant du foyer ne suffit pas — il n'est pas un secret,
+ *   il circule dans les réponses de l'API.
+ * - ISOLATION : un foyer ne peut jamais lire ni modifier le stock d'un autre,
+ *   et un membre ne peut pas être attribué à un foyer auquel il n'appartient pas.
  */
 class RequestContext
 {
     public const HOUSEHOLD_HEADER = 'X-Household';
     public const MEMBER_HEADER = 'X-Member';
+    public const KEY_HEADER = 'X-Household-Key';
+
+    private ?Household $resolved = null;
 
     public function __construct(
         private readonly RequestStack $requestStack,
         private readonly HouseholdRepository $households,
         private readonly MemberRepository $members,
+        private readonly HouseholdAccessKey $accessKeys,
     ) {
     }
 
     public function household(): Household
     {
+        // Plusieurs appels par requête (contrôleur, présentation, member()) :
+        // on ne revérifie pas le code à chaque fois.
+        if (null !== $this->resolved) {
+            return $this->resolved;
+        }
+
         $id = $this->header(self::HOUSEHOLD_HEADER);
 
         if (null === $id) {
@@ -49,6 +65,38 @@ class RequestContext
 
         if (null === $household) {
             throw new NotFoundHttpException('Ce foyer n\'existe plus. Choisissez-en un autre.');
+        }
+
+        return $this->resolved = $this->authenticate($household);
+    }
+
+    /**
+     * Le code du foyer conditionne tout accès.
+     *
+     * Un foyer sans code — créé avant l'ouverture de l'API sur Internet — est
+     * refusé plutôt que laissé passer : une valeur absente ne vaut jamais
+     * autorisation. `app:households:issue-keys` lui en délivre un.
+     */
+    private function authenticate(Household $household): Household
+    {
+        $key = $this->header(self::KEY_HEADER);
+
+        if (null === $key) {
+            throw new UnauthorizedHttpException(
+                'Header',
+                'Code du foyer manquant. Saisissez-le pour rejoindre ce foyer.',
+            );
+        }
+
+        if (!$household->hasAccessKey()) {
+            throw new UnauthorizedHttpException(
+                'Header',
+                'Ce foyer n\'a pas encore de code d\'accès. Exécutez « app:households:issue-keys » sur le serveur.',
+            );
+        }
+
+        if (!$this->accessKeys->matches($key, (string) $household->getAccessKeyHash())) {
+            throw new UnauthorizedHttpException('Header', 'Code du foyer incorrect.');
         }
 
         return $household;

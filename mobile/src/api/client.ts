@@ -3,6 +3,7 @@ import type {
   ConfirmationResponse,
   ConsumptionLine,
   Household,
+  HouseholdWithKey,
   InventorySummary,
   Member,
   Product,
@@ -25,24 +26,42 @@ export class ApiError extends Error {
 }
 
 /**
- * Identité courante : quel foyer, et qui agit.
+ * Identité courante : quel foyer, avec quelle clé, et qui agit.
  *
- * Il n'y a ni compte ni mot de passe — l'application est destinée à une seule
- * famille sur son réseau. Ces deux valeurs remplacent l'authentification :
- * le foyer isole le stock, le membre signe les mouvements.
+ * Il n'y a ni e-mail ni mot de passe. Le foyer est une porte dont chaque membre a
+ * la clé : le code authentifie et isole le stock, le prénom signe les mouvements.
+ * L'identifiant du foyer n'est PAS un secret — il circule dans les réponses de
+ * l'API. Seul le code en est un.
  */
 let currentHouseholdId: string | null = null;
 let currentMemberId: string | null = null;
+let currentHouseholdKey: string | null = null;
 
-export function setIdentity(householdId: string | null, memberId: string | null): void {
+export function setIdentity(
+  householdId: string | null,
+  memberId: string | null,
+  householdKey: string | null = null,
+): void {
   currentHouseholdId = householdId;
   currentMemberId = memberId;
+  currentHouseholdKey = householdKey;
+}
+
+/**
+ * Que faire quand le serveur refuse le code — régénéré depuis un autre téléphone,
+ * ou foyer recréé. La session s'en charge : elle oublie le code et l'application
+ * revient à l'écran de mise en route, plutôt que d'afficher « 401 » à chaque geste.
+ */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
 }
 
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
-  /** Certains appels (liste des foyers) précèdent tout choix de foyer. */
+  /** Les trois appels qui précèdent l'accès à un foyer : santé, création, adhésion. */
   anonymous?: boolean;
 };
 
@@ -54,6 +73,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (!anonymous && currentHouseholdId) headers['X-Household'] = currentHouseholdId;
   if (!anonymous && currentMemberId) headers['X-Member'] = currentMemberId;
+  if (!anonymous && currentHouseholdKey) headers['X-Household-Key'] = currentHouseholdKey;
 
   let response: Response;
   try {
@@ -81,6 +101,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       payload && typeof payload === 'object' && 'error' in payload
         ? String((payload as { error: unknown }).error)
         : `Erreur ${response.status}`;
+
+    // Le code n'ouvre plus ce foyer : inutile de le réessayer sur chaque écran.
+    if (response.status === 401 && !anonymous) onUnauthorized?.();
+
     throw new ApiError(message, response.status);
   }
 
@@ -115,16 +139,30 @@ export const api = {
   /** Seule route qui répond sans foyer : elle sert à vérifier que le serveur est joignable. */
   health: () => request<{ status: string; time: string }>('/health', { anonymous: true }),
 
-  households: () => request<{ households: Household[] }>('/households', { anonymous: true }),
-
+  /**
+   * Crée un foyer et reçoit son code — la seule fois où il circule en clair.
+   * Le serveur n'en garde qu'une empreinte et ne pourra jamais le réafficher.
+   */
   createHousehold: (name: string, firstName: string) =>
-    request<Household>('/households', {
+    request<HouseholdWithKey>('/households', {
       method: 'POST',
       body: { name, firstName },
       anonymous: true,
     }),
 
-  household: (id: string) => request<Household>(`/households/${id}`, { anonymous: true }),
+  /** Rejoindre un foyer par son code : il n'existe plus de liste des foyers. */
+  joinHousehold: (code: string) =>
+    request<Household>('/households/join', {
+      method: 'POST',
+      body: { code },
+      anonymous: true,
+    }),
+
+  /** Délivre un nouveau code. Les autres téléphones devront saisir celui-ci. */
+  rotateHouseholdKey: (id: string) =>
+    request<HouseholdWithKey>(`/households/${id}/access-key`, { method: 'POST' }),
+
+  household: (id: string) => request<Household>(`/households/${id}`),
 
   updateHousehold: (id: string, body: { name?: string; dietaryExclusions?: string[] }) =>
     request<Household>(`/households/${id}`, { method: 'PATCH', body }),
@@ -136,7 +174,6 @@ export const api = {
     request<Member>(`/households/${householdId}/members`, {
       method: 'POST',
       body: { firstName },
-      anonymous: true,
     }),
 
   removeMember: (householdId: string, memberId: string) =>

@@ -23,7 +23,10 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -36,7 +39,9 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "buildArchs": ["arm64-v8a"]
+            "buildArchs": [
+              "arm64-v8a"
+            ]
           }
         }
       ],
@@ -53,6 +58,12 @@
           "cameraPermission": "La caméra sert à scanner les codes-barres des produits que vous ajoutez à votre stock."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f19c1df3-dd7a-4529-8331-7355a7697eee"
+      }
+    }
   }
 }

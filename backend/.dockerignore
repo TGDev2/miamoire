@@ -1,0 +1,16 @@
+# Les dépendances sont installées dans l'image, pas copiées depuis la machine :
+# celles du poste Windows ne conviendraient pas à une image Linux.
+vendor/
+
+# Secrets : ils arrivent par variables d'environnement de l'hébergeur.
+.env.local
+.env.*.local
+
+var/
+tests/
+.phpunit.cache/
+phpunit.dist.xml
+.git/
+.gitignore
+Dockerfile
+.dockerignore

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
@@ -11,7 +11,8 @@ import { colors, radius, spacing } from '../../src/theme';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { household, member, selectMember, refresh, leave } = useSession();
+  const { household, member, accessKey, enterHousehold, selectMember, refresh, leave } =
+    useSession();
 
   const [householdName, setHouseholdName] = useState(household?.name ?? '');
   const [exclusion, setExclusion] = useState('');
@@ -19,6 +20,8 @@ export default function ProfileScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [alertStatus, setAlertStatus] = useState('Autorisation non vérifiée sur ce téléphone.');
+  /** Code fraîchement régénéré : affiché immédiatement, avant tout rechargement. */
+  const [issuedKey, setIssuedKey] = useState<string | null>(null);
 
   if (!household) return <Loader />;
 
@@ -33,6 +36,31 @@ export default function ProfileScreen() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Régénérer déconnecte tous les autres téléphones : cela se confirme. */
+  function confirmRotateKey() {
+    Alert.alert(
+      'Régénérer le code du foyer ?',
+      'L\'ancien code cessera immédiatement de fonctionner. Chaque autre téléphone devra saisir le nouveau. Le stock, lui, n\'est pas touché.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Régénérer',
+          style: 'destructive',
+          onPress: () =>
+            run(async () => {
+              const previousMember = member;
+              const updated = await api.rotateHouseholdKey(household!.id);
+              // enterHousehold repart d'un foyer sans personne choisie : on
+              // rétablit le prénom pour ne pas éjecter l'utilisateur de l'écran.
+              await enterHousehold(updated, updated.accessKey);
+              if (previousMember) await selectMember(previousMember);
+              setIssuedKey(updated.accessKey);
+            }),
+        },
+      ],
+    );
   }
 
   function confirmRemoveMember(id: string, firstName: string) {
@@ -166,6 +194,39 @@ export default function ProfileScreen() {
         }}
       />
 
+      <SectionTitle>Code du foyer</SectionTitle>
+      <Text style={styles.help}>
+        C'est ce code, et lui seul, qui donne accès au stock de ce foyer. Transmettez-le
+        aux personnes qui y vivent, à personne d'autre.
+      </Text>
+
+      {accessKey ? (
+        <>
+          <View style={styles.codeBox}>
+            <Text selectable style={styles.codeText}>
+              {issuedKey ?? accessKey}
+            </Text>
+          </View>
+          <Button
+            label="Partager le code"
+            variant="secondary"
+            onPress={() =>
+              Share.share({
+                message: `Rejoins notre foyer « ${household!.name} » dans l'application Food avec ce code : ${issuedKey ?? accessKey}`,
+              })
+            }
+          />
+          <Button
+            label="Régénérer le code"
+            variant="ghost"
+            onPress={confirmRotateKey}
+            style={styles.spaced}
+          />
+        </>
+      ) : (
+        <Text style={styles.help}>Aucun code enregistré sur ce téléphone.</Text>
+      )}
+
       <SectionTitle>Alertes de péremption</SectionTitle>
       <Text style={styles.help}>
         Trois jours avant la date limite, à 9 h, ce téléphone vous prévient de ce qu'il faut
@@ -222,4 +283,20 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   removeRow: { paddingVertical: spacing.xs },
   removeText: { fontSize: 13, color: colors.danger },
+  spaced: { marginTop: spacing.sm },
+  codeBox: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    alignItems: 'center',
+  },
+  codeText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 1,
+    textAlign: 'center',
+  },
 });

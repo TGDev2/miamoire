@@ -7,14 +7,16 @@ Assistant de gestion domestique. L'application répond à trois questions :
 3. **Que puis-je cuisiner avec ces aliments, pour un nombre donné de personnes ?**
 
 ```text
-Application mobile  ──▶  API REST Symfony  ──▶  PostgreSQL
-React Native + Expo        (clés d'API                │
-      TypeScript            côté serveur)             ├──▶ Open Food Facts
-                                                      └──▶ Claude (claude-opus-5)
+Application mobile  ──HTTPS──▶  API REST Symfony  ──▶  PostgreSQL managé
+React Native + Expo             hébergement permanent        │
+      TypeScript                (clés d'API côté serveur)    ├──▶ Open Food Facts
+                                                             └──▶ Gemini ou Claude
 ```
 
-L'application mobile n'appelle jamais Open Food Facts ni Claude directement :
-tout passe par l'API Symfony, qui garde les clés et met les produits en cache.
+L'application mobile n'appelle jamais Open Food Facts ni le générateur de recettes
+directement : tout passe par l'API Symfony, qui garde les clés et met les produits
+en cache. L'API et la base vivent sur un hébergement permanent — **l'application ne
+dépend d'aucun ordinateur allumé à la maison, et ne demande aucun VPN**.
 
 ## Le modèle : produit ≠ stock
 
@@ -33,26 +35,47 @@ Aucune quantité ne change sans qu'un `StockMovement` soit écrit. On n'écrase 
 silencieusement « 1 000 g » par « 700 g » : le journal conserve que 300 g ont été
 consommés, ce qui rend les corrections et l'audit possibles.
 
-## Pas de comptes : des foyers et des prénoms
+## Pas de comptes : un code de foyer et des prénoms
 
-L'application est destinée à une seule famille sur son réseau local. Il n'y a donc
-ni mot de passe, ni session, ni compte.
+Il n'y a ni e-mail, ni mot de passe, ni session. Le foyer est **une porte dont
+chaque membre a la clé** — c'est le modèle mental de la maison, pas celui d'un
+service en ligne.
 
-- Un **foyer** porte un nom et **isole complètement le stock**. Deux foyers ne
-  partagent ni inventaire, ni mouvements, ni membres — seule la table `Product`,
-  qui ne contient aucune quantité, leur est commune.
+- Un **foyer** porte un nom, un code d'accès, et **isole complètement le stock**.
+  Deux foyers ne partagent ni inventaire, ni mouvements, ni membres — seule la
+  table `Product`, qui ne contient aucune quantité, leur est commune.
 - Un **membre** est un simple prénom. Il ne donne aucun droit : il sert à savoir
   qui a enregistré ou consommé un produit.
 
-L'application transmet deux en-têtes, `X-Household` et `X-Member`. La seule
-garantie apportée est l'**isolation** : un foyer ne peut jamais lire ni modifier
-le stock d'un autre, et un membre ne peut pas signer un mouvement dans un foyer
-auquel il n'appartient pas (`RequestContext`, couvert par `RequestContextTest`).
+Le **code d'accès** fait 20 caractères tirés d'un alphabet sans ambiguïté visuelle
+— ni `O`/`0`, ni `I`/`1`, ni `B`/`8` — soit près de 100 bits d'aléa, formatés
+`K7M2-9QXR-4TVB-8NHD-3JPC` pour être dictés au téléphone. Il est stocké **haché en
+SHA-256** : une fuite de la base n'ouvrirait aucun foyer, et le serveur lui-même est
+incapable de le réafficher. Il n'apparaît en clair qu'à la création et à la
+régénération ; c'est l'application qui le conserve, pour permettre de le repartager.
 
-> ⚠️ Toute personne ayant accès au réseau peut lister les foyers et lire leur stock.
-> C'est un choix assumé pour un usage familial. Pour joindre l'API hors du domicile,
-> passer par Tailscale (voir plus bas) : le réseau privé y tient lieu
-> d'authentification. Ne jamais rediriger le port 8000 de la box vers le PC.
+> Pourquoi SHA-256 et non bcrypt ? Un hachage lent protège un mot de passe humain,
+> court et devinable. Ici le secret est tiré au hasard sur 100 bits : le deviner est
+> hors d'atteinte, et un hachage rapide permet en prime de retrouver un foyer par
+> son code en une lecture indexée.
+
+L'application transmet trois en-têtes, `X-Household`, `X-Household-Key` et
+`X-Member`. Deux garanties sont apportées, et elles le sont **en un seul endroit**,
+`RequestContext`, couvert par `RequestContextTest` :
+
+- **authentification** — sans le code, aucune donnée n'est lisible ni modifiable.
+  L'identifiant du foyer ne suffit pas : il n'est pas un secret, il circule dans
+  toutes les réponses de l'API ;
+- **isolation** — un foyer ne peut jamais lire ni modifier le stock d'un autre, et
+  un membre ne peut pas signer un mouvement dans un foyer auquel il n'appartient pas.
+
+Il n'existe **aucune route qui énumère les foyers** : on rejoint un foyer par son
+code, jamais en le choisissant dans une liste. La création et l'adhésion, seuls
+points d'entrée ouverts sans code, sont limitées en débit par adresse IP.
+
+Un foyer dépourvu de code — antérieur à cette version — est **refusé**, jamais
+laissé passer. `php bin/console app:households:issue-keys` lui en délivre un et
+l'affiche ; c'est le seul instant où il est lisible.
 
 ## Un produit n'est pas qu'un nom
 
@@ -170,26 +193,75 @@ L'inventaire reste la seule source de vérité ; aucun état parallèle ne peut 
 > l'instant est déjà passé. Il apparaît en revanche d'emblée en rouge dans la liste
 > et sous le filtre « Bientôt périmés ».
 
-## Utiliser l'application hors du domicile
+## Héberger l'API — l'application ne dépend plus d'un PC allumé
 
-L'API n'a ni compte ni mot de passe : la publier sur Internet reviendrait à ouvrir
-son stock — et sa base — à qui trouve l'adresse. **Tailscale** résout le problème
-sans rien changer à ce modèle : il crée un réseau privé chiffré entre les seuls
-appareils que vous autorisez. L'API devient joignable en 4G, en 5G et depuis
-n'importe quel Wi-Fi, tout en restant invisible du reste d'Internet.
+Tant que l'API tournait sur un ordinateur personnel, l'application s'éteignait avec
+lui, et un VPN était imposé à chaque utilisateur. L'API et la base vivent désormais
+sur un hébergement permanent, joignable en HTTPS depuis n'importe quel réseau. Les
+membres du foyer n'installent rien d'autre que **Food**.
 
-1. Installer Tailscale sur le PC et sur chaque téléphone, se connecter avec le même
-   compte : <https://tailscale.com/download>
-2. Activer **MagicDNS** dans l'admin Tailscale — la machine devient joignable par son
-   nom plutôt que par une IP.
-3. Lancer l'API en écoutant sur toutes les interfaces :
-   `php -S 0.0.0.0:8000 -t public public/index.php`
-4. Dans l'application, onglet **Profil → Serveur**, saisir `<nom-machine>:8000`, puis
-   **Tester la connexion**.
+### L'image
 
-Aucune redirection de port sur la box, aucune règle de pare-feu entrante, aucun
-certificat à gérer. Le bouton « Tester la connexion » interroge `GET /api/health` :
-c'est ce qui distingue, depuis le téléphone, une adresse fausse d'un PC éteint.
+`backend/Dockerfile` produit une image de production autonome, bâtie sur
+[FrankenPHP](https://frankenphp.dev) — Caddy avec PHP embarqué. Elle remplace à la
+fois `php -S`, que la documentation PHP réserve au développement, et l'attelage
+nginx + PHP-FPM + superviseur.
+
+Elle ne contient **aucune instruction propre à un hébergeur** : les migrations
+tournent au démarrage du conteneur plutôt que par un mécanisme maison (`release
+command` chez l'un, `preDeploy` chez l'autre, rien du tout chez un troisième). La
+même image se déploie donc sur Fly.io, Railway, Render, Koyeb ou Clever Cloud.
+
+```bash
+cd backend
+docker build -t food-api .
+```
+
+### Le déploiement
+
+Quelle que soit la plateforme, la marche à suivre est la même :
+
+1. Créer une base **PostgreSQL managée** ; elle fournit un `DATABASE_URL`.
+2. Déployer le dossier `backend/` — toutes ces plateformes détectent le `Dockerfile`.
+3. Définir les variables ci-dessous.
+4. Relever l'URL HTTPS attribuée (`mon-app.fly.dev`, `…up.railway.app`, …).
+
+| Variable | Valeur |
+| --- | --- |
+| `APP_ENV` | `prod` |
+| `APP_SECRET` | **un nouveau secret**, jamais celui du dépôt : `openssl rand -hex 32` |
+| `DATABASE_URL` | fourni par la base managée ; ajouter `?sslmode=require` |
+| `TRUSTED_PROXIES` | `REMOTE_ADDR` — sans quoi la limitation de débit compte tous les visiteurs comme un seul |
+| `CORS_ALLOW_ORIGIN` | `^$` : l'application mobile n'est pas un navigateur, aucune origine n'a à être autorisée |
+| `GEMINI_API_KEY` | la clé du générateur de recettes |
+| `PORT` | imposé par la plateforme, repli `8080` |
+
+L'application mobile n'a **jamais** connaissance de ces valeurs : les clés restent
+côté serveur.
+
+### La bascule des données
+
+```bash
+# Sauvegarde de la base locale
+docker exec food_postgres pg_dump -U food -d food --no-owner > food.sql
+
+# Restauration vers la base managée
+psql "<DATABASE_URL de la base managée>" < food.sql
+
+# Délivrance des codes aux foyers repris
+docker run --rm -e DATABASE_URL="…" food-api php bin/console app:households:issue-keys
+```
+
+Puis, dans `mobile/eas.json`, remplacer `EXPO_PUBLIC_API_URL` par l'URL HTTPS
+publique et rediffuser un build. L'adresse reste modifiable dans l'application, ce
+qui permet de repointer vers le PC pour développer.
+
+### Tailscale, désormais
+
+Tailscale garde son utilité — administrer le serveur, ou joindre l'API du PC pendant
+le développement — mais **n'est plus imposé aux membres du foyer**. Le bouton
+« Tester la connexion » (Profil → Serveur) interroge `GET /api/health` : c'est ce qui
+distingue, depuis le téléphone, une adresse fausse d'un serveur qui ne répond pas.
 
 ## Installer l'application sur les téléphones du foyer
 
@@ -204,15 +276,18 @@ cd mobile
 eas build --platform android --profile preview
 ```
 
-Renseigner d'abord `EXPO_PUBLIC_API_URL` dans `eas.json` avec le nom Tailscale du PC.
-Ce n'est qu'un défaut : **l'adresse du serveur reste modifiable dans l'application**,
-donc un même build couvre les trois façons de joindre l'API.
+Renseigner d'abord `EXPO_PUBLIC_API_URL` dans `eas.json` avec l'URL HTTPS publique
+de l'API. Ce n'est qu'un défaut : **l'adresse du serveur reste modifiable dans
+l'application**, donc un même build couvre les trois façons de joindre l'API.
 
 | Contexte | Adresse à saisir | Prérequis |
 | --- | --- | --- |
-| Hors du domicile (4G/5G) | `<nom-machine>:8000` | Tailscale actif des deux côtés |
-| Wi-Fi domestique | `192.168.x.x:8000` | Port 8000 autorisé en entrée dans le pare-feu |
-| USB | `localhost:8000` | `adb reverse tcp:8000 tcp:8000` |
+| Usage normal | `https://mon-app.exemple.dev` | aucun — Wi-Fi, 4G ou 5G |
+| Développement, Wi-Fi | `192.168.x.x:8000` | Port 8000 autorisé en entrée dans le pare-feu |
+| Développement, USB | `localhost:8000` | `adb reverse tcp:8000 tcp:8000` |
+
+Chaque membre du foyer installe l'application, puis saisit le **code du foyer** que
+vous lui transmettez depuis Profil → « Partager le code ».
 
 `autoIncrement` est activé : sans un `versionCode` croissant, Android refuse
 d'installer une nouvelle version par-dessus la précédente.
@@ -238,24 +313,28 @@ effacerait toute correction faite à la main :
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 62 tests
+cd backend && php vendor/bin/phpunit    # 74 tests
 cd mobile  && npx tsc --noEmit
 ```
 
-Les tests couvrent la logique dont une erreur corromprait l'inventaire :
-conversion d'unités, correction d'unité entre familles, normalisation des noms
-d'ingrédients, détection de l'état des produits, allocation FEFO, et chaque
-mouvement de stock.
+Les tests couvrent la logique dont une erreur corromprait l'inventaire — conversion
+d'unités, correction d'unité entre familles, normalisation des noms d'ingrédients,
+détection de l'état des produits, allocation FEFO, chaque mouvement de stock — et
+celle dont une erreur ouvrirait un foyer : génération du code, tolérance de saisie,
+refus d'un code absent, faux, ou appartenant à un autre foyer.
 
 ## API
 
-Toutes les routes sont sous `/api`. Les routes de stock exigent l'en-tête
-`X-Household` ; celles qui écrivent exigent en plus `X-Member`.
+Toutes les routes sont sous `/api`. Sauf les quatre exceptions ci-dessous — santé,
+création, adhésion — elles exigent `X-Household` **et** `X-Household-Key` ; celles
+qui écrivent exigent en plus `X-Member`.
 
 | Méthode | Route | Rôle |
 | --- | --- | --- |
 | `GET` | `/health` | Serveur joignable ? Seule route sans en-tête `X-Household` |
-| `GET` `POST` | `/households` | Liste et création de foyers |
+| `POST` | `/households` | Crée un foyer et délivre son code, une seule fois |
+| `POST` | `/households/join` | Ouvre un foyer à partir de son code |
+| `POST` | `/households/{id}/access-key` | Délivre un nouveau code (perdu ou divulgué) |
 | `GET` `PATCH` `DELETE` | `/households/{id}` | Nom et exclusions alimentaires du foyer |
 | `POST` | `/households/{id}/members` | Ajoute un prénom au foyer |
 | `DELETE` | `/households/{id}/members/{memberId}` | Retire un membre (l'historique subsiste) |

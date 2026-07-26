@@ -81,13 +81,29 @@ export interface Member {
   householdId: string;
 }
 
-/** Un foyer : le périmètre d'isolation du stock. Aucun compte, aucun mot de passe. */
+/**
+ * Un foyer : le périmètre d'isolation du stock. Aucun compte, aucun mot de passe —
+ * un code d'accès partagé entre les membres, et rien d'autre.
+ *
+ * `id` n'est pas un secret : il circule dans toutes les réponses de l'API.
+ */
 export interface Household {
   id: string;
   name: string;
   dietaryExclusions: string[];
   createdAt: string;
   members: Member[];
+}
+
+/**
+ * Le foyer accompagné de son code en clair.
+ *
+ * Renvoyé uniquement à la création et à la régénération : le serveur n'en garde
+ * qu'une empreinte et ne pourra plus jamais l'afficher. C'est à l'application de
+ * le conserver.
+ */
+export interface HouseholdWithKey extends Household {
+  accessKey: string;
 }
 
 export interface ReferenceOption {

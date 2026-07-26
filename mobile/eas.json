@@ -11,7 +11,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://mon-pc:8000/api"
+        "EXPO_PUBLIC_API_URL": "http://stock-pc:8000"
       }
     },
     "production": {

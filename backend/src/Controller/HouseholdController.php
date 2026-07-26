@@ -12,39 +12,42 @@ use App\Http\RequestContext;
 use App\Repository\HouseholdRepository;
 use App\Repository\MemberRepository;
 use App\Repository\StockItemRepository;
+use App\Service\HouseholdAccessKey;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
+use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Uid\Uuid;
 
 #[Route('/api/households')]
 class HouseholdController extends AbstractApiController
 {
-    /** Liste des foyers, pour choisir le sien au premier lancement. */
-    #[Route('', methods: ['GET'])]
-    public function list(HouseholdRepository $households, ApiPresenter $presenter): JsonResponse
-    {
-        return $this->json([
-            'households' => array_map(
-                static fn (Household $household) => $presenter->household($household),
-                $households->findAllWithCounts(),
-            ),
-        ]);
-    }
-
+    /**
+     * Crée un foyer et délivre son code d'accès.
+     *
+     * C'est l'unique instant où le code circule en clair : la base n'en garde
+     * qu'une empreinte. L'application doit le conserver — et le faire noter.
+     */
     #[Route('', methods: ['POST'])]
     public function create(
         Request $request,
         EntityManagerInterface $entityManager,
+        HouseholdAccessKey $accessKeys,
         ApiPresenter $presenter,
+        RateLimiterFactory $householdCreationLimiter,
     ): JsonResponse {
+        $this->throttle($householdCreationLimiter, $request);
+
         $payload = JsonPayload::fromRequest($request);
 
         $household = new Household($payload->requiredString('name'));
+        $code = $accessKeys->generate();
+        $household->setAccessKeyHash($accessKeys->hash($code));
         $entityManager->persist($household);
 
         // Un foyer sans personne n'aurait aucun usage : on crée le premier membre.
@@ -59,24 +62,83 @@ class HouseholdController extends AbstractApiController
 
         $entityManager->flush();
 
-        return $this->json($presenter->household($household), Response::HTTP_CREATED);
+        return $this->json(
+            $presenter->household($household) + ['accessKey' => $code],
+            Response::HTTP_CREATED,
+        );
+    }
+
+    /**
+     * Rejoindre un foyer à partir de son code.
+     *
+     * Remplace l'ancienne liste publique des foyers : sur un serveur accessible
+     * depuis Internet, énumérer les foyers reviendrait à publier les portes.
+     */
+    #[Route('/join', methods: ['POST'])]
+    public function join(
+        Request $request,
+        HouseholdRepository $households,
+        HouseholdAccessKey $accessKeys,
+        ApiPresenter $presenter,
+        RateLimiterFactory $householdJoinLimiter,
+    ): JsonResponse {
+        $this->throttle($householdJoinLimiter, $request);
+
+        $code = JsonPayload::fromRequest($request)->requiredString('code');
+
+        // Une saisie tronquée ne doit pas coûter une lecture en base.
+        if (!$accessKeys->looksValid($code)) {
+            throw new NotFoundHttpException('Ce code ne correspond à aucun foyer.');
+        }
+
+        $household = $households->findOneByAccessKeyHash($accessKeys->hash($code));
+
+        if (null === $household) {
+            throw new NotFoundHttpException('Ce code ne correspond à aucun foyer.');
+        }
+
+        return $this->json($presenter->household($household));
+    }
+
+    /**
+     * Délivre un nouveau code — code perdu, ou téléphone égaré.
+     *
+     * Exige l'ancien code, via RequestContext : sans quoi n'importe qui pourrait
+     * s'emparer d'un foyer dont il connaît l'identifiant. Les autres téléphones
+     * du foyer devront saisir le nouveau code.
+     */
+    #[Route('/{id}/access-key', methods: ['POST'])]
+    public function rotateAccessKey(
+        string $id,
+        RequestContext $context,
+        HouseholdAccessKey $accessKeys,
+        EntityManagerInterface $entityManager,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $household = $this->sameAsContext($context, $id);
+
+        $code = $accessKeys->generate();
+        $household->setAccessKeyHash($accessKeys->hash($code));
+        $entityManager->flush();
+
+        return $this->json($presenter->household($household) + ['accessKey' => $code]);
     }
 
     #[Route('/{id}', methods: ['GET'])]
-    public function show(string $id, HouseholdRepository $households, ApiPresenter $presenter): JsonResponse
+    public function show(string $id, RequestContext $context, ApiPresenter $presenter): JsonResponse
     {
-        return $this->json($presenter->household($this->find($households, $id)));
+        return $this->json($presenter->household($this->sameAsContext($context, $id)));
     }
 
     #[Route('/{id}', methods: ['PATCH'])]
     public function update(
         string $id,
         Request $request,
-        HouseholdRepository $households,
+        RequestContext $context,
         EntityManagerInterface $entityManager,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $household = $this->find($households, $id);
+        $household = $this->sameAsContext($context, $id);
         $payload = JsonPayload::fromRequest($request);
 
         if ($payload->has('name')) {
@@ -97,11 +159,11 @@ class HouseholdController extends AbstractApiController
     public function delete(
         string $id,
         Request $request,
-        HouseholdRepository $households,
+        RequestContext $context,
         StockItemRepository $stockItems,
         EntityManagerInterface $entityManager,
     ): JsonResponse {
-        $household = $this->find($households, $id);
+        $household = $this->sameAsContext($context, $id);
         $items = $stockItems->search($household, ['includeEmpty' => true]);
 
         // Effacer un stock entier par inadvertance serait irrattrapable.
@@ -126,12 +188,12 @@ class HouseholdController extends AbstractApiController
     public function addMember(
         string $id,
         Request $request,
-        HouseholdRepository $households,
+        RequestContext $context,
         MemberRepository $members,
         EntityManagerInterface $entityManager,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $household = $this->find($households, $id);
+        $household = $this->sameAsContext($context, $id);
         $firstName = JsonPayload::fromRequest($request)->requiredString('firstName');
 
         if (null !== $members->findOneByFirstName($household, $firstName)) {
@@ -149,11 +211,11 @@ class HouseholdController extends AbstractApiController
     public function removeMember(
         string $id,
         string $memberId,
-        HouseholdRepository $households,
+        RequestContext $context,
         MemberRepository $members,
         EntityManagerInterface $entityManager,
     ): JsonResponse {
-        $household = $this->find($households, $id);
+        $household = $this->sameAsContext($context, $id);
 
         $member = Uuid::isValid($memberId) ? $members->find(Uuid::fromString($memberId)) : null;
         if (null === $member || !$member->belongsTo($household)) {
@@ -179,14 +241,34 @@ class HouseholdController extends AbstractApiController
         ]);
     }
 
-    private function find(HouseholdRepository $households, string $id): Household
+    /**
+     * Le foyer de l'URL doit être celui que le code d'accès a ouvert.
+     *
+     * `RequestContext::household()` a déjà vérifié le code ; il reste à refuser
+     * qu'un foyer authentifié agisse sur un autre par son identifiant d'URL.
+     */
+    private function sameAsContext(RequestContext $context, string $id): Household
     {
-        $household = Uuid::isValid($id) ? $households->find(Uuid::fromString($id)) : null;
+        $household = $context->household();
 
-        if (null === $household) {
+        if (!Uuid::isValid($id) || !$household->getId()->equals(Uuid::fromString($id))) {
+            // On ne distingue pas « inexistant » de « appartient à quelqu'un d'autre ».
             throw new NotFoundHttpException('Foyer introuvable.');
         }
 
         return $household;
+    }
+
+    /**
+     * Les deux seuls points d'entrée ouverts sans code : création et adhésion.
+     *
+     * Le code approche 100 bits d'aléa, il n'est pas devinable ; la limite protège
+     * de la création en masse de foyers et du bruit sur un serveur public.
+     */
+    private function throttle(RateLimiterFactory $limiter, Request $request): void
+    {
+        if (!$limiter->create($request->getClientIp())->consume()->isAccepted()) {
+            throw new TooManyRequestsHttpException(null, 'Trop de tentatives. Réessayez dans quelques minutes.');
+        }
     }
 }

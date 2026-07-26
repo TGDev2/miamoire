@@ -1,0 +1,16 @@
+# Protection des deux seuls points d'entrée ouverts sans code de foyer.
+#
+# Le code fait 94 bits d'aléa : il n'est pas devinable, et ces limites ne servent
+# pas à cela. Elles empêchent la création en masse de foyers et le bruit d'un
+# balayage automatisé sur une API exposée à Internet.
+framework:
+    rate_limiter:
+        household_creation:
+            policy: 'sliding_window'
+            limit: 5
+            interval: '1 hour'
+
+        household_join:
+            policy: 'sliding_window'
+            limit: 20
+            interval: '15 minutes'
