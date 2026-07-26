@@ -465,8 +465,17 @@ effacerait toute correction faite à la main :
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 132 tests
+cd backend && php vendor/bin/phpunit    # 139 tests
 cd mobile  && npx tsc --noEmit
+```
+
+Sept d'entre eux exigent une vraie base PostgreSQL — la concurrence ne se simule
+pas avec des doublures. Ils sont **ignorés** si elle est absente, jamais rouges :
+
+```bash
+cd backend
+php bin/console doctrine:database:create --env=test
+php bin/console doctrine:migrations:migrate --env=test --no-interaction
 ```
 
 Les tests couvrent la logique dont une erreur corromprait l'inventaire — conversion
@@ -478,11 +487,33 @@ code absent, faux, ou appartenant à un autre foyer — et celle dont une erreur
 mettrait quelqu'un en danger : chaque contre-exemple du tableau des exclusions
 alimentaires a son test.
 
-> **Ce que les tests ne couvrent pas.** La concurrence réelle — deux confirmations
-> simultanées sur les mêmes lots — demanderait une base de test dédiée. Elle n'est pas
-> automatisée : la garantie repose sur le verrouillage pessimiste et sur la contrainte
-> unique `(foyer, clé d'opération)`, tous deux portés par PostgreSQL. Le rejeu d'une
-> même clé, lui, se vérifie en deux requêtes identiques sur `/recipes/confirm`.
+### La concurrence, testée pour de bon
+
+`RecipeConfirmationConcurrencyTest` lance **un second processus PHP** : dans un
+programme mono-thread, un verrou qu'on prend soi-même ne bloque jamais, et un test
+qui reste dans un seul processus passerait sans rien démontrer.
+
+Ce second processus verrouille un lot de 500 g, le tient, puis le descend à 50 g et
+valide — pendant qu'une confirmation de 200 g arrive dessus. Le stock final départage
+les deux implémentations possibles :
+
+| | Stock final | Ce qui s'est passé |
+| --- | --- | --- |
+| **Avec** le verrou avant planification | **50 g** | La confirmation attend, relit 50 g, constate que son plan n'est plus réalisable, n'écrit rien |
+| **Sans** le verrou | **300 g** | Elle avait planifié sur les 500 g lus avant l'attente et a écrit 500 − 200 par-dessus : 250 g de tomates apparus de nulle part |
+
+Le test a été vérifié par mutation — verrou retiré, il échoue avec exactement
+`300.0 !== 50.0`. Un test de concurrence qui passe dans les deux cas ne prouve rien,
+et la première version de celui-ci était dans ce cas : elle n'observait qu'une
+exception, or l'écriture bloque de toute façon sur le verrou de ligne. C'est la
+quantité finale, et elle seule, qui distingue les deux comportements.
+
+> **Ce que les tests ne couvrent toujours pas.** Le parcours des écrans sur un
+> appareil : `tsc` et un bundle qui se construit ne prouvent rien sur l'ordre des
+> rendus (leçon n° 9). Le bundle Metro compile bien les 1 410 modules, mais Expo Go
+> segfault au lancement sur émulateur x86_64 (SDK 57 + Fabric) — un défaut
+> d'environnement, pas de l'application. La vérification reste à faire sur un
+> téléphone réel.
 
 ## API
 

@@ -304,13 +304,17 @@ class RecipeConfirmationService
             return null;
         }
 
-        if (!$existing->matches($requestHash)) {
-            throw new StockException(
-                'Cette confirmation a déjà servi pour une autre recette. Regénérez des propositions.',
-            );
-        }
-
+        // Le contenu ne compte que pour une opération ABOUTIE : c'est la seule qui
+        // détient une réponse, et renvoyer celle d'un autre geste serait pire que
+        // de refuser. Une opération échouée, elle, n'a rien écrit — sa clé est
+        // libre, quel que soit le contenu de la nouvelle tentative.
         if (StockOperationStatus::Succeeded === $existing->getStatus()) {
+            if (!$existing->matches($requestHash)) {
+                throw new StockException(
+                    'Cette confirmation a déjà servi pour une autre recette. Regénérez des propositions.',
+                );
+            }
+
             return ['replayed' => true] + ($existing->getResponse() ?? []);
         }
 
