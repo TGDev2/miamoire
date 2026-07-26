@@ -170,12 +170,15 @@ export function RecipeDetailView({
         {recipe.servings > 1 ? 'personnes' : 'personne'}
       </Text>
 
+      {/* L'état « enregistrée » était rendu en variante ghost — sans bordure ni
+          fond, il se lisait comme une phrase et non comme un bouton, si bien que
+          rien ne distinguait une recette conservée d'une qui ne l'était pas. */}
       <Button
-        label={savedId === null ? 'Enregistrer cette recette' : 'Retirer des recettes enregistrées'}
-        variant={savedId === null ? 'secondary' : 'ghost'}
+        label={savedId === null ? 'Enregistrer cette recette' : '✓ Enregistrée — toucher pour retirer'}
+        variant="secondary"
         onPress={toggleSaved}
         loading={saving}
-        style={styles.save}
+        style={[styles.save, savedId !== null && styles.saved]}
       />
       <Text style={styles.help}>
         {savedId === null
@@ -328,6 +331,7 @@ const styles = StyleSheet.create({
   summary: { fontSize: 15, color: colors.inkMuted, marginTop: spacing.sm, lineHeight: 21 },
   meta: { fontSize: 14, color: colors.ink, marginTop: spacing.md, fontWeight: '600' },
   save: { marginTop: spacing.lg },
+  saved: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   ingredient: {
     flexDirection: 'row',
     justifyContent: 'space-between',

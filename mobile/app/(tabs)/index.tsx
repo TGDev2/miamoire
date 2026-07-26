@@ -89,6 +89,9 @@ export default function StockScreen() {
     (item) => item.status === 'expiring_soon' || item.status === 'expired',
   ).length;
 
+  /** Une liste vide ne veut pas dire la même chose selon qu'on filtre ou non. */
+  const filtering = Boolean(search) || location !== null || category !== null || urgentOnly;
+
   return (
     <View style={styles.flex}>
       <View style={styles.toolbar}>
@@ -142,10 +145,24 @@ export default function StockScreen() {
         }
         ListHeaderComponent={<ErrorBanner message={error} />}
         ListEmptyComponent={
-          <EmptyState
-            title="Votre stock est vide"
-            description="Scannez un code-barres ou saisissez un aliment manuellement pour commencer."
-          />
+          // « Votre stock est vide » sous une recherche active est faux, et c'est
+          // la seule lecture qui décourage : on croit avoir perdu son inventaire
+          // alors qu'on a simplement tapé un mot qui ne correspond à rien.
+          filtering ? (
+            <EmptyState
+              title="Aucun résultat"
+              description={
+                search
+                  ? `Rien ne correspond à « ${search} » avec les filtres actifs.`
+                  : 'Aucun aliment ne correspond aux filtres actifs.'
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Votre stock est vide"
+              description="Scannez un code-barres ou saisissez un aliment manuellement pour commencer."
+            />
+          )
         }
         renderItem={({ item }) => (
           <StockRow item={item} onPress={() => router.push(`/item/${item.id}`)} />

@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
+  type StyleProp,
   Text,
   TextInput,
   type TextInputProps,
@@ -47,7 +48,8 @@ export function Button({
   variant?: ButtonVariant;
   disabled?: boolean;
   loading?: boolean;
-  style?: ViewStyle;
+  /** `StyleProp` et non `ViewStyle` : un état conditionnel se compose en tableau. */
+  style?: StyleProp<ViewStyle>;
 }) {
   const isInactive = disabled || loading;
 

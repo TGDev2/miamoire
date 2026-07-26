@@ -6,6 +6,7 @@ import { api } from '../../src/api/client';
 import { useSession } from '../../src/session/SessionContext';
 import type { InventorySummary, Reference } from '../../src/api/types';
 import { Button, Card, Chip, ErrorBanner, Loader, SectionTitle } from '../../src/components/ui';
+import { IngredientPicker } from '../../src/components/IngredientPicker';
 import { useRecipes } from '../../src/recipes/RecipeContext';
 import { colors, radius, spacing } from '../../src/theme';
 
@@ -79,6 +80,9 @@ export default function CookScreen() {
       setBusy(false);
     }
   }
+
+  const priorityLabel =
+    inventory?.ingredients.find((entry) => entry.key === priorityKey)?.label ?? null;
 
   if (loading) return <Loader />;
 
@@ -160,31 +164,16 @@ export default function CookScreen() {
         ))}
       </View>
 
-      {/* Facultatif, et affiché comme tel : la plupart des générations ne
-          contraignent rien. L'inventaire arrive déjà trié — ce qui périme
-          bientôt d'abord, puis ce qui est entamé — donc les aliments à écouler
-          sont en tête sans qu'on ait à les chercher. */}
+      {/* Une ligne repliée, quelle que soit la taille de l'inventaire. Déroulé
+          ici, il faisait 115 puces pleine largeur et repoussait « Proposer 3
+          recettes » huit balayages plus bas — un réglage facultatif qui
+          enterrait l'action principale de l'écran. */}
       <SectionTitle>Aliment à utiliser en priorité</SectionTitle>
-      <Text style={styles.hint}>
-        {priorityKey === null
-          ? 'Facultatif. Choisissez-en un pour que les trois recettes l\'utilisent.'
-          : 'Les recettes qui ne l\'utilisent pas seront écartées avant de vous être montrées.'}
-      </Text>
-      <View style={styles.chips}>
-        {(inventory?.ingredients ?? []).map((ingredient) => (
-          <Chip
-            key={ingredient.key}
-            label={`${ingredient.label}${ingredient.expiresSoon ? ' ⏳' : ingredient.alreadyOpened ? ' •' : ''}`}
-            selected={priorityKey === ingredient.key}
-            onPress={() =>
-              setPriorityKey(priorityKey === ingredient.key ? null : ingredient.key)
-            }
-          />
-        ))}
-      </View>
-      {inventory && inventory.ingredients.length > 0 ? (
-        <Text style={styles.legend}>⏳ périme bientôt · • paquet déjà entamé</Text>
-      ) : null}
+      <IngredientPicker
+        ingredients={inventory?.ingredients ?? []}
+        selectedKey={priorityKey}
+        onSelect={setPriorityKey}
+      />
 
       <SectionTitle>Courses</SectionTitle>
       <View style={styles.switchRow}>
@@ -226,6 +215,11 @@ export default function CookScreen() {
         loading={busy}
         style={styles.submit}
       />
+      {/* Rappelé juste au-dessus du geste : la contrainte se pose en haut de
+          l'écran et s'applique en bas, et rien ne la rappelait entre les deux. */}
+      {priorityLabel !== null ? (
+        <Text style={styles.submitNote}>Autour de : {priorityLabel}</Text>
+      ) : null}
       <Text style={styles.disclaimer}>
         Les recettes sont des propositions : rien n'est retiré de votre stock sans votre
         confirmation.
@@ -262,8 +256,13 @@ const styles = StyleSheet.create({
   stepperValue: { fontSize: 17, fontWeight: '700', color: colors.ink },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   savedLink: { marginTop: spacing.lg },
-  hint: { fontSize: 13, color: colors.inkMuted, marginBottom: spacing.sm, lineHeight: 19 },
-  legend: { fontSize: 12, color: colors.inkMuted, marginTop: spacing.xs },
+  submitNote: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primary,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',

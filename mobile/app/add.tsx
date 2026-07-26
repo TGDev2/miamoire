@@ -238,12 +238,16 @@ export default function AddScreen() {
 
       <SectionTitle>Ce que vous ajoutez réellement</SectionTitle>
 
+      {/* « 500 » en gris se lisait comme une valeur déjà saisie : on appuyait sur
+          « Ajouter au stock » et le formulaire refusait un champ qui semblait
+          rempli. Un exemple explicite ne peut plus être confondu avec une saisie. */}
       <Field
         label="Quantité par exemplaire"
         value={quantity}
         onChangeText={setQuantity}
         keyboardType="decimal-pad"
-        placeholder="500"
+        placeholder="ex. 500"
+        hint="Le contenu d'UN paquet, pas le total : 3 sachets de 500 g, c'est 500."
       />
 
       <Text style={styles.fieldLabel}>Unité</Text>

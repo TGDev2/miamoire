@@ -248,6 +248,14 @@ sur trois qui l'utilisent, et la troisième arrive quand même. `RequiredIngredi
 la **clé** de la variante — une recette qui ouvre une boîte de tomates ne vide pas
 la barquette de tomates fraîches qu'on voulait écouler.
 
+Côté écran, la sélection est **repliée** derrière une seule ligne. La première
+version affichait une puce par ingrédient, comme pour le type de repas ou les
+équipements — sauf que ces listes-là comptent cinq entrées courtes, et l'inventaire
+d'un vrai foyer en compte 115 aux noms de fiches Open Food Facts. Chaque puce
+prenait toute la largeur : il fallait **huit balayages** pour atteindre « Proposer
+3 recettes ». Un réglage facultatif ne doit pas enterrer l'action principale de
+l'écran qui le porte.
+
 ## Enregistrer une recette
 
 Une proposition qui plaisait était perdue en quittant l'écran : elle ne vivait que
