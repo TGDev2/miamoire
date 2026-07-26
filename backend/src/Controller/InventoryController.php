@@ -40,6 +40,9 @@ class InventoryController extends AbstractApiController
                     'unit' => $line->unit->value,
                     'unitLabel' => $line->unit->label(),
                     'expiresSoon' => $line->expiresSoon,
+                    // Deux urgences distinctes : la date qui approche, et le paquet
+                    // déjà ouvert. L'écran « Cuisiner » les affiche toutes les deux.
+                    'alreadyOpened' => $line->alreadyOpened,
                     'earliestExpiration' => $line->earliestExpiration?->format('Y-m-d'),
                     'expirationIsEstimated' => $line->expirationIsEstimated,
                     'quantityIsEstimated' => $line->quantityIsEstimated,

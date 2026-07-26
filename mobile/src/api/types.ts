@@ -83,6 +83,18 @@ export interface ProductVariant {
   catalogName: string | null;
 }
 
+/**
+ * Un exemplaire d'un lot — un sachet, une bouteille.
+ *
+ * Trois sachets de pâtes de 500 g dont 250 g ont servi, ce n'est pas « 1,25 kg
+ * de pâtes entamées » : c'est un sachet ouvert à 250 g et deux encore scellés.
+ */
+export interface StockPackage {
+  position: number;
+  remaining: number;
+  opened: boolean;
+}
+
 /** Un autre lot du même aliment : même variante, autre date. */
 export interface SiblingLot {
   id: string;
@@ -106,6 +118,13 @@ export interface StockItem {
   displayQuantity: number;
   displayUnit: string;
   numberOfPackages: number;
+  /** Contenance d'un exemplaire, dans l'unité du lot. */
+  packageSize: number;
+  /** Ce qu'il reste dans l'exemplaire entamé ; `null` si aucun ne l'est. */
+  openPackageQuantity: number | null;
+  sealedPackageCount: number;
+  /** Exemplaire par exemplaire, dans l'ordre où ils seront consommés. */
+  packages: StockPackage[];
   storageLocation: StorageLocation;
   storageLocationLabel: string;
   purchaseDate: string | null;
@@ -211,6 +230,8 @@ export interface InventoryIngredient {
   unit: Unit;
   unitLabel: string;
   expiresSoon: boolean;
+  /** Au moins un exemplaire est entamé : les recettes le privilégient. */
+  alreadyOpened: boolean;
   earliestExpiration: string | null;
   expirationIsEstimated: boolean;
   quantityIsEstimated: boolean;
@@ -261,11 +282,28 @@ export interface RejectedRecipe {
 
 export interface SuggestionResponse {
   recipes: Recipe[];
-  /** Recettes supprimées avant affichage parce qu'elles touchaient un aliment exclu. */
+  /** Recettes supprimées avant affichage : aliment exclu, ou aliment imposé absent. */
   rejected: RejectedRecipe[];
   /** Les exclusions réellement vérifiées sur chaque recette, pas seulement demandées. */
   guaranteedExclusions: string[];
+  /** L'aliment que l'utilisateur a imposé, quand il en a choisi un. */
+  requiredIngredient: { key: string; label: string } | null;
   inventory: Array<{ key: string; ingredient: string; quantity: number; unit: Unit; expiresSoon: boolean }>;
+}
+
+/**
+ * Une recette que le foyer a décidé de garder.
+ *
+ * Elle vit sur le serveur et non dans la mémoire de l'application : quitter
+ * l'écran de suggestion ne la perd plus, et les autres membres du foyer y ont
+ * accès depuis leur propre téléphone.
+ */
+export interface SavedRecipe {
+  id: string;
+  recipeName: string;
+  savedBy: string | null;
+  savedAt: string;
+  recipe: Recipe;
 }
 
 export interface ConfirmationResponse {

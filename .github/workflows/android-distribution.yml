@@ -1,0 +1,76 @@
+# Diffusion d'une nouvelle version aux testeurs du foyer.
+#
+# Déclenchée à la main, jamais sur `push` : une compilation EAS consomme un
+# crédit et prend une dizaine de minutes. Diffuser à chaque commit épuiserait le
+# quota et noierait les testeurs sous les notifications — deux façons de rendre
+# la mise à jour automatique plus pénible que le QR code qu'elle remplace.
+name: Diffuser l'application Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Profil EAS (preview = APK installable directement)"
+        required: false
+        default: preview
+      notes:
+        description: "Notes de version lues par les testeurs"
+        required: false
+        default: ""
+
+jobs:
+  distribute:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Installer les dépendances
+        # `npm ci` sans aucun drapeau : `--legacy-peer-deps` réécrirait tout
+        # l'arbre de dépendances et retirerait des pairs dont le build a besoin.
+        run: npm ci
+
+      - name: Vérifier les types avant de compiler
+        # Dix minutes de compilation pour découvrir une erreur que `tsc` voyait
+        # en dix secondes, c'est dix minutes et un crédit EAS perdus.
+        run: npm run typecheck
+
+      - name: Écrire la clé du compte de service
+        # Le fichier vit dans le répertoire éphémère du runner et disparaît avec
+        # lui ; le secret ne touche jamais le dépôt. La variable n'est exportée
+        # que si le secret existe : la pointer sur un fichier vide ferait échouer
+        # la CLI Firebase sur un message sans rapport, au lieu de basculer sur le
+        # repli par jeton. Le test se fait en shell et non dans un `if:` de
+        # l'étape, où le contexte `secrets` n'est pas garanti disponible.
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "Aucun compte de service fourni : repli sur FIREBASE_TOKEN."
+            exit 0
+          fi
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
+
+      - name: Compiler et diffuser
+        # Les notes passent par l'environnement et non par un argument : une
+        # phrase avec des espaces se ferait découper en plusieurs arguments.
+        run: npm run distribute:android -- --profile "$PROFILE"
+        env:
+          PROFILE: ${{ inputs.profile }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_TESTER_GROUPS: ${{ vars.FIREBASE_TESTER_GROUPS || 'testeurs' }}
+          # Repli documenté : à ne renseigner que si la CLI Firebase ignore le
+          # compte de service. Voir le README.
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

@@ -169,13 +169,25 @@ class StockItemRepository extends ServiceEntityRepository
         return $qb;
     }
 
-    /** DQL n'expose pas NULLS LAST : on trie d'abord sur « a une date ou non ». */
+    /**
+     * L'ordre de consommation : date d'abord, exemplaire entamé ensuite.
+     *
+     * L'entamé départage à date égale, il ne passe pas devant : un lot qui périme
+     * demain reste servi avant un paquet ouvert qui périme dans un mois — sinon
+     * la priorité aux produits ouverts se paierait en produits jetés. À date
+     * égale, en revanche — trois sachets de pâtes du même achat, ou trois lots
+     * sans date — c'est le paquet déjà ouvert qui part, et lui seul.
+     *
+     * DQL n'expose pas NULLS LAST : on trie d'abord sur « a une date ou non ».
+     */
     private function applyFefoOrder(QueryBuilder $qb): QueryBuilder
     {
         return $qb
             ->addSelect('CASE WHEN s.expirationDate IS NULL THEN 1 ELSE 0 END AS HIDDEN hasNoDate')
+            ->addSelect('CASE WHEN s.openPackageQuantity IS NULL THEN 1 ELSE 0 END AS HIDDEN isSealed')
             ->orderBy('hasNoDate', 'ASC')
             ->addOrderBy('s.expirationDate', 'ASC')
+            ->addOrderBy('isSealed', 'ASC')
             ->addOrderBy('s.createdAt', 'ASC');
     }
 }

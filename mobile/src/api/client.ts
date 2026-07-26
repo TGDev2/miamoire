@@ -8,7 +8,9 @@ import type {
   Member,
   Product,
   ProductTraitValue,
+  Recipe,
   Reference,
+  SavedRecipe,
   ShelfLifeEstimate,
   StockItem,
   StockMovement,
@@ -285,6 +287,13 @@ export const api = {
 
   inventory: () => request<InventorySummary>('/inventory/summary'),
 
+  /**
+   * `priorityKey` impose un aliment de l'inventaire aux trois propositions.
+   *
+   * Facultatif : sans lui, la génération reste celle d'avant. Renseigné, ce
+   * n'est pas une préférence — le serveur écarte les recettes qui ne l'utilisent
+   * pas plutôt que de se fier à la consigne donnée au modèle.
+   */
   suggestRecipes: (body: {
     people: number;
     mealType?: string | null;
@@ -292,7 +301,22 @@ export const api = {
     equipment: string[];
     exclusions: string[];
     allowExtraIngredients: boolean;
+    priorityKey?: string | null;
   }) => request<SuggestionResponse>('/recipes/suggest', { method: 'POST', body }),
+
+  savedRecipes: () => request<{ recipes: SavedRecipe[] }>('/recipes/saved'),
+
+  savedRecipe: (id: string) => request<SavedRecipe>(`/recipes/saved/${id}`),
+
+  /**
+   * Conserve une recette. Enregistrer deux fois la même n'en crée qu'une : le
+   * serveur reconnaît le contenu à son empreinte.
+   */
+  saveRecipe: (recipe: Recipe) =>
+    request<SavedRecipe>('/recipes/saved', { method: 'POST', body: { recipe } }),
+
+  deleteSavedRecipe: (id: string) =>
+    request<void>(`/recipes/saved/${id}`, { method: 'DELETE' }),
 
   /**
    * `operationKey` rend la confirmation rejouable sans effet supplémentaire.

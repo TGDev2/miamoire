@@ -21,6 +21,23 @@ use Symfony\Component\Uid\Uuid;
  *
  * Le lot pointe vers une variante du foyer, jamais vers le catalogue partagé :
  * corriger un lot ne peut plus changer ce que voient les autres foyers.
+ *
+ * ## Le lot et ses exemplaires
+ *
+ * Un lot de trois sachets de pâtes de 500 g n'est pas 1,5 kg de pâtes en vrac.
+ * Prélever 250 g y ouvre **un** sachet ; les deux autres restent fermés. Le lot
+ * porte donc deux informations de conditionnement :
+ *
+ * - `packageSize` — la contenance d'un exemplaire ;
+ * - `openPackageQuantity` — ce qu'il reste dans celui qui est entamé, `null`
+ *   quand aucun ne l'est.
+ *
+ * Tout le reste s'en déduit (voir {@see getPackages()}), parce que les
+ * exemplaires d'un lot sont homogènes par construction : même variante, même
+ * date de péremption, même contenance, même achat. Un seul exemplaire peut être
+ * entamé à la fois — ce n'est pas une approximation du modèle mais la règle
+ * anti-gaspillage que l'application défend : on finit le paquet ouvert avant
+ * d'en ouvrir un autre.
  */
 #[ORM\Entity(repositoryClass: StockItemRepository::class)]
 #[ORM\Table(name: 'stock_item')]
@@ -53,6 +70,25 @@ class StockItem
 
     #[ORM\Column(type: 'integer')]
     private int $numberOfPackages = 1;
+
+    /**
+     * Contenance d'un exemplaire — un sachet, une bouteille, une boîte.
+     *
+     * Elle était jusqu'ici recalculée à la volée par `initialQuantity /
+     * numberOfPackages`, donc fausse dès la première correction de quantité :
+     * « retirer un exemplaire » d'un lot corrigé retirait n'importe quoi.
+     */
+    #[ORM\Column(type: 'float')]
+    private float $packageSize;
+
+    /**
+     * Ce qu'il reste dans l'exemplaire entamé ; `null` quand aucun ne l'est.
+     *
+     * C'est cette colonne, et non `openedAt`, qui dit si le lot est ouvert :
+     * un lot peut très bien être « entamé » avec deux sachets encore scellés.
+     */
+    #[ORM\Column(type: 'float', nullable: true)]
+    private ?float $openPackageQuantity = null;
 
     #[ORM\Column(type: 'string', length: 32, enumType: StorageLocation::class)]
     private StorageLocation $storageLocation;
@@ -123,6 +159,8 @@ class StockItem
         $this->variant = $variant;
         $this->initialQuantity = $quantity;
         $this->remainingQuantity = $quantity;
+        // Un lot d'un seul exemplaire tant que l'appelant n'en décrit pas d'autres.
+        $this->packageSize = $quantity;
         $this->unit = $unit;
         $this->storageLocation = $storageLocation;
         $this->createdAt = new \DateTimeImmutable();
@@ -181,9 +219,114 @@ class StockItem
         return $this->remainingQuantity;
     }
 
+    /**
+     * Fixe la quantité restante du lot entier.
+     *
+     * Point de passage unique de toutes les corrections, elle porte donc
+     * l'invariant du conditionnement : un exemplaire entamé ne peut pas contenir
+     * plus que le lot dont il fait partie. Sans ce plafonnement, corriger un lot
+     * de 1,5 kg à 100 g laisserait un sachet ouvert prétendant en contenir 250.
+     */
     public function setRemainingQuantity(float $remainingQuantity): void
     {
         $this->remainingQuantity = max(0.0, round($remainingQuantity, 3));
+
+        if (null === $this->openPackageQuantity) {
+            return;
+        }
+
+        $this->openPackageQuantity = round(min($this->openPackageQuantity, $this->remainingQuantity), 3);
+
+        if ($this->openPackageQuantity <= 0.0001) {
+            $this->closeOpenPackage();
+        }
+    }
+
+    /**
+     * Retire une quantité en suivant les exemplaires un par un.
+     *
+     * Seule porte par laquelle une quantité quitte un lot, et c'est ce qui rend
+     * la règle d'ouverture automatique impossible à contourner : prélever sur un
+     * lot dont aucun exemplaire n'est entamé en ouvre un. Le défaut corrigé était
+     * exactement là — la quantité partait, le produit restait « fermé ».
+     *
+     * Quand l'exemplaire entamé est épuisé, le suivant s'ouvre : retirer 700 g
+     * d'un lot de trois sachets de 500 g en vide un et en entame un second, ce
+     * qu'un simple total n'aurait pas su représenter.
+     *
+     * @return float la quantité réellement retirée, bornée par ce qui restait
+     */
+    public function withdraw(float $quantity): float
+    {
+        $applied = round(min($quantity, $this->remainingQuantity), 3);
+
+        if ($applied <= 0.0001) {
+            return 0.0;
+        }
+
+        $left = $applied;
+
+        while ($left > 0.0001) {
+            if (null === $this->openPackageQuantity) {
+                $this->openNextPackage();
+            }
+
+            $taken = min($left, $this->openPackageQuantity);
+
+            $this->openPackageQuantity = round($this->openPackageQuantity - $taken, 3);
+            $this->remainingQuantity = max(0.0, round($this->remainingQuantity - $taken, 3));
+            $left = round($left - $taken, 3);
+
+            // Exemplaire terminé : plus rien n'est ouvert tant qu'on n'y touche pas.
+            if ($this->openPackageQuantity <= 0.0001) {
+                $this->closeOpenPackage();
+            }
+        }
+
+        return $applied;
+    }
+
+    /**
+     * Ré-exprime le lot dans une autre unité de la même famille.
+     *
+     * Un facteur unique appliqué à tout ce que le lot compte : le total, la
+     * contenance d'un exemplaire et l'exemplaire entamé. Convertir le total seul
+     * laissait la contenance en grammes sur un lot passé en kilos — un sachet
+     * de « 500 kg », et un décompte d'exemplaires devenu absurde.
+     */
+    public function rescale(float $factor): void
+    {
+        $this->initialQuantity = round($this->initialQuantity * $factor, 3);
+        $this->packageSize = round($this->packageSize * $factor, 3);
+
+        if (null !== $this->openPackageQuantity) {
+            $this->openPackageQuantity = round($this->openPackageQuantity * $factor, 3);
+        }
+
+        $this->setRemainingQuantity($this->remainingQuantity * $factor);
+    }
+
+    /**
+     * Redécrit le conditionnement quand plus rien de l'ancien n'a de sens.
+     *
+     * Le cas est celui d'une unité corrigée entre deux familles : aucune
+     * conversion n'existe, la quantité est redonnée à la main — la contenance
+     * d'un exemplaire ne survit pas davantage. Le lot redevient un exemplaire
+     * unique, entamé s'il l'était.
+     */
+    public function repackageAsSingle(float $quantity): void
+    {
+        $wasOpened = $this->isOpened();
+
+        $this->closeOpenPackage();
+        $this->numberOfPackages = 1;
+        $this->initialQuantity = round($quantity, 3);
+        $this->packageSize = $this->initialQuantity;
+        $this->setRemainingQuantity($quantity);
+
+        if ($wasOpened) {
+            $this->openNextPackage();
+        }
     }
 
     public function getUnit(): Unit
@@ -204,6 +347,91 @@ class StockItem
     public function setNumberOfPackages(int $numberOfPackages): void
     {
         $this->numberOfPackages = max(1, $numberOfPackages);
+    }
+
+    public function getPackageSize(): float
+    {
+        return $this->packageSize;
+    }
+
+    /** Une contenance nulle rendrait le décompte des exemplaires insoluble. */
+    public function setPackageSize(float $packageSize): void
+    {
+        $this->packageSize = $packageSize > 0 ? round($packageSize, 3) : $this->remainingQuantity;
+    }
+
+    public function getOpenPackageQuantity(): ?float
+    {
+        return $this->openPackageQuantity;
+    }
+
+    /**
+     * Les exemplaires du lot, dans l'ordre où ils seront consommés.
+     *
+     * Rien n'est stocké ligne à ligne : les exemplaires d'un lot sont homogènes,
+     * donc entièrement décrits par le total, la contenance et ce qu'il reste dans
+     * celui qui est entamé. Le dernier exemplaire peut être partiel sans être
+     * ouvert — un réapprovisionnement de 300 g sur des sachets de 500 g.
+     *
+     * @return list<array{position: int, remaining: float, opened: bool}>
+     */
+    public function getPackages(): array
+    {
+        if ($this->isEmpty()) {
+            return [];
+        }
+
+        $packages = [];
+        $sealedQuantity = round($this->remainingQuantity - ($this->openPackageQuantity ?? 0.0), 3);
+
+        if (null !== $this->openPackageQuantity) {
+            $packages[] = ['remaining' => $this->openPackageQuantity, 'opened' => true];
+        }
+
+        $size = $this->packageSize > 0 ? $this->packageSize : $this->remainingQuantity;
+
+        while ($sealedQuantity > 0.0001) {
+            $take = min($size, $sealedQuantity);
+            $packages[] = ['remaining' => round($take, 3), 'opened' => false];
+            $sealedQuantity = round($sealedQuantity - $take, 3);
+        }
+
+        return array_values(array_map(
+            static fn (int $position, array $package): array => ['position' => $position + 1] + $package,
+            array_keys($packages),
+            $packages,
+        ));
+    }
+
+    /** Combien d'exemplaires restent scellés — deux sachets sur trois. */
+    public function getSealedPackageCount(): int
+    {
+        return count(array_filter($this->getPackages(), static fn (array $package) => !$package['opened']));
+    }
+
+    /**
+     * Entame un exemplaire : celui en cours s'il y en a un, sinon le suivant.
+     *
+     * Geste manuel (« marquer comme entamé ») autant qu'effet du retrait d'une
+     * quantité — d'où l'idempotence : ouvrir deux fois n'ouvre qu'un exemplaire.
+     */
+    public function openNextPackage(): void
+    {
+        if (null !== $this->openPackageQuantity || $this->isEmpty()) {
+            return;
+        }
+
+        $size = $this->packageSize > 0 ? $this->packageSize : $this->remainingQuantity;
+
+        $this->openPackageQuantity = round(min($size, $this->remainingQuantity), 3);
+        $this->openedAt = new \DateTimeImmutable();
+    }
+
+    /** Plus aucun exemplaire entamé : fini, ou refermé à la main. */
+    public function closeOpenPackage(): void
+    {
+        $this->openPackageQuantity = null;
+        $this->openedAt = null;
     }
 
     public function getStorageLocation(): StorageLocation
@@ -260,14 +488,14 @@ class StockItem
         return $this->openedAt;
     }
 
-    public function setOpenedAt(?\DateTimeImmutable $openedAt): void
-    {
-        $this->openedAt = $openedAt;
-    }
-
+    /**
+     * Un lot est entamé quand l'un de ses exemplaires l'est — pas quand il a été
+     * ouvert un jour. Trois sachets dont le premier a été fini ne sont plus
+     * « entamés » : il reste deux paquets scellés.
+     */
     public function isOpened(): bool
     {
-        return null !== $this->openedAt;
+        return null !== $this->openPackageQuantity;
     }
 
     public function isQuantityEstimated(): bool

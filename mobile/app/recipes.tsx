@@ -29,8 +29,22 @@ export default function RecipeListScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      {/* Ce que l'utilisateur a imposé, rappelé là où il en voit le résultat :
+          sans cela, trois recettes autour du même aliment ressemblent à une
+          coïncidence plutôt qu'à une contrainte respectée. */}
+      {suggestion.requiredIngredient ? (
+        <View style={styles.required}>
+          <Text style={styles.requiredTitle}>
+            Aliment imposé : {suggestion.requiredIngredient.label}
+          </Text>
+          <Text style={styles.requiredHint}>
+            Chaque proposition ci-dessous l'utilise. Celles qui l'ignoraient ont été écartées.
+          </Text>
+        </View>
+      ) : null}
+
       {/* Une proposition qui disparaît sans explication ressemble à une panne.
-          C'est au contraire le contrôle des exclusions qui a fonctionné. */}
+          C'est au contraire un contrôle qui a fonctionné. */}
       {suggestion.rejected.length > 0 ? (
         <View style={styles.rejected}>
           <Text style={styles.rejectedTitle}>
@@ -45,7 +59,7 @@ export default function RecipeListScreen() {
           ))}
           <Text style={styles.rejectedFooter}>
             Chaque recette est relue avant affichage : titre, ingrédients, adaptations
-            et étapes comprises.
+            et étapes comprises, ainsi que l'usage réel de l'aliment imposé.
           </Text>
         </View>
       ) : null}
@@ -132,6 +146,14 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
+  required: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  requiredTitle: { fontSize: 14, fontWeight: '700', color: colors.primary },
+  requiredHint: { fontSize: 13, color: colors.primary, marginTop: spacing.xs, lineHeight: 19 },
   rejectedTitle: { fontSize: 14, fontWeight: '700', color: colors.accent },
   rejectedLine: { fontSize: 13, color: colors.accent, marginTop: spacing.xs, lineHeight: 19 },
   rejectedFooter: { fontSize: 12, color: colors.accent, marginTop: spacing.sm, lineHeight: 17 },

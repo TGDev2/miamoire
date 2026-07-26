@@ -32,6 +32,8 @@ final readonly class InventoryLine
         public float $quantity,
         public Unit $unit,
         public bool $expiresSoon,
+        /** Au moins un exemplaire est entamé : il se dégrade, il passe avant. */
+        public bool $alreadyOpened,
         public ?\DateTimeImmutable $earliestExpiration,
         /** La date la plus proche a été déduite, pas lue sur un emballage. */
         public bool $expirationIsEstimated,
@@ -55,6 +57,13 @@ final readonly class InventoryLine
             'unit' => $this->unit->value,
             'expiresSoon' => $this->expiresSoon,
         ];
+
+        // Un paquet ouvert se dégrade alors qu'un paquet scellé attend : le
+        // signaler au modèle est ce qui lui fait terminer l'entamé plutôt que
+        // d'en faire ouvrir un second.
+        if ($this->alreadyOpened) {
+            $payload['alreadyOpened'] = true;
+        }
 
         // Ces trois champs décrivent l'aliment lui-même : sans eux, le modèle
         // propose d'éplucher des pommes de terre déjà pelées par le conserveur.

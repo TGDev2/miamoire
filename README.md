@@ -63,6 +63,57 @@ consommés, ce qui rend les corrections et l'audit possibles.
 php bin/console app:variants:report
 ```
 
+## Un lot n'est pas un tas : le suivi des exemplaires
+
+Trois sachets de pâtes de 500 g dont 250 g ont servi, ce n'est pas « 1,25 kg de
+pâtes entamées ». C'est **un sachet ouvert à 250 g et deux encore scellés**. Un
+lot porte donc deux informations de conditionnement, et tout le reste s'en déduit :
+
+| | Rôle |
+| --- | --- |
+| `packageSize` | la contenance d'un exemplaire — 500 g |
+| `openPackageQuantity` | ce qu'il reste dans celui qui est entamé, `null` si aucun ne l'est |
+
+```text
+reste hors exemplaire entamé = remainingQuantity − openPackageQuantity
+exemplaires fermés           = ce reste ÷ packageSize
+```
+
+**Pourquoi deux colonnes plutôt qu'une table d'exemplaires.** Les exemplaires d'un
+lot sont homogènes par construction : même variante, même date de péremption, même
+contenance, même achat. Une table les stockerait un par un pour ne jamais rien
+pouvoir en dire de plus, tout en faisant de `remainingQuantity` une valeur dérivée —
+donc deux sources de vérité à tenir d'accord à chaque écriture. La seule chose que
+ce modèle interdit est d'avoir deux sachets ouverts en même temps, et c'est
+exactement la règle que l'application défend : on finit le paquet entamé avant d'en
+ouvrir un autre.
+
+Deux conséquences directes.
+
+- **Prélever une quantité entame le produit.** `StockItem::withdraw()` est la seule
+  porte par laquelle une quantité quitte un lot ; elle vide l'exemplaire ouvert, en
+  ouvre un autre quand il est fini, et en ouvre un s'il n'y en avait aucun. Le
+  défaut corrigé était là : la quantité partait, le produit restait affiché
+  « fermé ».
+- **Retirer un exemplaire retire le bon.** La contenance était jusqu'ici recalculée
+  par `initialQuantity / numberOfPackages`, donc fausse dès la première correction
+  de quantité.
+
+## Ce qui périme d'abord, puis ce qui est ouvert
+
+Un paquet entamé se dégrade pendant qu'un paquet scellé attend. Les recettes le
+privilégient donc — mais **après** la date de péremption, jamais avant :
+
+| Situation | Ce qui part en premier |
+| --- | --- |
+| Trois sachets identiques, un entamé | l'entamé |
+| Un lot qui périme demain, un lot ouvert qui périme dans un mois | celui qui périme demain |
+
+L'inverse se paierait en produits jetés, c'est-à-dire exactement ce que la priorité
+aux produits entamés prétend éviter. La règle vit à deux endroits : dans le tri SQL
+de `applyFefoOrder()` pour la déduction, et dans le champ `alreadyOpened` transmis
+au générateur pour le choix des ingrédients.
+
 ## Plusieurs dates, et les aliments qui n'en ont aucune
 
 Trois yaourts périmant le 27 et deux le 3 août, c'est un seul passage en caisse mais
@@ -173,6 +224,48 @@ liste de noms. Il renvoie une `stockConsumptionProposal`.
 Cette proposition est **revalidée intégralement côté serveur** avant toute écriture :
 clé inexistante, unité incompatible ou quantité invalide sont rejetées. L'utilisateur
 confirme ensuite explicitement dans l'application, puis seulement le stock est déduit.
+
+### Les quantités réellement utilisées
+
+La recette dit 250 g de crème ; on en a mis 180, ou 300. Chaque ligne de la
+proposition est donc **modifiable avant la déduction**, et une ligne ramenée à zéro
+n'est pas déduite du tout. Retirer systématiquement la quantité annoncée ferait
+mentir le stock à chaque repas — or c'est le stock qui pilote ensuite les alertes,
+les propositions suivantes, et donc tout le reste.
+
+Le serveur n'a rien eu à changer : il validait déjà une proposition arbitraire,
+plutôt que de faire confiance à celle qu'il avait lui-même renvoyée.
+
+### Imposer un aliment
+
+On peut désigner **un** aliment de l'inventaire que les trois recettes devront
+utiliser — la botte de radis, le reste de crème. C'est facultatif : demander des
+recettes sans rien imposer reste le cas courant.
+
+Comme pour les exclusions, la consigne au modèle ne suffit pas : il en propose deux
+sur trois qui l'utilisent, et la troisième arrive quand même. `RequiredIngredientFilter`
+écarte donc les recettes qui ne l'emploient pas, avec leur motif, et le critère est
+la **clé** de la variante — une recette qui ouvre une boîte de tomates ne vide pas
+la barquette de tomates fraîches qu'on voulait écouler.
+
+## Enregistrer une recette
+
+Une proposition qui plaisait était perdue en quittant l'écran : elle ne vivait que
+dans la mémoire de l'application. Elle est désormais conservée **côté serveur**,
+comme le stock — tout le foyer y accède, et changer de téléphone ne l'efface pas.
+
+La recette est stockée en JSON, ce qui n'est pas de la paresse : c'est un document
+dont aucune partie n'est jamais interrogée séparément, et le normaliser en tables
+coûterait cinq jointures sans autoriser une seule requête qu'on veuille écrire. Ce
+que la base garantit, c'est **l'unicité** — un index sur l'empreinte du contenu, par
+foyer. Appuyer deux fois sur « Enregistrer », ou revenir sur la même proposition le
+lendemain, ne crée pas de doublon, y compris depuis deux téléphones au même instant.
+
+Ce que le serveur accepte de conserver est en revanche filtré à l'entrée
+(`RecipeNormalizer`) : c'est du JSON venu du client, qui sera ensuite renvoyé à tous
+les membres du foyer. Les lignes de déduction inexploitables — sans clé, sans unité
+connue, sans quantité — sont retirées à l'enregistrement plutôt que découvertes six
+mois plus tard, au moment où l'utilisateur appuie sur « retirer du stock ».
 
 ## Les exclusions alimentaires sont vérifiées, pas demandées
 
@@ -415,22 +508,74 @@ le développement — mais **n'est plus imposé aux membres du foyer**. Le bouto
 « Tester la connexion » (Profil → Serveur) interroge `GET /api/health` : c'est ce qui
 distingue, depuis le téléphone, une adresse fausse d'un serveur qui ne répond pas.
 
-## Installer l'application sur les téléphones du foyer
+## Installer et mettre à jour l'application — Firebase App Distribution
 
-`eas.json` décrit un profil `preview` en **distribution interne** : Expo compile
-l'APK dans le cloud et renvoie un lien accompagné d'un QR code. Chaque membre le
-scanne, télécharge et installe — sans câble, sans ordinateur.
+Le QR code d'un build Expo installe une version **et une seule**. Chaque correctif
+demandait ensuite de recompiler, renvoyer un lien à chacun, et espérer que tout le
+monde pense à le scanner : une mise à jour manuelle par personne et par version.
+
+Firebase App Distribution renverse la charge. Les testeurs installent une fois
+l'application **App Tester** de Firebase ; chaque nouvelle version leur arrive
+ensuite en notification, avec ses notes de version, et s'installe comme n'importe
+quelle mise à jour.
 
 ```bash
-npm install -g eas-cli
-eas login
 cd mobile
-eas build --platform android --profile preview
+npm run distribute:android              # compile puis diffuse
+npm run distribute:android -- --notes "Correction de l'écran Cuisiner"
 ```
 
-Renseigner d'abord `EXPO_PUBLIC_API_URL` dans `eas.json` avec l'URL HTTPS publique
-de l'API. Ce n'est qu'un défaut : **l'adresse du serveur reste modifiable dans
-l'application**, donc un même build couvre les trois façons de joindre l'API.
+La même commande est appelée par le workflow
+[`android-distribution.yml`](.github/workflows/android-distribution.yml), déclenché
+à la main depuis l'onglet Actions. Une seule implémentation pour les deux chemins :
+deux scripts de diffusion, c'est celui qu'on lance le moins souvent qui dérive, donc
+celui qui casse le jour où on en a besoin.
+
+Le déclenchement est **manuel et non sur `push`** : une compilation EAS consomme un
+crédit et prend une dizaine de minutes. Diffuser à chaque commit épuiserait le quota
+et noierait les testeurs sous les notifications — deux façons de rendre la mise à
+jour automatique plus pénible que le QR code qu'elle remplace.
+
+### Mise en place, une fois
+
+1. Créer un projet sur [console.firebase.google.com](https://console.firebase.google.com),
+   y ajouter une application **Android** avec le paquet `com.theo.food`.
+   Aucun `google-services.json` n'est nécessaire : App Distribution ne demande pas
+   d'intégrer un SDK dans l'application.
+2. Relever l'**App ID** (`1:123456789:android:abcdef`) dans les paramètres du projet.
+3. Dans App Distribution, créer un **groupe de testeurs** — alias `testeurs` par
+   défaut ici — et y inscrire les adresses e-mail du foyer.
+4. Créer un **compte de service** Google Cloud avec le rôle
+   *Firebase App Distribution Admin*, et télécharger sa clé JSON.
+5. Déclarer les secrets du dépôt (Settings → Secrets and variables → Actions) :
+
+| Secret | Contenu |
+| --- | --- |
+| `EXPO_TOKEN` | jeton d'accès Expo (expo.dev → Access tokens) |
+| `FIREBASE_ANDROID_APP_ID` | l'App ID relevé à l'étape 2 |
+| `FIREBASE_SERVICE_ACCOUNT` | le **contenu** de la clé JSON, pas son chemin |
+| `FIREBASE_TESTER_GROUPS` *(variable)* | alias des groupes, défaut `testeurs` |
+
+En local, les mêmes valeurs se passent par l'environnement, `GOOGLE_APPLICATION_CREDENTIALS`
+pointant cette fois vers le **fichier** de clé.
+
+> **Si la CLI Firebase refuse le compte de service.** `firebase login:ci` est
+> déprécié et le compte de service est le chemin recommandé, mais la CLI ignore
+> encore `GOOGLE_APPLICATION_CREDENTIALS` dans certains environnements
+> d'intégration continue ([firebase-tools#8505](https://github.com/firebase/firebase-tools/issues/8505),
+> [#10726](https://github.com/firebase/firebase-tools/issues/10726)). Le script
+> accepte alors `FIREBASE_TOKEN` comme repli — explicitement, et non par accident.
+
+> **Non vérifié de bout en bout.** Le script et le workflow n'ont pas pu être
+> exercés contre un vrai projet Firebase : il n'en existe pas encore, et aucun
+> secret n'est déclaré. Seules les gardes d'entrée et la validité du YAML ont été
+> contrôlées. La première diffusion est donc à surveiller.
+
+### L'adresse de l'API
+
+`EXPO_PUBLIC_API_URL` dans `eas.json` porte l'URL HTTPS publique de l'API. Ce n'est
+qu'un défaut : **l'adresse du serveur reste modifiable dans l'application**, donc un
+même build couvre les trois façons de joindre l'API.
 
 | Contexte | Adresse à saisir | Prérequis |
 | --- | --- | --- |
@@ -438,11 +583,12 @@ l'application**, donc un même build couvre les trois façons de joindre l'API.
 | Développement, Wi-Fi | `192.168.x.x:8000` | Port 8000 autorisé en entrée dans le pare-feu |
 | Développement, USB | `localhost:8000` | `adb reverse tcp:8000 tcp:8000` |
 
-Chaque membre du foyer installe l'application, puis saisit le **code du foyer** que
-vous lui transmettez depuis Profil → « Partager le code ».
+Chaque membre du foyer installe l'application depuis App Tester, puis saisit le
+**code du foyer** que vous lui transmettez depuis Profil → « Partager le code ».
 
-`autoIncrement` est activé : sans un `versionCode` croissant, Android refuse
-d'installer une nouvelle version par-dessus la précédente.
+`autoIncrement` est activé dans `eas.json` : sans un `versionCode` croissant,
+Android refuse d'installer une nouvelle version par-dessus la précédente — et la
+notification de mise à jour mènerait à une installation qui échoue.
 
 ### APK compilé localement
 
@@ -465,12 +611,13 @@ effacerait toute correction faite à la main :
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 139 tests
-cd mobile  && npx tsc --noEmit
+cd backend && php vendor/bin/phpunit    # 163 tests
+cd mobile  && npm run typecheck
 ```
 
-Sept d'entre eux exigent une vraie base PostgreSQL — la concurrence ne se simule
-pas avec des doublures. Ils sont **ignorés** si elle est absente, jamais rouges :
+Onze d'entre eux exigent une vraie base PostgreSQL — ni la concurrence ni un
+`ORDER BY` ne se simulent avec des doublures. Ils sont **ignorés** si elle est
+absente, jamais rouges :
 
 ```bash
 cd backend
@@ -481,7 +628,8 @@ php bin/console doctrine:migrations:migrate --env=test --no-interaction
 Les tests couvrent la logique dont une erreur corromprait l'inventaire — conversion
 d'unités, correction d'unité entre familles, normalisation des noms d'ingrédients,
 identité des variantes, détection de l'état des produits, allocation FEFO,
-consolidation d'une proposition, archivage, chaque mouvement de stock — celle dont
+suivi des exemplaires, consolidation d'une proposition, archivage, chaque mouvement
+de stock — celle dont
 une erreur ouvrirait un foyer — génération du code, tolérance de saisie, refus d'un
 code absent, faux, ou appartenant à un autre foyer — et celle dont une erreur
 mettrait quelqu'un en danger : chaque contre-exemple du tableau des exclusions
@@ -507,6 +655,15 @@ Le test a été vérifié par mutation — verrou retiré, il échoue avec exact
 et la première version de celui-ci était dans ce cas : elle n'observait qu'une
 exception, or l'écriture bloque de toute façon sur le verrou de ligne. C'est la
 quantité finale, et elle seule, qui distingue les deux comportements.
+
+### L'ordre de consommation, et les exemplaires
+
+Même méthode pour les deux règles ajoutées ensuite. En retirant l'ouverture
+automatique d'un exemplaire et le tri « entamé d'abord », **dix tests** passent au
+rouge — dont `OpenedLotPriorityTest`, qui interroge l'ordre réellement produit par
+PostgreSQL et non une liste rendue par une doublure. Sa contre-épreuve compte autant
+que son cas nominal : un lot ouvert ne doit **jamais** passer devant un lot qui
+périme plus tôt.
 
 > **Ce que les tests ne couvrent toujours pas.** Le parcours des écrans sur un
 > appareil : `tsc` et un bundle qui se construit ne prouvent rien sur l'ordre des
@@ -546,8 +703,10 @@ qui écrivent exigent en plus `X-Member`.
 | `POST` | `/stock-items/{id}/discard` | Produit jeté |
 | `GET` | `/stock-items/{id}/movements` | Journal du lot |
 | `GET` | `/inventory/summary` | Inventaire agrégé par ingrédient |
-| `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) |
+| `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) ; `priorityKey` impose un aliment |
 | `POST` | `/recipes/confirm` | Applique la déduction après confirmation |
+| `GET` `POST` | `/recipes/saved` | Recettes conservées par le foyer ; enregistrement idempotent |
+| `GET` `DELETE` | `/recipes/saved/{id}` | Une recette enregistrée, et son retrait |
 
 ## Cas limites traités
 
@@ -580,6 +739,17 @@ qui écrivent exigent en plus `X-Member`.
   seconde déduction.
 - **Recette proposant un allergène** — écartée par un contrôle automatique, jamais
   seulement signalée.
+- **Plusieurs exemplaires d'un même lot** — trois sachets de 500 g dont 250 g ont
+  servi : un seul est entamé, les deux autres restent fermés, et c'est l'entamé qui
+  repart en premier.
+- **Quantité prélevée sur un produit fermé** — l'exemplaire s'ouvre du même geste ;
+  le stock ne peut plus baisser sur un produit affiché comme scellé.
+- **Quantité utilisée différente de la recette** — chaque ligne est modifiable avant
+  la déduction, et une ligne à zéro n'est pas déduite.
+- **Aliment imposé ignoré par le modèle** — la recette est écartée avec son motif,
+  comme pour les exclusions ; la clé fait foi, pas le libellé.
+- **Même recette enregistrée deux fois** — l'empreinte du contenu porte un index
+  unique par foyer : aucun doublon, même depuis deux téléphones au même instant.
 
 ## Hors périmètre du MVP
 

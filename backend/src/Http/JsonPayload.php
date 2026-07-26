@@ -131,6 +131,21 @@ final readonly class JsonPayload
         ));
     }
 
+    /**
+     * Un objet imbriqué — la recette entière d'un enregistrement.
+     *
+     * Absent ou mal typé, il vaut le tableau vide : c'est au destinataire de dire
+     * ce qui lui manque, avec un message qui parle de recette et non de JSON.
+     *
+     * @return array<string, mixed>
+     */
+    public function object(string $key): array
+    {
+        $value = $this->data[$key] ?? null;
+
+        return is_array($value) ? $value : [];
+    }
+
     /** @return list<array<string, mixed>> */
     public function objectList(string $key): array
     {

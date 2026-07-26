@@ -1,32 +1,35 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
+import React from 'react';
 
-import { api } from '../../src/api/client';
-import type { RecipeIngredient } from '../../src/api/types';
-import { Badge, Button, Card, EmptyState, ErrorBanner, SectionTitle } from '../../src/components/ui';
+import { EmptyState } from '../../src/components/ui';
 import { useRecipes } from '../../src/recipes/RecipeContext';
-import { colors, feasibilityPresentation, radius, spacing } from '../../src/theme';
+import { RecipeDetailView } from '../../src/recipes/RecipeDetailView';
 
+/**
+ * Une proposition de la dernière génération.
+ *
+ * Tout l'affichage vit dans `RecipeDetailView`, partagé avec les recettes
+ * enregistrées. Cet écran n'apporte que la source : quelle recette, et où vit
+ * son état.
+ *
+ * Cet état — confirmation appliquée, enregistrement — est tenu par le contexte
+ * et non par un `useState` local : un `useState` se réinitialisait à chaque
+ * retour sur la page, et le bouton se réarmait alors qu'une déduction avait
+ * déjà eu lieu.
+ */
 export default function RecipeDetailScreen() {
-  const router = useRouter();
   const { index } = useLocalSearchParams<{ index: string }>();
-  const { suggestion, operationKeyFor, confirmationFor, rememberConfirmation } = useRecipes();
-
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const {
+    suggestion,
+    operationKeyFor,
+    confirmationFor,
+    rememberConfirmation,
+    savedIdFor,
+    rememberSaved,
+  } = useRecipes();
 
   const position = Number(index);
   const recipe = suggestion?.recipes[position];
-
-  /**
-   * L'état de confirmation vit dans le contexte, pas dans cet écran.
-   *
-   * Un `useState` local se réinitialisait à chaque retour sur la page : le bouton
-   * se réarmait alors qu'une déduction avait déjà eu lieu.
-   */
-  const confirmation = confirmationFor(position);
-  const confirmed = confirmation !== undefined;
 
   if (!recipe) {
     return (
@@ -37,213 +40,14 @@ export default function RecipeDetailScreen() {
     );
   }
 
-  const presentation = feasibilityPresentation[recipe.feasibility] ?? feasibilityPresentation.ready;
-
-  /**
-   * Rien n'est retiré du stock tant que l'utilisateur n'a pas validé cet écran :
-   * l'IA propose, l'utilisateur décide.
-   */
-  function askConfirmation() {
-    const lines = recipe!.stockConsumptionProposal
-      .map((line) => `• ${line.quantity} ${line.unit} de ${line.label}`)
-      .join('\n');
-
-    Alert.alert(
-      'Retirer du stock ?',
-      `Les quantités suivantes seront déduites :\n\n${lines}\n\nLes lots qui périment le plus tôt sont utilisés en premier.`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        { text: 'Confirmer', onPress: applyConsumption },
-      ],
-    );
-  }
-
-  async function applyConsumption() {
-    setError(null);
-    setBusy(true);
-    try {
-      // La même clé à chaque tentative : réessayer après une réponse perdue ne
-      // déduit rien de plus, le serveur reconnaît le geste et rejoue sa réponse.
-      const result = await api.confirmRecipe(
-        operationKeyFor(position),
-        recipe!.recipeName,
-        recipe!.stockConsumptionProposal,
-      );
-      rememberConfirmation(position, result);
-
-      const detail = result.lines
-        .map(
-          (line) =>
-            `${line.label} : ${line.applied} ${line.unit}${
-              line.quantityWasEstimated ? ' (quantité estimée, à vérifier)' : ''
-            }`,
-        )
-        .join('\n');
-
-      const title = result.replayed ? 'Déjà retiré du stock' : 'Stock mis à jour';
-
-      Alert.alert(title, detail, [
-        { text: 'Voir mon stock', onPress: () => router.replace('/(tabs)') },
-        { text: 'Rester ici', style: 'cancel' },
-      ]);
-    } catch (exception) {
-      setError(exception instanceof Error ? exception.message : 'Déduction impossible.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <ErrorBanner message={error} />
-
-      <Badge
-        label={presentation.label}
-        color={presentation.color}
-        background={presentation.background}
-      />
-      <Text style={styles.title}>{recipe.recipeName}</Text>
-      <Text style={styles.summary}>{recipe.summary}</Text>
-      <Text style={styles.meta}>
-        {recipe.preparationTime} min · {recipe.servings}{' '}
-        {recipe.servings > 1 ? 'personnes' : 'personne'}
-      </Text>
-
-      <SectionTitle>Depuis votre stock</SectionTitle>
-      {recipe.ingredientsFromInventory.map((ingredient, position) => (
-        <IngredientRow key={`inv-${position}`} ingredient={ingredient} />
-      ))}
-
-      {recipe.missingIngredients.length > 0 ? (
-        <>
-          <SectionTitle>À compléter</SectionTitle>
-          {recipe.missingIngredients.map((ingredient, position) => (
-            <IngredientRow key={`missing-${position}`} ingredient={ingredient} missing />
-          ))}
-        </>
-      ) : null}
-
-      {recipe.substitutions.length > 0 ? (
-        <>
-          <SectionTitle>Adaptations</SectionTitle>
-          {recipe.substitutions.map((substitution, position) => (
-            <Card key={`sub-${position}`} style={styles.substitutionCard}>
-              <Text style={styles.substitutionTitle}>
-                {substitution.original} → {substitution.replacedBy}
-              </Text>
-              <Text style={styles.substitutionReason}>{substitution.reason}</Text>
-            </Card>
-          ))}
-        </>
-      ) : null}
-
-      <SectionTitle>Préparation</SectionTitle>
-      {recipe.steps.map((step, position) => (
-        <View key={`step-${position}`} style={styles.step}>
-          <View style={styles.stepNumber}>
-            <Text style={styles.stepNumberText}>{position + 1}</Text>
-          </View>
-          <Text style={styles.stepText}>{step}</Text>
-        </View>
-      ))}
-
-      <SectionTitle>Déduction du stock</SectionTitle>
-      {recipe.stockConsumptionProposal.length === 0 ? (
-        <Text style={styles.help}>Cette recette ne consomme rien de votre inventaire.</Text>
-      ) : (
-        <Card>
-          {recipe.stockConsumptionProposal.map((line, position) => (
-            <View key={`prop-${position}`} style={styles.proposalRow}>
-              <Text style={styles.proposalLabel}>{line.label}</Text>
-              <Text style={styles.proposalQuantity}>
-                −{line.quantity} {line.unit}
-              </Text>
-            </View>
-          ))}
-          <Text style={styles.help}>
-            Les lots qui périment le plus tôt seront utilisés en premier. Le retrait
-            est appliqué en une seule fois : si le stock a changé entre-temps, rien
-            n'est déduit.
-          </Text>
-          {confirmation?.lines.some((line) => line.quantityWasEstimated) ? (
-            <Text style={styles.warning}>
-              Une des quantités retirées était estimée, pas mesurée. Vérifiez ce qu'il
-              reste réellement après le repas.
-            </Text>
-          ) : null}
-          <Button
-            label={confirmed ? 'Déjà retiré du stock' : 'Retirer ces quantités du stock'}
-            onPress={askConfirmation}
-            loading={busy}
-            disabled={confirmed}
-            style={styles.confirm}
-          />
-        </Card>
-      )}
-    </ScrollView>
+    <RecipeDetailView
+      recipe={recipe}
+      operationKey={operationKeyFor(position)}
+      confirmation={confirmationFor(position)}
+      onConfirmed={(result) => rememberConfirmation(position, result)}
+      savedId={savedIdFor(position)}
+      onSavedChange={(id) => rememberSaved(position, id)}
+    />
   );
 }
-
-function IngredientRow({
-  ingredient,
-  missing = false,
-}: {
-  ingredient: RecipeIngredient;
-  missing?: boolean;
-}) {
-  return (
-    <View style={styles.ingredient}>
-      <Text style={[styles.ingredientLabel, missing && styles.ingredientMissing]}>
-        {ingredient.label}
-        {!ingredient.essential ? ' (facultatif)' : ''}
-      </Text>
-      <Text style={styles.ingredientQuantity}>
-        {ingredient.quantity} {ingredient.unit}
-      </Text>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
-  title: { fontSize: 24, fontWeight: '800', color: colors.ink, marginTop: spacing.md },
-  summary: { fontSize: 15, color: colors.inkMuted, marginTop: spacing.sm, lineHeight: 21 },
-  meta: { fontSize: 14, color: colors.ink, marginTop: spacing.md, fontWeight: '600' },
-  ingredient: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm + 2,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  ingredientLabel: { fontSize: 15, color: colors.ink, flex: 1 },
-  ingredientMissing: { color: colors.accent },
-  ingredientQuantity: { fontSize: 15, color: colors.inkMuted, fontWeight: '600' },
-  substitutionCard: { marginBottom: spacing.sm },
-  substitutionTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  substitutionReason: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 19 },
-  step: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
-  stepNumber: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepNumberText: { fontSize: 13, fontWeight: '700', color: colors.primary },
-  stepText: { flex: 1, fontSize: 15, color: colors.ink, lineHeight: 22 },
-  proposalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  proposalLabel: { fontSize: 15, color: colors.ink },
-  proposalQuantity: { fontSize: 15, fontWeight: '700', color: colors.danger },
-  help: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.md, lineHeight: 19 },
-  warning: { fontSize: 13, color: colors.accent, marginTop: spacing.md, lineHeight: 19 },
-  confirm: { marginTop: spacing.lg },
-});

@@ -99,6 +99,10 @@ class StockService
 
         $item = new StockItem($household, $variant, $total, $unit, $location);
         $item->setNumberOfPackages($numberOfPackages);
+        // La contenance d'un exemplaire est déclarée, pas recalculée : c'est elle
+        // qui permet plus tard de dire quel sachet est entamé et lesquels restent
+        // scellés, y compris après une correction de quantité.
+        $item->setPackageSize($quantityPerPackage);
         $item->setPurchaseDate($purchaseDate ?? new \DateTimeImmutable('today'));
         $item->setNote($note);
         $item->setQuantityIsEstimated($quantityIsEstimated);
@@ -121,6 +125,10 @@ class StockService
     /**
      * Retire une quantité. La demande est bornée par ce qui reste réellement :
      * le mouvement journalisé porte le delta effectivement appliqué, jamais celui demandé.
+     *
+     * Le retrait passe par les exemplaires : prélever sur un lot dont aucun n'est
+     * entamé en ouvre un. Le stock ne peut donc plus baisser sur un produit qui
+     * resterait affiché « fermé ».
      */
     public function consume(
         StockItem $item,
@@ -135,13 +143,11 @@ class StockService
         }
 
         $inItemUnit = $this->converter->convert($quantity, $unit, $item->getUnit());
-        $applied = min($inItemUnit, $item->getRemainingQuantity());
+        $applied = $item->withdraw($inItemUnit);
 
         if ($applied <= 0.0001) {
             throw new StockException('Ce produit est déjà épuisé.');
         }
-
-        $item->setRemainingQuantity($item->getRemainingQuantity() - $applied);
 
         $movement = $this->record($item, MovementType::Consumption, -$applied, $author, $reason ?? 'Consommation', $operation);
         $this->flush();
@@ -154,16 +160,21 @@ class StockService
         return $this->consume($item, $item->getRemainingQuantity(), $item->getUnit(), $author, $reason ?? 'Tout consommé');
     }
 
-    /** Retire un exemplaire entier (une bouteille, un paquet). */
+    /**
+     * Retire un exemplaire entier (une bouteille, un paquet).
+     *
+     * S'il y en a un d'entamé, c'est celui-là : finir le paquet ouvert avant d'en
+     * attaquer un autre est la règle même que le suivi des exemplaires défend.
+     * La contenance vient désormais du lot et non d'un `initialQuantity /
+     * numberOfPackages` qui devenait faux dès la première correction.
+     */
     public function consumeOnePackage(StockItem $item, Member $author): StockMovement
     {
-        $packageSize = $item->getNumberOfPackages() > 0
-            ? $item->getInitialQuantity() / $item->getNumberOfPackages()
-            : $item->getInitialQuantity();
+        $size = $item->getOpenPackageQuantity() ?? $item->getPackageSize();
 
         return $this->consume(
             $item,
-            min($packageSize, $item->getRemainingQuantity()),
+            min($size, $item->getRemainingQuantity()),
             $item->getUnit(),
             $author,
             'Exemplaire retiré',
@@ -280,11 +291,13 @@ class StockService
         $previousLabel = sprintf('%s %s', $this->format($item->getRemainingQuantity()), $currentUnit->label());
 
         if (null !== $newQuantity) {
-            $item->setInitialQuantity($newQuantity);
-            $item->setRemainingQuantity($newQuantity);
+            // Quantité redonnée à la main : le conditionnement d'origine ne veut
+            // plus rien dire non plus, le lot redevient un exemplaire unique.
+            $item->repackageAsSingle($newQuantity);
         } else {
-            $item->setInitialQuantity($this->converter->convert($item->getInitialQuantity(), $currentUnit, $newUnit));
-            $item->setRemainingQuantity($this->converter->convert($item->getRemainingQuantity(), $currentUnit, $newUnit));
+            // Un seul facteur pour tout ce que le lot compte — total, contenance
+            // d'un exemplaire et exemplaire entamé.
+            $item->rescale($this->converter->convert(1.0, $currentUnit, $newUnit));
         }
 
         $item->setUnit($newUnit);
@@ -336,9 +349,21 @@ class StockService
         return $movement;
     }
 
+    /**
+     * Entame ou referme un exemplaire, à la main.
+     *
+     * Le geste porte sur UN exemplaire, pas sur le lot entier : marquer comme
+     * entamé un lot de trois sachets en ouvre un et laisse les deux autres
+     * scellés — c'est exactement ce que l'ancien drapeau unique ne savait pas dire.
+     */
     public function markOpened(StockItem $item, bool $opened): StockItem
     {
-        $item->setOpenedAt($opened ? ($item->getOpenedAt() ?? new \DateTimeImmutable()) : null);
+        if ($opened) {
+            $item->openNextPackage();
+        } else {
+            $item->closeOpenPackage();
+        }
+
         $this->flush();
 
         return $item;

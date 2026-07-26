@@ -48,7 +48,7 @@ class InventoryAggregator
         int $expiringWithinDays = 3,
         ?DietaryGuard $guard = null,
     ): array {
-        /** @var array<string, array{item: StockItem, base: float, expiresSoon: bool, earliest: ?\DateTimeImmutable, estimatedExpiration: bool, estimatedQuantity: bool, locations: array<string, true>, lots: int, notes: array<string, true>}> $grouped */
+        /** @var array<string, array{item: StockItem, base: float, expiresSoon: bool, opened: bool, earliest: ?\DateTimeImmutable, estimatedExpiration: bool, estimatedQuantity: bool, locations: array<string, true>, lots: int, notes: array<string, true>}> $grouped */
         $grouped = [];
 
         foreach ($this->stockItems->findAvailable($household) as $item) {
@@ -64,6 +64,7 @@ class InventoryAggregator
                     'item' => $item,
                     'base' => 0.0,
                     'expiresSoon' => false,
+                    'opened' => false,
                     'earliest' => null,
                     'estimatedExpiration' => false,
                     'estimatedQuantity' => false,
@@ -87,6 +88,10 @@ class InventoryAggregator
                 $grouped[$key]['expiresSoon'] = true;
             }
 
+            if ($item->isOpened()) {
+                $grouped[$key]['opened'] = true;
+            }
+
             $expiration = $item->getExpirationDate();
             if (null !== $expiration && (null === $grouped[$key]['earliest'] || $expiration < $grouped[$key]['earliest'])) {
                 $grouped[$key]['earliest'] = $expiration;
@@ -107,6 +112,7 @@ class InventoryAggregator
                 quantity: $readable['quantity'],
                 unit: $readable['unit'],
                 expiresSoon: $data['expiresSoon'],
+                alreadyOpened: $data['opened'],
                 earliestExpiration: $data['earliest'],
                 expirationIsEstimated: $data['estimatedExpiration'],
                 quantityIsEstimated: $data['estimatedQuantity'],
@@ -118,10 +124,16 @@ class InventoryAggregator
             );
         }
 
-        // Ce qui périme bientôt d'abord : c'est ce que l'IA doit prioriser.
+        // Ce qui périme bientôt d'abord, puis ce qui est déjà entamé : les deux
+        // urgences que l'IA doit voir en tête de liste, dans cet ordre. Un paquet
+        // ouvert ne prime jamais sur une date qui approche — il vient juste après.
         usort($lines, static function (InventoryLine $a, InventoryLine $b): int {
             if ($a->expiresSoon !== $b->expiresSoon) {
                 return $a->expiresSoon ? -1 : 1;
+            }
+
+            if ($a->alreadyOpened !== $b->alreadyOpened) {
+                return $a->alreadyOpened ? -1 : 1;
             }
 
             return strcmp($a->label, $b->label);

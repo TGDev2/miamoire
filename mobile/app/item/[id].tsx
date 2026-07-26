@@ -154,12 +154,36 @@ export default function StockItemScreen() {
         {traitLabels.length > 0 ? (
           <Text style={styles.meta}>{traitLabels.join(' · ')}</Text>
         ) : null}
-        {item.isOpened ? <Text style={styles.meta}>Entamé</Text> : null}
         {item.quantityIsEstimated ? (
           <Text style={styles.meta}>Quantité estimée, pas mesurée</Text>
         ) : null}
         {item.note ? <Text style={styles.note}>{item.note}</Text> : null}
       </Card>
+
+      {/* Un lot n'est pas un tas : trois sachets de 500 g dont un entamé ne
+          se résument pas à « 1,25 kg ». Voir quel exemplaire est ouvert évite
+          d'en déballer un second alors qu'il en reste dans le premier. */}
+      {item.packages.length > 0 ? (
+        <>
+          <SectionTitle>Exemplaires</SectionTitle>
+          <View style={styles.packages}>
+            {item.packages.map((entry) => (
+              <View
+                key={`package-${entry.position}`}
+                style={[styles.package, entry.opened && styles.packageOpened]}
+              >
+                <Text style={[styles.packageState, entry.opened && styles.packageStateOpened]}>
+                  {entry.opened ? 'Entamé' : 'Fermé'}
+                </Text>
+                <Text style={styles.packageQuantity}>
+                  {formatNumber(entry.remaining)} {item.unitLabel}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <Text style={styles.help}>{packagingHint(item)}</Text>
+        </>
+      ) : null}
 
       {/* Les autres lots du même aliment : c'est ce qui permet de choisir le bon
           plutôt que de gonfler celui-ci avec une date qui ne lui correspond pas. */}
@@ -253,8 +277,10 @@ export default function StockItemScreen() {
           disabled={busy}
           style={styles.gridItem}
         />
+        {/* Le geste porte sur UN exemplaire : ouvrir un lot de trois sachets
+            n'en entame qu'un, les deux autres restent scellés. */}
         <Button
-          label={item.isOpened ? 'Marquer comme fermé' : 'Marquer comme entamé'}
+          label={item.isOpened ? 'Refermer l\'exemplaire entamé' : 'Entamer un exemplaire'}
           variant="secondary"
           onPress={() => run(() => api.setOpened(id, !item.isOpened))}
           disabled={busy}
@@ -527,6 +553,23 @@ export default function StockItemScreen() {
   );
 }
 
+/** Ce que le découpage en exemplaires signifie concrètement, en une phrase. */
+function packagingHint(item: StockItem): string {
+  if (item.openPackageQuantity === null) {
+    return item.packages.length > 1
+      ? `${item.packages.length} exemplaires fermés. Prélever une quantité en ouvrira un — un seul.`
+      : 'Aucun exemplaire entamé. Prélever une quantité en ouvrira un automatiquement.';
+  }
+
+  if (item.sealedPackageCount === 0) {
+    return 'C\'est le dernier exemplaire, et il est entamé.';
+  }
+
+  return item.sealedPackageCount === 1
+    ? 'Un exemplaire est entamé, l\'autre reste fermé. Les recettes puisent d\'abord dans celui qui est ouvert.'
+    : `Un exemplaire est entamé, les ${item.sealedPackageCount} autres restent fermés. Les recettes puisent d'abord dans celui qui est ouvert.`;
+}
+
 function toIsoDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -603,6 +646,20 @@ const styles = StyleSheet.create({
   gridItem: {},
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   spaced: { marginTop: spacing.sm },
+  packages: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  package: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minWidth: 92,
+  },
+  packageOpened: { borderColor: colors.info, backgroundColor: colors.infoSoft },
+  packageState: { fontSize: 12, fontWeight: '700', color: colors.inkMuted },
+  packageStateOpened: { color: colors.info },
+  packageQuantity: { fontSize: 15, fontWeight: '700', color: colors.ink, marginTop: 2 },
   sibling: {
     backgroundColor: colors.surface,
     borderWidth: 1,

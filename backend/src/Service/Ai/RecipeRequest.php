@@ -18,6 +18,14 @@ final readonly class RecipeRequest
         public array $equipment = [],
         public array $exclusions = [],
         public bool $allowExtraIngredients = false,
+        /**
+         * Clé d'inventaire d'un aliment à utiliser impérativement — `tomate-conserve`.
+         *
+         * Facultatif : demander des recettes sans rien imposer reste le cas
+         * courant. Renseigné, ce n'est pas une préférence mais une contrainte,
+         * vérifiée sur chaque recette renvoyée.
+         */
+        public ?string $priorityKey = null,
     ) {
     }
 }

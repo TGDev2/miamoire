@@ -8,6 +8,7 @@ use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
 use App\Entity\Product;
+use App\Entity\SavedRecipe;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Enum\ProductTrait;
@@ -116,6 +117,21 @@ class ApiPresenter
             'displayQuantity' => $readable['quantity'],
             'displayUnit' => $readable['unit']->label(),
             'numberOfPackages' => $item->getNumberOfPackages(),
+            'packageSize' => round($item->getPackageSize(), 3),
+            'openPackageQuantity' => null !== $item->getOpenPackageQuantity()
+                ? round($item->getOpenPackageQuantity(), 3)
+                : null,
+            'sealedPackageCount' => $item->getSealedPackageCount(),
+            // Exemplaire par exemplaire, dans l'ordre où ils seront consommés :
+            // « 250 g entamés, puis deux sachets de 500 g encore fermés ».
+            'packages' => array_map(
+                static fn (array $package): array => [
+                    'position' => $package['position'],
+                    'remaining' => $package['remaining'],
+                    'opened' => $package['opened'],
+                ],
+                $item->getPackages(),
+            ),
             'storageLocation' => $item->getStorageLocation()->value,
             'storageLocationLabel' => $item->getStorageLocation()->label(),
             'purchaseDate' => $item->getPurchaseDate()?->format('Y-m-d'),
@@ -152,6 +168,26 @@ class ApiPresenter
         }
 
         return $payload;
+    }
+
+    /**
+     * Une recette conservée par le foyer.
+     *
+     * La recette elle-même est renvoyée telle qu'elle a été normalisée à
+     * l'enregistrement : l'application affiche une recette enregistrée avec
+     * exactement le même écran qu'une proposition fraîche.
+     *
+     * @return array<string, mixed>
+     */
+    public function savedRecipe(SavedRecipe $saved): array
+    {
+        return [
+            'id' => (string) $saved->getId(),
+            'recipeName' => $saved->getName(),
+            'savedBy' => $saved->getSavedBy()?->getFirstName(),
+            'savedAt' => $saved->getCreatedAt()->format(\DATE_ATOM),
+            'recipe' => $saved->getRecipe(),
+        ];
     }
 
     /** @return array<string, mixed> */

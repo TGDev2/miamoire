@@ -23,6 +23,8 @@ export default function CookScreen() {
   const [maxMinutes, setMaxMinutes] = useState<number | null>(null);
   const [equipment, setEquipment] = useState<string[]>([]);
   const [allowExtra, setAllowExtra] = useState(false);
+  /** Aliment imposé aux trois recettes. `null` = aucune contrainte, et c'est le défaut. */
+  const [priorityKey, setPriorityKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -32,6 +34,11 @@ export default function CookScreen() {
       const [ref, inv] = await Promise.all([api.reference(), api.inventory()]);
       setReference(ref);
       setInventory(inv);
+      // Un aliment épuisé entre deux visites ne doit pas rester sélectionné :
+      // le serveur refuserait la génération avec une clé qu'il ne connaît plus.
+      setPriorityKey((current) =>
+        current !== null && inv.ingredients.some((entry) => entry.key === current) ? current : null,
+      );
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Chargement impossible.');
     } finally {
@@ -62,6 +69,7 @@ export default function CookScreen() {
         equipment,
         exclusions: [],
         allowExtraIngredients: allowExtra,
+        priorityKey,
       });
       setSuggestion(result);
       router.push('/recipes');
@@ -89,6 +97,13 @@ export default function CookScreen() {
           </Text>
         ) : null}
       </Card>
+
+      <Button
+        label="Mes recettes enregistrées"
+        variant="secondary"
+        onPress={() => router.push('/saved')}
+        style={styles.savedLink}
+      />
 
       <SectionTitle>Nous sommes</SectionTitle>
       <View style={styles.stepper}>
@@ -144,6 +159,32 @@ export default function CookScreen() {
           />
         ))}
       </View>
+
+      {/* Facultatif, et affiché comme tel : la plupart des générations ne
+          contraignent rien. L'inventaire arrive déjà trié — ce qui périme
+          bientôt d'abord, puis ce qui est entamé — donc les aliments à écouler
+          sont en tête sans qu'on ait à les chercher. */}
+      <SectionTitle>Aliment à utiliser en priorité</SectionTitle>
+      <Text style={styles.hint}>
+        {priorityKey === null
+          ? 'Facultatif. Choisissez-en un pour que les trois recettes l\'utilisent.'
+          : 'Les recettes qui ne l\'utilisent pas seront écartées avant de vous être montrées.'}
+      </Text>
+      <View style={styles.chips}>
+        {(inventory?.ingredients ?? []).map((ingredient) => (
+          <Chip
+            key={ingredient.key}
+            label={`${ingredient.label}${ingredient.expiresSoon ? ' ⏳' : ingredient.alreadyOpened ? ' •' : ''}`}
+            selected={priorityKey === ingredient.key}
+            onPress={() =>
+              setPriorityKey(priorityKey === ingredient.key ? null : ingredient.key)
+            }
+          />
+        ))}
+      </View>
+      {inventory && inventory.ingredients.length > 0 ? (
+        <Text style={styles.legend}>⏳ périme bientôt · • paquet déjà entamé</Text>
+      ) : null}
 
       <SectionTitle>Courses</SectionTitle>
       <View style={styles.switchRow}>
@@ -220,6 +261,9 @@ const styles = StyleSheet.create({
   stepperGlyph: { fontSize: 22, fontWeight: '700', color: colors.primary },
   stepperValue: { fontSize: 17, fontWeight: '700', color: colors.ink },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
+  savedLink: { marginTop: spacing.lg },
+  hint: { fontSize: 13, color: colors.inkMuted, marginBottom: spacing.sm, lineHeight: 19 },
+  legend: { fontSize: 12, color: colors.inkMuted, marginTop: spacing.xs },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -10,6 +10,9 @@ interface RecipeState {
   /** La confirmation déjà appliquée, s'il y en a une. */
   confirmationFor: (index: number) => ConfirmationResponse | undefined;
   rememberConfirmation: (index: number, result: ConfirmationResponse) => void;
+  /** L'enregistrement de cette proposition, s'il a eu lieu. */
+  savedIdFor: (index: number) => string | null;
+  rememberSaved: (index: number, id: string | null) => void;
 }
 
 const RecipeContext = createContext<RecipeState | null>(null);
@@ -40,12 +43,14 @@ function newSessionId(): string {
 export function RecipeProvider({ children }: { children: React.ReactNode }) {
   const [suggestion, setSuggestionState] = useState<SuggestionResponse | null>(null);
   const [confirmations, setConfirmations] = useState<Record<number, ConfirmationResponse>>({});
+  const [savedIds, setSavedIds] = useState<Record<number, string>>({});
   const sessionId = useRef<string>(newSessionId());
 
   const setSuggestion = useCallback((value: SuggestionResponse | null) => {
     // Nouvelle génération : nouvelles clés, et plus aucune confirmation en mémoire.
     sessionId.current = newSessionId();
     setConfirmations({});
+    setSavedIds({});
     setSuggestionState(value);
   }, []);
 
@@ -60,9 +65,40 @@ export function RecipeProvider({ children }: { children: React.ReactNode }) {
     setConfirmations((current) => ({ ...current, [index]: result }));
   }, []);
 
+  const savedIdFor = useCallback((index: number) => savedIds[index] ?? null, [savedIds]);
+
+  // Même raison que pour les confirmations : sans cette mémoire, revenir sur la
+  // recette proposerait de l'enregistrer une seconde fois.
+  const rememberSaved = useCallback((index: number, id: string | null) => {
+    setSavedIds((current) => {
+      if (id === null) {
+        const { [index]: _removed, ...rest } = current;
+        return rest;
+      }
+
+      return { ...current, [index]: id };
+    });
+  }, []);
+
   const value = useMemo(
-    () => ({ suggestion, setSuggestion, operationKeyFor, confirmationFor, rememberConfirmation }),
-    [suggestion, setSuggestion, operationKeyFor, confirmationFor, rememberConfirmation],
+    () => ({
+      suggestion,
+      setSuggestion,
+      operationKeyFor,
+      confirmationFor,
+      rememberConfirmation,
+      savedIdFor,
+      rememberSaved,
+    }),
+    [
+      suggestion,
+      setSuggestion,
+      operationKeyFor,
+      confirmationFor,
+      rememberConfirmation,
+      savedIdFor,
+      rememberSaved,
+    ],
   );
 
   return <RecipeContext.Provider value={value}>{children}</RecipeContext.Provider>;

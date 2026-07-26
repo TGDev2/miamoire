@@ -35,6 +35,7 @@ abstract class DatabaseTestCase extends KernelTestCase
     private const TABLES = [
         'stock_movement',
         'stock_operation',
+        'saved_recipe',
         'stock_item',
         'household_product_variant',
         'household_member',
