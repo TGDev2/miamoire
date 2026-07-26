@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Entity\HouseholdProductVariant;
 use App\Entity\Product;
+use App\Entity\StockItem;
 use App\Enum\FillLevel;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
@@ -15,6 +17,8 @@ use App\Http\RequestContext;
 use App\Repository\ProductRepository;
 use App\Repository\StockItemRepository;
 use App\Repository\StockMovementRepository;
+use App\Service\Freshness\ShelfLifeEstimator;
+use App\Service\Product\VariantResolver;
 use App\Service\ProductLookupService;
 use App\Service\Stock\StockService;
 use Doctrine\ORM\EntityManagerInterface;
@@ -44,6 +48,8 @@ class StockItemController extends AbstractApiController
             'search' => $request->query->getString('search') ?: null,
             'expiringWithinDays' => is_numeric($expiring) ? (int) $expiring : null,
             'includeEmpty' => $request->query->getBoolean('includeEmpty'),
+            // Les lots archivés ne reviennent que si on les demande explicitement.
+            'archived' => $request->query->getBoolean('archived'),
         ]);
 
         return $this->json([
@@ -54,6 +60,16 @@ class StockItemController extends AbstractApiController
         ]);
     }
 
+    /**
+     * Ajoute un ou plusieurs lots du même aliment.
+     *
+     * Trois yaourts périmant le 27, deux le 3 août : c'est un seul geste de courses
+     * et cinq exemplaires du même produit, mais deux lots. Les saisir un par un
+     * obligeait à refaire tout le formulaire ; les fondre en un seul lot aurait
+     * fait mentir la date la plus proche, donc les alertes et FEFO.
+     *
+     * `batches` décrit donc les dates, et tout le reste est commun.
+     */
     #[Route('', methods: ['POST'])]
     public function create(
         Request $request,
@@ -61,36 +77,76 @@ class StockItemController extends AbstractApiController
         StockService $stockService,
         ProductLookupService $lookup,
         ProductRepository $products,
+        VariantResolver $variants,
+        ShelfLifeEstimator $shelfLife,
         ApiPresenter $presenter,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
-        $product = $this->resolveProduct($payload, $lookup, $products);
+        $household = $context->household();
+        $author = $context->requireMember();
 
-        // Un état saisi explicitement prime sur celui déduit du libellé, quelle que
-        // soit l'origine du produit — code-barres, fiche existante ou saisie libre.
-        if ($payload->has('traits')) {
-            $product->setTraits(ProductTrait::fromValues($payload->stringList('traits')));
+        $product = $this->resolveCatalogProduct($payload, $lookup, $products);
+        $name = $payload->string('name') ?? $product?->getName();
+
+        if (null === $name) {
+            throw new BadRequestHttpException(
+                'Indiquez un produit existant, un code-barres reconnu, ou au minimum un nom.',
+            );
         }
 
-        $unit = $payload->enum('unit', Unit::class) ?? $product->getPackageUnit() ?? Unit::Piece;
+        $unit = $payload->enum('unit', Unit::class) ?? $product?->getPackageUnit() ?? Unit::Piece;
 
-        $item = $stockService->add(
-            household: $context->household(),
-            author: $context->requireMember(),
+        // La correction locale l'emporte sur l'état déduit ; ni l'une ni l'autre
+        // ne touche plus le catalogue partagé entre foyers.
+        $variant = $variants->resolve(
+            household: $household,
             product: $product,
-            numberOfPackages: $payload->int('numberOfPackages', 1) ?? 1,
-            quantityPerPackage: $payload->float('quantityPerPackage')
-                ?? $product->getPackageQuantity()
-                ?? 1.0,
+            name: $name,
             unit: $unit,
-            location: $payload->enum('storageLocation', StorageLocation::class) ?? StorageLocation::Pantry,
-            purchaseDate: $payload->date('purchaseDate'),
-            expirationDate: $payload->date('expirationDate'),
-            note: $payload->string('note'),
-            quantityIsEstimated: $payload->bool('quantityIsEstimated'),
+            explicitTraits: $payload->has('traits')
+                ? ProductTrait::fromValues($payload->stringList('traits'))
+                : null,
+            brand: $payload->string('brand'),
+            category: $payload->string('category'),
         );
 
-        return $this->json($presenter->stockItem($item), Response::HTTP_CREATED);
+        $defaults = [
+            'numberOfPackages' => $payload->int('numberOfPackages', 1) ?? 1,
+            'quantityPerPackage' => $payload->float('quantityPerPackage') ?? $product?->getPackageQuantity() ?? 1.0,
+            'storageLocation' => $payload->enum('storageLocation', StorageLocation::class) ?? StorageLocation::Pantry,
+            'note' => $payload->string('note'),
+            'quantityIsEstimated' => $payload->bool('quantityIsEstimated'),
+            'expirationDate' => $payload->date('expirationDate'),
+            'estimateExpiration' => $payload->bool('estimateExpiration'),
+        ];
+
+        $batches = $payload->objectList('batches');
+        if ([] === $batches) {
+            $batches = [[]];
+        }
+
+        // Un ajout partiel — trois lots créés, le quatrième en échec — laisserait
+        // un inventaire que personne n'a saisi. Tout ou rien.
+        $items = $stockService->transactional(
+            fn (): array => array_map(
+                fn (array $batch): StockItem => $this->addBatch(
+                    $stockService,
+                    $shelfLife,
+                    $household,
+                    $author,
+                    $variant,
+                    $unit,
+                    $defaults,
+                    $batch,
+                ),
+                $batches,
+            ),
+        );
+
+        return $this->json(
+            ['items' => array_map(static fn (StockItem $item) => $presenter->stockItem($item), $items)],
+            Response::HTTP_CREATED,
+        );
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -100,7 +156,9 @@ class StockItemController extends AbstractApiController
         StockItemRepository $stockItems,
         ApiPresenter $presenter,
     ): JsonResponse {
-        return $this->json($presenter->stockItem($this->ownedStockItem($stockItems, $context, $id)));
+        $item = $this->ownedStockItem($stockItems, $context, $id);
+
+        return $this->json($presenter->stockItem($item, $stockItems->findSiblings($item)));
     }
 
     /** Modifications sans impact quantitatif : emplacement, dates, nom, état ouvert. */
@@ -111,6 +169,8 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        VariantResolver $variants,
+        ShelfLifeEstimator $shelfLife,
         EntityManagerInterface $entityManager,
         ApiPresenter $presenter,
     ): JsonResponse {
@@ -125,6 +185,12 @@ class StockItemController extends AbstractApiController
             $item->setExpirationDate($payload->date('expirationDate'));
         }
 
+        // « Je n'ai pas de date, mais estime-la » : recalculée depuis l'aliment,
+        // son état et l'endroit où il est rangé.
+        if ($payload->bool('estimateExpiration')) {
+            $item->setEstimatedExpirationDate($this->estimateFor($shelfLife, $item->getVariant(), $item->getStorageLocation()));
+        }
+
         if ($payload->has('purchaseDate')) {
             $item->setPurchaseDate($payload->date('purchaseDate'));
         }
@@ -133,13 +199,18 @@ class StockItemController extends AbstractApiController
             $item->setNote($payload->string('note'));
         }
 
+        // Renommer, c'est renommer DANS CE FOYER : le catalogue partagé n'est plus
+        // touché, et la clé culinaire est régénérée du même geste.
         if ($payload->has('name')) {
-            $item->getProduct()->setName($payload->requiredString('name'));
+            $item->setVariant($variants->rename($item->getVariant(), $payload->requiredString('name')));
         }
 
         // L'état du produit (en conserve, épluché…) conditionne les étapes de recette.
         if ($payload->has('traits')) {
-            $item->getProduct()->setTraits(ProductTrait::fromValues($payload->stringList('traits')));
+            $item->setVariant($variants->changeTraits(
+                $item->getVariant(),
+                ProductTrait::fromValues($payload->stringList('traits')),
+            ));
         }
 
         if ($payload->has('isOpened')) {
@@ -159,19 +230,45 @@ class StockItemController extends AbstractApiController
 
         $entityManager->flush();
 
+        return $this->json($presenter->stockItem($item, $stockItems->findSiblings($item)));
+    }
+
+    /**
+     * Archive le lot. Ce n'est plus une suppression physique : le journal des
+     * mouvements survit, et le geste se défait par `/restore`.
+     */
+    #[Route('/{id}', methods: ['DELETE'])]
+    public function delete(
+        string $id,
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $item = $stockService->archive(
+            $this->ownedStockItem($stockItems, $context, $id),
+            $context->requireMember(),
+            JsonPayload::fromRequest($request)->string('reason'),
+        );
+
         return $this->json($presenter->stockItem($item));
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
-    public function delete(
+    #[Route('/{id}/restore', methods: ['POST'])]
+    public function restore(
         string $id,
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        ApiPresenter $presenter,
     ): JsonResponse {
-        $stockService->delete($this->ownedStockItem($stockItems, $context, $id));
+        $item = $stockService->restore(
+            $this->ownedStockItem($stockItems, $context, $id),
+            $context->requireMember(),
+        );
 
-        return $this->json(null, Response::HTTP_NO_CONTENT);
+        return $this->json($presenter->stockItem($item));
     }
 
     #[Route('/{id}/consume', methods: ['POST'])]
@@ -264,7 +361,8 @@ class StockItemController extends AbstractApiController
      *
      * `quantity` n'est requis que si la nouvelle unité appartient à une autre
      * famille : convertir des grammes en unités demanderait un poids unitaire
-     * qu'on n'a pas. C'est refusé plutôt que deviné.
+     * qu'on n'a pas. C'est refusé plutôt que deviné. Le lot rejoint alors la
+     * variante correspondante du foyer.
      */
     #[Route('/{id}/unit', methods: ['POST'])]
     public function changeUnit(
@@ -341,15 +439,75 @@ class StockItemController extends AbstractApiController
     }
 
     /**
-     * Trois façons d'identifier le produit ajouté, par ordre de précision :
-     * un produit déjà connu, un code-barres à résoudre, ou une saisie libre
-     * (fruits et légumes, vrac, restes, préparations maison).
+     * @param array{numberOfPackages: int, quantityPerPackage: float, storageLocation: StorageLocation, note: ?string, quantityIsEstimated: bool, expirationDate: ?\DateTimeImmutable, estimateExpiration: bool} $defaults
+     * @param array<string, mixed>                                                                                                                                                                              $batch
      */
-    private function resolveProduct(
+    private function addBatch(
+        StockService $stockService,
+        ShelfLifeEstimator $shelfLife,
+        \App\Entity\Household $household,
+        \App\Entity\Member $author,
+        HouseholdProductVariant $variant,
+        Unit $unit,
+        array $defaults,
+        array $batch,
+    ): StockItem {
+        $line = JsonPayload::fromArray($batch);
+
+        $location = $line->enum('storageLocation', StorageLocation::class) ?? $defaults['storageLocation'];
+        $expiration = $line->has('expirationDate') ? $line->date('expirationDate') : $defaults['expirationDate'];
+        $estimate = $line->has('estimateExpiration') ? $line->bool('estimateExpiration') : $defaults['estimateExpiration'];
+
+        // Une date lue sur l'emballage prime toujours : on n'estime que ce qui manque.
+        $estimated = false;
+        if (null === $expiration && $estimate) {
+            $expiration = $this->estimateFor($shelfLife, $variant, $location);
+            $estimated = true;
+        }
+
+        return $stockService->add(
+            household: $household,
+            author: $author,
+            variant: $variant,
+            numberOfPackages: $line->int('numberOfPackages') ?? $defaults['numberOfPackages'],
+            quantityPerPackage: $line->float('quantityPerPackage') ?? $defaults['quantityPerPackage'],
+            unit: $unit,
+            location: $location,
+            purchaseDate: $line->date('purchaseDate'),
+            expirationDate: $expiration,
+            note: $line->string('note') ?? $defaults['note'],
+            quantityIsEstimated: $line->has('quantityIsEstimated')
+                ? $line->bool('quantityIsEstimated')
+                : $defaults['quantityIsEstimated'],
+            expirationIsEstimated: $estimated,
+        );
+    }
+
+    private function estimateFor(
+        ShelfLifeEstimator $shelfLife,
+        HouseholdProductVariant $variant,
+        StorageLocation $location,
+    ): \DateTimeImmutable {
+        return $shelfLife->estimate(
+            $variant->getName(),
+            $variant->getCategory(),
+            $variant->getTraits(),
+            $location,
+        )->until();
+    }
+
+    /**
+     * La fiche canonique, quand il y en a une.
+     *
+     * Une saisie libre — fruits et légumes, vrac, restes, préparations maison —
+     * n'en crée plus : elle crée une variante du foyer et rien d'autre. Le
+     * catalogue partagé mondialement ne se remplit que par code-barres.
+     */
+    private function resolveCatalogProduct(
         JsonPayload $payload,
         ProductLookupService $lookup,
         ProductRepository $products,
-    ): Product {
+    ): ?Product {
         $productId = $payload->string('productId');
         if (null !== $productId && Uuid::isValid($productId)) {
             $product = $products->find(Uuid::fromString($productId));
@@ -360,26 +518,9 @@ class StockItemController extends AbstractApiController
 
         $barcode = $payload->string('barcode');
         if (null !== $barcode) {
-            $product = $lookup->findByBarcode($barcode);
-            if (null !== $product) {
-                return $product;
-            }
+            return $lookup->findByBarcode($barcode);
         }
 
-        $name = $payload->string('name');
-        if (null === $name) {
-            throw new BadRequestHttpException(
-                'Indiquez un produit existant, un code-barres reconnu, ou au minimum un nom.',
-            );
-        }
-
-        return $lookup->createManual(
-            name: $name,
-            brand: $payload->string('brand'),
-            category: $payload->string('category'),
-            packageQuantity: $payload->float('quantityPerPackage'),
-            packageUnit: $payload->enum('unit', Unit::class),
-            barcode: $barcode,
-        );
+        return null;
     }
 }

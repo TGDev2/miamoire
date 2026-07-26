@@ -22,6 +22,18 @@ services:
             - '../src/DependencyInjection/'
             - '../src/Entity/'
             - '../src/Kernel.php'
+            # Objets valeur : construits à la main avec leurs données, jamais
+            # injectés. Les laisser au conteneur ferait échouer l'autowiring sur
+            # un `array` ou un constructeur privé, à la première référence.
+            - '../src/Service/Ai/Safety/DietaryGuard.php'
+            - '../src/Service/Ai/Safety/DietaryViolation.php'
+            - '../src/Service/Ai/RecipeRequest.php'
+            - '../src/Service/Freshness/ShelfLifeEstimate.php'
+            - '../src/Service/Inventory/InventoryLine.php'
+            - '../src/Service/Product/VariantIdentity.php'
+            - '../src/Service/Stock/ConsumptionLine.php'
+            - '../src/Service/Stock/FefoAllocation.php'
+            - '../src/Service/Stock/FefoPlan.php'
 
     # Les clés d'API restent côté serveur : jamais exposées à l'application mobile.
     Anthropic\Client:

@@ -4,9 +4,30 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../src/api/client';
-import type { Product, ProductTraitValue, Reference, Unit } from '../src/api/types';
+import type { Product, ProductTraitValue, Reference, ShelfLifeEstimate, Unit } from '../src/api/types';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
 import { colors, radius, spacing } from '../src/theme';
+
+/**
+ * Un lot à créer : une date de péremption et le nombre d'exemplaires qui la portent.
+ *
+ * Trois yaourts pour le 27 et deux pour le 3 août, c'est un seul passage en caisse
+ * mais deux lots. Les fondre en un seul ferait mentir la date la plus proche —
+ * donc les alertes, et la consommation FEFO.
+ */
+type Batch = {
+  id: number;
+  packages: string;
+  expiration: Date | null;
+  /** Aucune date imprimée : le serveur la déduit d'une durée de conservation. */
+  estimate: boolean;
+};
+
+let nextBatchId = 1;
+
+function newBatch(packages = '1'): Batch {
+  return { id: nextBatchId++, packages, expiration: null, estimate: false };
+}
 
 export default function AddScreen() {
   const router = useRouter();
@@ -19,13 +40,13 @@ export default function AddScreen() {
 
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
-  const [packages, setPackages] = useState('1');
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState<Unit>('g');
   const [location, setLocation] = useState('pantry');
   const [traits, setTraits] = useState<ProductTraitValue[]>([]);
-  const [expiration, setExpiration] = useState<Date | null>(null);
-  const [showPicker, setShowPicker] = useState(false);
+  const [batches, setBatches] = useState<Batch[]>([newBatch()]);
+  const [pickerFor, setPickerFor] = useState<number | null>(null);
+  const [freshness, setFreshness] = useState<ShelfLifeEstimate | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,10 +97,53 @@ export default function AddScreen() {
   }, [barcode]);
 
   const total = useMemo(() => {
-    const count = Number(packages.replace(',', '.')) || 0;
     const per = Number(quantity.replace(',', '.')) || 0;
+    const count = batches.reduce(
+      (sum, batch) => sum + Math.max(1, Math.round(Number(batch.packages.replace(',', '.')) || 1)),
+      0,
+    );
     return count * per;
-  }, [packages, quantity]);
+  }, [batches, quantity]);
+
+  const effectiveName = (product?.name ?? name).trim();
+
+  /**
+   * Demande au serveur combien de temps cet aliment se garde là où il est rangé.
+   *
+   * L'estimation est affichée avec sa justification : une date déduite qu'on ne
+   * peut pas discuter finirait par n'être crue par personne.
+   */
+  async function estimateFreshness(batchId: number) {
+    if (!effectiveName) {
+      setError('Indiquez d\'abord le nom de l\'aliment pour estimer sa fraîcheur.');
+      return;
+    }
+
+    try {
+      const estimate = await api.shelfLife({
+        name: effectiveName,
+        category: product?.category,
+        storageLocation: location,
+        traits,
+      });
+      setFreshness(estimate);
+      setBatches((current) =>
+        current.map((batch) =>
+          batch.id === batchId
+            ? { ...batch, estimate: true, expiration: fromIsoDate(estimate.until) }
+            : batch,
+        ),
+      );
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Estimation impossible.');
+    }
+  }
+
+  function updateBatch(id: number, changes: Partial<Batch>) {
+    setBatches((current) =>
+      current.map((batch) => (batch.id === id ? { ...batch, ...changes } : batch)),
+    );
+  }
 
   async function submit() {
     setError(null);
@@ -101,14 +165,19 @@ export default function AddScreen() {
         barcode: product ? undefined : barcode,
         name: product ? undefined : name.trim(),
         brand: product ? undefined : brand.trim() || undefined,
-        numberOfPackages: Math.max(1, Math.round(Number(packages.replace(',', '.')) || 1)),
+        numberOfPackages: 1,
         quantityPerPackage: perPackage,
         unit,
         storageLocation: location,
         // Sans sélection, le serveur déduit l'état du libellé plutôt que de le vider.
         traits: traits.length > 0 ? traits : undefined,
-        expirationDate: expiration ? toIsoDate(expiration) : null,
         note: note.trim() || undefined,
+        // Une ligne par date : le serveur crée les lots en une seule transaction.
+        batches: batches.map((batch) => ({
+          numberOfPackages: Math.max(1, Math.round(Number(batch.packages.replace(',', '.')) || 1)),
+          expirationDate: batch.estimate || !batch.expiration ? null : toIsoDate(batch.expiration),
+          estimateExpiration: batch.estimate,
+        })),
       });
       router.replace('/(tabs)');
     } catch (exception) {
@@ -169,23 +238,13 @@ export default function AddScreen() {
 
       <SectionTitle>Ce que vous ajoutez réellement</SectionTitle>
 
-      <View style={styles.pair}>
-        <Field
-          label="Exemplaires"
-          value={packages}
-          onChangeText={setPackages}
-          keyboardType="number-pad"
-          containerStyle={styles.pairInput}
-        />
-        <Field
-          label="Quantité par exemplaire"
-          value={quantity}
-          onChangeText={setQuantity}
-          keyboardType="decimal-pad"
-          placeholder="500"
-          containerStyle={styles.pairInput}
-        />
-      </View>
+      <Field
+        label="Quantité par exemplaire"
+        value={quantity}
+        onChangeText={setQuantity}
+        keyboardType="decimal-pad"
+        placeholder="500"
+      />
 
       <Text style={styles.fieldLabel}>Unité</Text>
       <View style={styles.chips}>
@@ -239,42 +298,98 @@ export default function AddScreen() {
         ))}
       </View>
 
-      <SectionTitle>Date de péremption</SectionTitle>
-      <View style={styles.dateRow}>
-        <Pressable style={styles.dateButton} onPress={() => setShowPicker(true)}>
-          <Text style={styles.dateText}>
-            {expiration ? formatDate(expiration) : 'Aucune date renseignée'}
-          </Text>
-        </Pressable>
-        {expiration ? (
-          <Pressable onPress={() => setExpiration(null)} style={styles.clearDate}>
-            <Text style={styles.clearDateText}>Effacer</Text>
-          </Pressable>
-        ) : null}
-      </View>
+      <SectionTitle>Dates de péremption</SectionTitle>
+      <Text style={styles.help}>
+        Une ligne par date. Trois yaourts pour le 27 et deux pour le 3 août font deux
+        lots : c'est ce qui permet de consommer le plus urgent en premier.
+      </Text>
 
-      <View style={styles.chips}>
-        {[
-          { label: 'Dans 3 jours', days: 3 },
-          { label: 'Dans 1 semaine', days: 7 },
-          { label: 'Dans 1 mois', days: 30 },
-        ].map((shortcut) => (
-          <Chip
-            key={shortcut.days}
-            label={shortcut.label}
-            selected={false}
-            onPress={() => setExpiration(addDays(shortcut.days))}
-          />
-        ))}
-      </View>
+      {batches.map((batch, position) => (
+        <Card key={batch.id} style={styles.batchCard}>
+          <View style={styles.batchHeader}>
+            <Text style={styles.batchTitle}>Lot {position + 1}</Text>
+            {batches.length > 1 ? (
+              <Pressable
+                onPress={() => setBatches((current) => current.filter((entry) => entry.id !== batch.id))}
+              >
+                <Text style={styles.clearDateText}>Retirer</Text>
+              </Pressable>
+            ) : null}
+          </View>
 
-      {showPicker ? (
+          <View style={styles.pair}>
+            <Field
+              label="Exemplaires"
+              value={batch.packages}
+              onChangeText={(value) => updateBatch(batch.id, { packages: value })}
+              keyboardType="number-pad"
+              containerStyle={styles.pairInput}
+            />
+            <View style={styles.pairInput}>
+              <Text style={styles.fieldLabel}>À consommer avant</Text>
+              <Pressable style={styles.dateButton} onPress={() => setPickerFor(batch.id)}>
+                <Text style={styles.dateText}>
+                  {batch.expiration ? formatDate(batch.expiration) : 'Aucune date'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.chips}>
+            {[
+              { label: 'Dans 3 jours', days: 3 },
+              { label: 'Dans 1 semaine', days: 7 },
+              { label: 'Dans 1 mois', days: 30 },
+            ].map((shortcut) => (
+              <Chip
+                key={shortcut.days}
+                label={shortcut.label}
+                selected={false}
+                onPress={() =>
+                  updateBatch(batch.id, { expiration: addDays(shortcut.days), estimate: false })
+                }
+              />
+            ))}
+            {/* Fruits, légumes, vrac, restes : rien n'est imprimé sur l'emballage. */}
+            <Chip
+              label="Pas de date : estimer"
+              selected={batch.estimate}
+              onPress={() => estimateFreshness(batch.id)}
+            />
+            {batch.expiration ? (
+              <Chip
+                label="Effacer"
+                selected={false}
+                onPress={() => updateBatch(batch.id, { expiration: null, estimate: false })}
+              />
+            ) : null}
+          </View>
+
+          {batch.estimate && freshness ? (
+            <Text style={styles.estimateHint}>
+              Estimation, pas une date lue : {freshness.explanation} Elle sera signalée
+              comme telle dans votre stock.
+            </Text>
+          ) : null}
+        </Card>
+      ))}
+
+      <Button
+        label="Ajouter une autre date"
+        variant="secondary"
+        onPress={() => setBatches((current) => [...current, newBatch()])}
+      />
+
+      {pickerFor !== null ? (
         <DateTimePicker
-          value={expiration ?? addDays(7)}
+          value={batches.find((batch) => batch.id === pickerFor)?.expiration ?? addDays(7)}
           mode="date"
           onChange={(event, selected) => {
-            setShowPicker(false);
-            if (event.type === 'set' && selected) setExpiration(selected);
+            const target = pickerFor;
+            setPickerFor(null);
+            if (event.type === 'set' && selected && target !== null) {
+              updateBatch(target, { expiration: selected, estimate: false });
+            }
           }}
         />
       ) : null}
@@ -301,6 +416,12 @@ function toIsoDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** « 2026-08-02 » interprété localement : `new Date(iso)` serait en UTC, donc décalé d'un jour. */
+function fromIsoDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function formatDate(date: Date): string {
@@ -346,9 +467,21 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     marginBottom: spacing.sm,
   },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
+  batchCard: { marginBottom: spacing.md },
+  batchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  batchTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
+  estimateHint: {
+    fontSize: 13,
+    color: colors.accent,
+    lineHeight: 19,
+    marginTop: spacing.sm,
+  },
   dateButton: {
-    flex: 1,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
@@ -357,6 +490,5 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
   },
   dateText: { fontSize: 15, color: colors.ink },
-  clearDate: { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
   clearDateText: { color: colors.danger, fontSize: 14, fontWeight: '600' },
 });

@@ -18,22 +18,78 @@ directement : tout passe par l'API Symfony, qui garde les clés et met les produ
 en cache. L'API et la base vivent sur un hébergement permanent — **l'application ne
 dépend d'aucun ordinateur allumé à la maison, et ne demande aucun VPN**.
 
-## Le modèle : produit ≠ stock
+## Le modèle : catalogue → variante → lot
 
-La distinction structurante du projet.
+La distinction structurante du projet, en trois niveaux.
 
-| `Product` | `StockItem` |
-| --- | --- |
-| La référence générale | Ce qui est réellement chez vous |
-| « Lait demi-écrémé Lactel, bouteille de 1 L » | « 2 bouteilles, une expire le 27/07, l'autre le 03/08 » |
-| Partagé entre tous les foyers, sert de cache Open Food Facts | Appartient à un foyer, porte la quantité restante |
+| `Product` | `HouseholdProductVariant` | `StockItem` |
+| --- | --- | --- |
+| Le catalogue canonique | L'aliment **dans votre foyer** | Ce qui est réellement chez vous |
+| « Lait demi-écrémé Lactel, 1 L » | « Lait » — clé culinaire, état, unité | « 2 bouteilles, une expire le 27/07, l'autre le 03/08 » |
+| Partagé par tous les foyers, cache Open Food Facts | Appartient à un foyer, porte tout ce qui est corrigeable | Appartient à un foyer, porte la quantité restante |
 
-Chaque lot est distinct, ce qui permet la consommation **FEFO** (*First Expired,
+Le niveau du milieu a été ajouté après coup, parce que son absence produisait trois
+défauts qu'aucun réglage ne pouvait corriger :
+
+- corriger le nom ou l'état d'un aliment modifiait le `Product` **partagé**, donc
+  ce que voyaient les autres foyers ;
+- des tomates fraîches et des tomates en conserve, partageant la clé `tomate`,
+  étaient présentées au générateur de recettes comme **une seule quantité** portant
+  le trait `canned` — et les lots exprimés dans une autre famille d'unité étaient
+  **ignorés en silence** ;
+- renommer un aliment ne régénérait pas sa clé culinaire, qui restait attachée à
+  l'ancien nom.
+
+Une variante est identifiée par trois choses, et il faut les trois : la **clé
+d'ingrédient**, la **famille d'unité** — 3 pièces et 400 g ne s'additionnent pas —
+et les **traits**. Cette identité est hachée, et la base la rend unique par foyer :
+deux saisies équivalentes retombent sur la même variante, deux stocks distincts ne
+peuvent plus fusionner.
+
+Chaque variante porte un identifiant lisible — `tomate`, `tomate-conserve`,
+`tomate-piece` — et c'est **lui** que le générateur de recettes recopie. Un modèle
+recopie fidèlement un mot ; il abîme un identifiant de trente-six caractères.
+
+Chaque lot reste distinct, ce qui permet la consommation **FEFO** (*First Expired,
 First Out*) : retirer 1,5 L de lait vide d'abord la bouteille qui périme le plus tôt.
 
 Aucune quantité ne change sans qu'un `StockMovement` soit écrit. On n'écrase jamais
 silencieusement « 1 000 g » par « 700 g » : le journal conserve que 300 g ont été
 consommés, ce qui rend les corrections et l'audit possibles.
+
+```bash
+# Les aliments qu'un foyer possède sous plusieurs variantes — exactement ce que
+# l'ancien modèle fusionnait en une ligne.
+php bin/console app:variants:report
+```
+
+## Plusieurs dates, et les aliments qui n'en ont aucune
+
+Trois yaourts périmant le 27 et deux le 3 août, c'est un seul passage en caisse mais
+**deux lots**. Les fondre en un seul ferait mentir la date la plus proche — donc les
+alertes, et FEFO. L'écran d'ajout accepte donc une ligne par date, et l'API crée les
+lots en une seule transaction : un ajout partiel laisserait un inventaire que
+personne n'a saisi.
+
+Les fruits et légumes frais, le vrac, un reste de gratin n'ont **aucune date
+imprimée**. Ils entraient jusqu'ici sans date : aucune alerte, aucune priorité, et ils
+pourrissaient dans le bac à légumes — précisément le gaspillage que l'application
+existe pour éviter.
+
+`ShelfLifeEstimator` en déduit une, à partir de l'aliment, de son état et de l'endroit
+où il est rangé : une salade au réfrigérateur tient 4 jours, des pommes de terre au
+placard 30. Deux garde-fous :
+
+- la date est **marquée comme estimée** (`expirationIsEstimated`) et l'application ne
+  l'affiche jamais comme une date lue — « à vérifier vers le 30/07 », pas « périmé
+  depuis 2 jours » ;
+- elle est **volontairement courte**. Se tromper court fait vérifier un aliment encore
+  bon ; se tromper long fait manger un aliment qui ne l'est plus.
+
+Le rangement prime sur l'aliment : au congélateur, un légume se garde des mois, quel
+que soit le légume. `GET /products/shelf-life` prévisualise l'estimation **avec sa
+justification** — une estimation qu'on ne peut pas discuter finirait par n'être crue
+par personne.
 
 ## Pas de comptes : un code de foyer et des prénoms
 
@@ -111,12 +167,91 @@ php bin/console app:products:detect-traits             # application
 ## L'IA ne modifie jamais l'inventaire
 
 Le générateur de recettes reçoit un inventaire **structuré** (clé stable, quantité,
-unité, état du produit, urgence de péremption), pas une liste de noms. Il renvoie une
-`stockConsumptionProposal`.
+unité, état du produit, urgence de péremption, fiabilité de la quantité), pas une
+liste de noms. Il renvoie une `stockConsumptionProposal`.
 
 Cette proposition est **revalidée intégralement côté serveur** avant toute écriture :
 clé inexistante, unité incompatible ou quantité invalide sont rejetées. L'utilisateur
 confirme ensuite explicitement dans l'application, puis seulement le stock est déduit.
+
+## Les exclusions alimentaires sont vérifiées, pas demandées
+
+Écrire « ne propose aucune recette avec des arachides » dans la consigne du modèle
+n'est pas une garantie : rien ne l'oblige à la suivre, et il suffit qu'il l'ignore une
+fois. Une allergie ne se demande pas poliment, elle se vérifie.
+
+L'exclusion est donc appliquée **deux fois**, et cette redondance est délibérée :
+
+- **en amont** — un aliment exclu ne figure pas dans l'inventaire transmis au modèle.
+  Le meilleur moyen qu'une recette ne propose pas un allergène est qu'il ne lui soit
+  jamais montré ;
+- **en aval** — chaque recette renvoyée est relue : titre, résumé, ingrédients,
+  ingrédients à acheter, substitutions, **chaque étape**, et la proposition de
+  consommation. Une recette qui touche un aliment exclu est **écartée**, pas annotée.
+  Afficher « attention, contient des arachides » reviendrait à déléguer la
+  vérification à celui qui lit.
+
+Un troisième contrôle a lieu **à la confirmation** : une proposition ancienne, reçue
+avant qu'une allergie ne soit déclarée, ne peut pas déduire un aliment exclu.
+
+Un allergène ne se nomme presque jamais par son nom — personne n'écrit « arachide »
+dans une recette, on y lit « beurre de cacahuète » ou « satay ». `App\Enum\Allergen`
+fait cette traduction pour les 14 allergènes réglementaires et quelques régimes, et
+c'est elle qui fait tout le travail.
+
+Deux pièges symétriques, tous deux couverts par des contre-exemples testés un par un :
+
+| Le contrôle doit trouver | Le contrôle ne doit PAS trouver |
+| --- | --- |
+| « beurre de cacahuète » → arachide | « lait de coco » → lait |
+| « satay » → arachide | « farine de riz » → gluten |
+| « semoule » → gluten | « pain **sans** gluten » → gluten |
+| « moules marinières » → mollusque | « moule à gâteau » → mollusque |
+| « noix de cajou » → fruits à coque | « noix de coco », « noix de muscade » |
+| « vin blanc » → alcool | « vinaigre de vin » → alcool |
+
+Le faux négatif met quelqu'un en danger ; le faux positif rend le contrôle
+inutilisable, donc pousse à le désactiver — ce qui revient au premier cas.
+
+Les recettes écartées sont **annoncées** à l'utilisateur, avec le terme trouvé et
+l'endroit où il l'a été : une proposition qui disparaît sans explication ressemble à
+une panne, alors que c'est le contrôle qui a fonctionné.
+
+## Une confirmation de recette ne peut pas déduire deux fois
+
+Le mobile confirmait une recette avec son seul nom. Une réponse réseau perdue, suivie
+d'une nouvelle tentative, déduisait donc **deux fois** — et rien dans la requête ne
+permettait au serveur de reconnaître qu'il s'agissait du même geste.
+
+Chaque confirmation porte désormais une **clé d'opération** choisie par l'application,
+et `stock_operation` la rend unique par foyer. Quatre garanties en découlent :
+
+1. **Idempotence** — rejouer la même clé ne réécrit rien : le serveur relit la réponse
+   figée de la première exécution et le dit (`replayed: true`).
+2. **Atomicité** — les lots candidats sont verrouillés, FEFO est recalculé **à
+   l'intérieur** de la transaction, et un plan devenu incomplet n'écrit **rien du
+   tout**. Auparavant les plans étaient calculés avant la transaction, et une
+   allocation partielle suffisait à déclencher l'écriture. Le serveur répond alors
+   `409` avec ce qui reste réellement disponible.
+3. **Honnêteté** — deux lignes du même ingrédient sont fusionnées avant planification.
+   Sans cela, chacune réservait le même lot, et le plafonnement silencieux faisait
+   annoncer une quantité qui n'avait pas été retirée.
+4. **Traçabilité** — tous les mouvements d'une même recette partagent l'identifiant de
+   l'opération : le journal se lit geste par geste.
+
+`StockService::transactional()` remonte la frontière transactionnelle au niveau de
+l'opération complète : un service bas niveau ne décide plus seul de quand écrire.
+
+## Archiver plutôt que supprimer
+
+Supprimer un lot effaçait ses mouvements en cascade — le journal disparaissait
+précisément dans le cas où il aurait servi : « qui a retiré ce lot, et que restait-il
+dessus ? ».
+
+`DELETE /stock-items/{id}` **archive** désormais : ce qui restait est journalisé comme
+retiré, la ligne quitte l'inventaire, et l'historique demeure. `POST
+/stock-items/{id}/restore` défait le geste, `GET /stock-items?archived=1` liste les
+archives.
 
 ## Démarrer
 
@@ -330,15 +465,24 @@ effacerait toute correction faite à la main :
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 74 tests
+cd backend && php vendor/bin/phpunit    # 132 tests
 cd mobile  && npx tsc --noEmit
 ```
 
 Les tests couvrent la logique dont une erreur corromprait l'inventaire — conversion
 d'unités, correction d'unité entre familles, normalisation des noms d'ingrédients,
-détection de l'état des produits, allocation FEFO, chaque mouvement de stock — et
-celle dont une erreur ouvrirait un foyer : génération du code, tolérance de saisie,
-refus d'un code absent, faux, ou appartenant à un autre foyer.
+identité des variantes, détection de l'état des produits, allocation FEFO,
+consolidation d'une proposition, archivage, chaque mouvement de stock — celle dont
+une erreur ouvrirait un foyer — génération du code, tolérance de saisie, refus d'un
+code absent, faux, ou appartenant à un autre foyer — et celle dont une erreur
+mettrait quelqu'un en danger : chaque contre-exemple du tableau des exclusions
+alimentaires a son test.
+
+> **Ce que les tests ne couvrent pas.** La concurrence réelle — deux confirmations
+> simultanées sur les mêmes lots — demanderait une base de test dédiée. Elle n'est pas
+> automatisée : la garantie repose sur le verrouillage pessimiste et sur la contrainte
+> unique `(foyer, clé d'opération)`, tous deux portés par PostgreSQL. Le rejeu d'une
+> même clé, lui, se vérifie en deux requêtes identiques sur `/recipes/confirm`.
 
 ## API
 
@@ -357,9 +501,12 @@ qui écrivent exigent en plus `X-Member`.
 | `DELETE` | `/households/{id}/members/{memberId}` | Retire un membre (l'historique subsiste) |
 | `GET` | `/reference` | Unités, emplacements, catégories, équipements |
 | `GET` | `/products/barcode/{barcode}` | Résolution d'un code-barres (cache puis Open Food Facts) |
-| `POST` | `/products` | Création manuelle d'un produit |
-| `GET` `POST` | `/stock-items` | Inventaire filtrable ; ajout d'un lot |
-| `GET` `PATCH` `DELETE` | `/stock-items/{id}` | Fiche d'un lot |
+| `GET` | `/products/shelf-life` | Durée de conservation estimée d'un aliment, et sa justification |
+| `POST` | `/products` | Contribue une fiche au catalogue — **code-barres obligatoire** |
+| `GET` `POST` | `/stock-items` | Inventaire filtrable ; ajout d'un ou plusieurs lots (`batches`) |
+| `GET` `PATCH` | `/stock-items/{id}` | Fiche d'un lot et ses lots frères |
+| `DELETE` | `/stock-items/{id}` | Archive le lot ; l'historique est conservé |
+| `POST` | `/stock-items/{id}/restore` | Sort un lot des archives |
 | `POST` | `/stock-items/{id}/consume` | `all` · `package` · `units` · `quantity` |
 | `POST` | `/stock-items/{id}/add` | Réapprovisionnement |
 | `POST` | `/stock-items/{id}/correct` | Quantité exacte ou estimation |
@@ -388,10 +535,20 @@ qui écrivent exigent en plus `X-Member`.
   fiche. Entre deux familles, aucune conversion n'existe : la quantité restante est
   redemandée plutôt que devinée. Un mouvement de correction en garde la trace, et le
   conditionnement de référence d'un produit saisi à la main suit la correction.
-- **Plusieurs lots, plusieurs dates** — consommation FEFO par défaut.
-- **Plat maison sans code-barres** — saisie libre avec nom, quantité et unité.
+- **Plusieurs lots, plusieurs dates** — saisis en un geste, consommés FEFO.
+- **Aucune date imprimée** — fruits, légumes, vrac, restes : la durée de conservation
+  est estimée à partir de l'aliment et de son rangement, et signalée comme estimation.
+- **Plat maison sans code-barres** — saisie libre : elle crée une variante du foyer,
+  et ne pollue plus le catalogue partagé mondialement.
+- **Même aliment sous deux formes** — tomates fraîches et en conserve font deux lignes
+  d'inventaire, avec leurs quantités et leurs états propres.
 - **Consommation supérieure au stock** — bornée au restant ; le mouvement journalisé
-  porte la quantité réellement retirée, jamais celle demandée.
+  porte la quantité réellement retirée, jamais celle demandée. Pour une recette, un
+  plan incomplet n'écrit rien du tout et renvoie ce qui reste disponible.
+- **Confirmation envoyée deux fois** — la clé d'opération la rend rejouable sans
+  seconde déduction.
+- **Recette proposant un allergène** — écartée par un contrôle automatique, jamais
+  seulement signalée.
 
 ## Hors périmètre du MVP
 

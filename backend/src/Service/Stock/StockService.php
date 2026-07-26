@@ -5,16 +5,17 @@ declare(strict_types=1);
 namespace App\Service\Stock;
 
 use App\Entity\Household;
-use App\Entity\Product;
-use App\Entity\StockItem;
+use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
+use App\Entity\StockItem;
 use App\Entity\StockMovement;
+use App\Entity\StockOperation;
 use App\Enum\FillLevel;
 use App\Enum\MovementType;
-use App\Enum\ProductSource;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Exception\StockException;
+use App\Service\Product\VariantResolver;
 use App\Service\UnitConverter;
 use Doctrine\ORM\EntityManagerInterface;
 
@@ -22,19 +23,53 @@ use Doctrine\ORM\EntityManagerInterface;
  * Point d'entrée unique pour toute variation de stock.
  *
  * Règle invariante : aucune quantité ne change sans qu'un StockMovement soit écrit.
+ *
+ * Seconde règle, ajoutée avec les opérations idempotentes : **un service bas niveau
+ * ne décide plus seul de la frontière transactionnelle.** Chaque méthode écrivait
+ * son propre `flush()`, ce qui rendait impossible d'appliquer une recette entière
+ * en un seul geste atomique — une déduction pouvait rester écrite alors que la
+ * suivante échouait. `transactional()` suspend ces `flush()` intermédiaires et
+ * n'en fait plus qu'un, à la fin, dans une transaction.
  */
 class StockService
 {
+    /**
+     * Profondeur d'imbrication des appels à `transactional()`.
+     * Tant qu'elle est non nulle, les écritures attendent la fin de l'opération.
+     */
+    private int $deferred = 0;
+
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly UnitConverter $converter,
+        private readonly ?VariantResolver $variants = null,
     ) {
+    }
+
+    /**
+     * Exécute un ensemble de mutations comme une seule opération.
+     *
+     * @template T
+     *
+     * @param callable():T $work
+     *
+     * @return T
+     */
+    public function transactional(callable $work): mixed
+    {
+        ++$this->deferred;
+
+        try {
+            return $this->entityManager->wrapInTransaction($work);
+        } finally {
+            --$this->deferred;
+        }
     }
 
     public function add(
         Household $household,
         Member $author,
-        Product $product,
+        HouseholdProductVariant $variant,
         int $numberOfPackages,
         float $quantityPerPackage,
         Unit $unit,
@@ -43,6 +78,7 @@ class StockService
         ?\DateTimeImmutable $expirationDate = null,
         ?string $note = null,
         bool $quantityIsEstimated = false,
+        bool $expirationIsEstimated = false,
     ): StockItem {
         if ($numberOfPackages < 1) {
             throw new StockException('Le nombre d\'exemplaires doit être au moins égal à 1.');
@@ -50,20 +86,34 @@ class StockService
         if ($quantityPerPackage <= 0) {
             throw new StockException('La quantité par exemplaire doit être strictement positive.');
         }
+        if ($variant->getUnitFamily() !== $unit->family()) {
+            throw new StockException(sprintf(
+                '« %s » se compte en %s dans votre inventaire : un lot en %s formerait une autre ligne.',
+                $variant->getName(),
+                mb_strtolower($variant->getUnitFamily()->label()),
+                $unit->label(),
+            ));
+        }
 
         $total = round($numberOfPackages * $quantityPerPackage, 3);
 
-        $item = new StockItem($household, $product, $total, $unit, $location);
+        $item = new StockItem($household, $variant, $total, $unit, $location);
         $item->setNumberOfPackages($numberOfPackages);
         $item->setPurchaseDate($purchaseDate ?? new \DateTimeImmutable('today'));
-        $item->setExpirationDate($expirationDate);
         $item->setNote($note);
         $item->setQuantityIsEstimated($quantityIsEstimated);
         $item->setAddedBy($author);
 
+        // Une date lue sur l'emballage n'est jamais marquée comme estimée.
+        if ($expirationIsEstimated) {
+            $item->setEstimatedExpirationDate($expirationDate);
+        } else {
+            $item->setExpirationDate($expirationDate);
+        }
+
         $this->entityManager->persist($item);
         $this->record($item, MovementType::Addition, $total, $author, 'Ajout au stock');
-        $this->entityManager->flush();
+        $this->flush();
 
         return $item;
     }
@@ -78,6 +128,7 @@ class StockService
         Unit $unit,
         Member $author,
         ?string $reason = null,
+        ?StockOperation $operation = null,
     ): StockMovement {
         if ($quantity <= 0) {
             throw new StockException('La quantité consommée doit être strictement positive.');
@@ -92,8 +143,8 @@ class StockService
 
         $item->setRemainingQuantity($item->getRemainingQuantity() - $applied);
 
-        $movement = $this->record($item, MovementType::Consumption, -$applied, $author, $reason ?? 'Consommation');
-        $this->entityManager->flush();
+        $movement = $this->record($item, MovementType::Consumption, -$applied, $author, $reason ?? 'Consommation', $operation);
+        $this->flush();
 
         return $movement;
     }
@@ -149,7 +200,7 @@ class StockService
         $item->setInitialQuantity(max($item->getInitialQuantity(), $item->getRemainingQuantity()));
 
         $movement = $this->record($item, MovementType::Addition, $inItemUnit, $author, $reason ?? 'Réapprovisionnement');
-        $this->entityManager->flush();
+        $this->flush();
 
         return $movement;
     }
@@ -177,7 +228,7 @@ class StockService
         $item->setQuantityIsEstimated(false);
 
         $movement = $this->record($item, MovementType::Correction, $delta, $author, $reason ?? 'Correction manuelle');
-        $this->entityManager->flush();
+        $this->flush();
 
         return $movement;
     }
@@ -190,6 +241,11 @@ class StockService
      * - même famille (g → kg) : la quantité physique ne change pas, on la convertit ;
      * - familles différentes (g → unité) : aucune conversion n'existe, la nouvelle
      *   quantité devient obligatoire. On refuse plutôt que de deviner.
+     *
+     * Changer de famille change aussi l'identité culinaire du lot : il rejoint la
+     * variante correspondante du foyer, sinon l'inventaire additionnerait des
+     * grammes à des pièces. Le catalogue partagé, lui, n'est plus touché — c'était
+     * un effet de bord entre foyers.
      *
      * Le mouvement journalisé porte une quantité nulle : un écart entre deux familles
      * n'aurait aucun sens. C'est son motif qui rend le journal lisible.
@@ -233,12 +289,8 @@ class StockService
 
         $item->setUnit($newUnit);
 
-        // Le conditionnement de référence d'un produit saisi à la main suit la correction :
-        // le prochain ajout du même aliment repartira de la bonne unité. Les fiches
-        // Open Food Facts, elles, sont partagées entre foyers et ne sont jamais réécrites ici.
-        $product = $item->getProduct();
-        if (ProductSource::Manual === $product->getSource()) {
-            $product->setPackageUnit($newUnit);
+        if (!$sameFamily && null !== $this->variants) {
+            $item->setVariant($this->variants->forUnitFamily($item->getVariant(), $newUnit->family()));
         }
 
         $movement = $this->record(
@@ -253,7 +305,7 @@ class StockService
                 $newUnit->label(),
             ),
         );
-        $this->entityManager->flush();
+        $this->flush();
 
         return $movement;
     }
@@ -265,7 +317,7 @@ class StockService
 
         if (null === $ratio) {
             $item->setQuantityIsEstimated(true);
-            $this->entityManager->flush();
+            $this->flush();
 
             return null;
         }
@@ -279,7 +331,7 @@ class StockService
         );
 
         $item->setQuantityIsEstimated(true);
-        $this->entityManager->flush();
+        $this->flush();
 
         return $movement;
     }
@@ -287,7 +339,7 @@ class StockService
     public function markOpened(StockItem $item, bool $opened): StockItem
     {
         $item->setOpenedAt($opened ? ($item->getOpenedAt() ?? new \DateTimeImmutable()) : null);
-        $this->entityManager->flush();
+        $this->flush();
 
         return $item;
     }
@@ -303,15 +355,48 @@ class StockService
         $item->setRemainingQuantity(0);
 
         $movement = $this->record($item, MovementType::Deletion, -$discarded, $author, $reason ?? 'Produit jeté');
-        $this->entityManager->flush();
+        $this->flush();
 
         return $movement;
     }
 
-    public function delete(StockItem $item): void
+    /**
+     * Sort le lot de l'inventaire sans effacer son passé.
+     *
+     * La suppression physique emportait les mouvements en cascade : le journal
+     * disparaissait exactement dans le cas où il aurait servi — « qui a supprimé
+     * ce lot, et que restait-il dessus ? ». Ce qui reste est d'abord journalisé
+     * comme retiré, puis la ligne est archivée.
+     */
+    public function archive(StockItem $item, Member $author, ?string $reason = null): StockItem
     {
-        $this->entityManager->remove($item);
-        $this->entityManager->flush();
+        if ($item->isArchived()) {
+            return $item;
+        }
+
+        if (!$item->isEmpty()) {
+            $remaining = $item->getRemainingQuantity();
+            $item->setRemainingQuantity(0);
+            $this->record($item, MovementType::Deletion, -$remaining, $author, $reason ?? 'Lot archivé');
+        }
+
+        $item->archive();
+        $this->flush();
+
+        return $item;
+    }
+
+    public function restore(StockItem $item, Member $author): StockItem
+    {
+        if (!$item->isArchived()) {
+            return $item;
+        }
+
+        $item->restore();
+        $this->record($item, MovementType::Correction, 0.0, $author, 'Lot restauré depuis les archives');
+        $this->flush();
+
+        return $item;
     }
 
     /** « 1500 » plutôt que « 1500.0 », « 1.5 » plutôt que « 1.500 ». */
@@ -328,6 +413,7 @@ class StockService
         float $signedQuantity,
         Member $author,
         ?string $reason,
+        ?StockOperation $operation = null,
     ): StockMovement {
         $movement = new StockMovement(
             $item,
@@ -337,10 +423,19 @@ class StockService
             $item->getRemainingQuantity(),
             $reason,
             $author,
+            $operation,
         );
 
         $this->entityManager->persist($movement);
 
         return $movement;
+    }
+
+    /** Écrit — sauf si une opération plus large a pris la main sur la transaction. */
+    private function flush(): void
+    {
+        if (0 === $this->deferred) {
+            $this->entityManager->flush();
+        }
     }
 }

@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace App\Tests\Service;
 
 use App\Entity\Household;
+use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
-use App\Entity\Product;
 use App\Entity\StockItem;
 use App\Enum\FillLevel;
 use App\Enum\MovementType;
-use App\Enum\ProductSource;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Exception\StockException;
+use App\Service\Product\VariantIdentity;
 use App\Service\Stock\StockService;
 use App\Service\UnitConverter;
 use Doctrine\ORM\EntityManagerInterface;
@@ -181,29 +181,6 @@ class StockServiceTest extends TestCase
         self::assertStringContainsString('500 g → 2 unité', (string) $movement->getReason());
     }
 
-    /** Le prochain ajout du même aliment doit repartir de l'unité corrigée. */
-    public function testManualProductPackagingFollowsTheCorrection(): void
-    {
-        $item = $this->item(500, Unit::Gram);
-
-        $this->service->changeUnit($item, Unit::Piece, 2, $this->member);
-
-        self::assertSame(Unit::Piece, $item->getProduct()->getPackageUnit());
-    }
-
-    /** Une fiche Open Food Facts est partagée entre foyers : elle n'est jamais réécrite ici. */
-    public function testOpenFoodFactsProductPackagingIsLeftUntouched(): void
-    {
-        $product = new Product('Riz', 'riz', ProductSource::OpenFoodFacts);
-        $product->setPackageUnit(Unit::Gram);
-        $item = new StockItem($this->household, $product, 500, Unit::Gram, StorageLocation::Pantry);
-
-        $this->service->changeUnit($item, Unit::Piece, 2, $this->member);
-
-        self::assertSame(Unit::Piece, $item->getUnit());
-        self::assertSame(Unit::Gram, $product->getPackageUnit());
-    }
-
     public function testRunningLowThresholdReflectsWhatIsLeft(): void
     {
         $item = $this->item(1000, Unit::Gram);
@@ -214,10 +191,97 @@ class StockServiceTest extends TestCase
         self::assertSame('running_low', $item->getStatus());
     }
 
+    /**
+     * Le défaut corrigé : `remove()` emportait les mouvements en cascade, donc le
+     * journal disparaissait dans le seul cas où il servait vraiment.
+     */
+    public function testArchivingKeepsTheHistoryAndJournalsWhatWasLeft(): void
+    {
+        $item = $this->item(800, Unit::Gram);
+
+        $this->service->archive($item, $this->member, 'Rangement');
+
+        self::assertTrue($item->isArchived());
+        self::assertSame('archived', $item->getStatus());
+        self::assertSame(0.0, $item->getRemainingQuantity());
+        self::assertCount(1, $item->getMovements(), 'Le retrait doit rester tracé.');
+        self::assertSame(MovementType::Deletion, $item->getMovements()->first()->getType());
+        self::assertSame(-800.0, $item->getMovements()->first()->getQuantity());
+    }
+
+    public function testArchivingIsIdempotent(): void
+    {
+        $item = $this->item(800, Unit::Gram);
+
+        $this->service->archive($item, $this->member);
+        $archivedAt = $item->getArchivedAt();
+        $this->service->archive($item, $this->member);
+
+        self::assertSame($archivedAt, $item->getArchivedAt());
+        self::assertCount(1, $item->getMovements(), 'Archiver deux fois n\'écrit qu\'un mouvement.');
+    }
+
+    public function testRestoringBringsTheLotBackWithATrace(): void
+    {
+        $item = $this->item(800, Unit::Gram);
+        $this->service->archive($item, $this->member);
+
+        $this->service->restore($item, $this->member);
+
+        self::assertFalse($item->isArchived());
+        self::assertCount(2, $item->getMovements());
+    }
+
+    /** Une date déduite d'une durée de conservation ne se confond pas avec une date lue. */
+    public function testEstimatedExpirationIsFlaggedAsSuch(): void
+    {
+        $item = $this->item(1, Unit::Piece);
+
+        $item->setEstimatedExpirationDate(new \DateTimeImmutable('+4 days'));
+        self::assertTrue($item->isExpirationEstimated());
+
+        // Une date saisie ensuite est une certitude : le marqueur tombe.
+        $item->setExpirationDate(new \DateTimeImmutable('+10 days'));
+        self::assertFalse($item->isExpirationEstimated());
+    }
+
+    public function testClearingTheDateAlsoClearsTheEstimateFlag(): void
+    {
+        $item = $this->item(1, Unit::Piece);
+        $item->setEstimatedExpirationDate(new \DateTimeImmutable('+4 days'));
+
+        $item->setExpirationDate(null);
+
+        self::assertFalse($item->isExpirationEstimated());
+    }
+
+    /** Un lot ne peut pas rejoindre une variante qui ne se compte pas dans la même famille. */
+    public function testAddingInAnotherUnitFamilyThanTheVariantIsRejected(): void
+    {
+        $variant = $this->variant(Unit::Gram);
+
+        $this->expectException(StockException::class);
+
+        $this->service->add(
+            household: $this->household,
+            author: $this->member,
+            variant: $variant,
+            numberOfPackages: 1,
+            quantityPerPackage: 3,
+            unit: Unit::Piece,
+            location: StorageLocation::Pantry,
+        );
+    }
+
     private function item(float $quantity, Unit $unit): StockItem
     {
-        $product = new Product('Produit', 'produit', ProductSource::Manual);
+        return new StockItem($this->household, $this->variant($unit), $quantity, $unit, StorageLocation::Pantry);
+    }
 
-        return new StockItem($this->household, $product, $quantity, $unit, StorageLocation::Pantry);
+    private function variant(Unit $unit): HouseholdProductVariant
+    {
+        $identity = VariantIdentity::of('produit', $unit->family(), []);
+
+        return new HouseholdProductVariant($this->household, 'Produit', $identity, $identity->slugBase());
     }
 }

@@ -1,0 +1,315 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Service\Product;
+
+use App\Entity\Household;
+use App\Entity\HouseholdProductVariant;
+use App\Entity\Product;
+use App\Enum\DataOrigin;
+use App\Enum\ProductTrait;
+use App\Enum\Unit;
+use App\Enum\UnitFamily;
+use App\Exception\StockException;
+use App\Repository\HouseholdProductVariantRepository;
+use App\Service\IngredientKeyGenerator;
+use App\Service\ProductTraitDetector;
+use Doctrine\ORM\EntityManagerInterface;
+
+/**
+ * Trouve ou crée la variante d'un foyer — le point de passage unique vers
+ * l'identité culinaire locale d'un aliment.
+ *
+ * Deux règles y sont tenues, et elles vont dans le même sens :
+ *
+ * - **on ne fusionne jamais deux choses différentes.** Une clé identique dans une
+ *   autre famille d'unité, ou avec un autre état, donne une autre variante.
+ *   L'inventaire peut compter deux lignes « tomates » ; il ne peut plus additionner
+ *   des conserves à des fraîches ni perdre en silence des lots incompatibles ;
+ * - **on ne scinde jamais deux choses identiques.** L'identité est normalisée puis
+ *   hachée, et la base porte la contrainte : deux saisies équivalentes retombent
+ *   sur la même variante, quel que soit l'ordre des traits.
+ */
+class VariantResolver
+{
+    public function __construct(
+        private readonly HouseholdProductVariantRepository $variants,
+        private readonly IngredientKeyGenerator $keyGenerator,
+        private readonly ProductTraitDetector $traitDetector,
+        private readonly EntityManagerInterface $entityManager,
+    ) {
+    }
+
+    /**
+     * @param list<ProductTrait>|null $explicitTraits état choisi à la saisie ;
+     *                                                `null` = déduire du libellé
+     */
+    public function resolve(
+        Household $household,
+        ?Product $product,
+        string $name,
+        Unit $unit,
+        ?array $explicitTraits = null,
+        ?string $brand = null,
+        ?string $category = null,
+    ): HouseholdProductVariant {
+        $label = trim($name);
+        if ('' === $label) {
+            throw new StockException('Un aliment ne peut pas être enregistré sans nom.');
+        }
+
+        [$traits, $traitsOrigin] = $this->resolveTraits($product, $label, $category, $explicitTraits);
+
+        $identity = VariantIdentity::of(
+            $this->keyGenerator->generate($label),
+            $unit->family(),
+            $traits,
+        );
+
+        $existing = $this->variants->findOneByIdentity($household, $identity->hash());
+        if (null !== $existing) {
+            $this->completeMissingData($existing, $product, $brand, $category);
+
+            return $existing;
+        }
+
+        return $this->create(
+            $household,
+            $product,
+            $label,
+            $identity,
+            null !== $explicitTraits ? DataOrigin::User : $traitsOrigin,
+            $brand ?? $product?->getBrand(),
+            $category ?? $product?->getCategory(),
+        );
+    }
+
+    /**
+     * La variante jumelle d'une autre famille d'unité.
+     *
+     * Réparer « g » choisi au lieu de « unité » ne change pas l'aliment mais change
+     * son identité : le lot doit rejoindre la variante correspondante, sinon
+     * l'inventaire additionnerait des grammes à des pièces.
+     */
+    public function forUnitFamily(HouseholdProductVariant $variant, UnitFamily $family): HouseholdProductVariant
+    {
+        if ($variant->getUnitFamily() === $family) {
+            return $variant;
+        }
+
+        $identity = VariantIdentity::of($variant->getIngredientKey(), $family, $variant->getTraits());
+
+        return $this->variants->findOneByIdentity($variant->getHousehold(), $identity->hash())
+            ?? $this->create(
+                $variant->getHousehold(),
+                $variant->getProduct(),
+                $variant->getName(),
+                $identity,
+                $variant->getTraitsOrigin(),
+                $variant->getBrand(),
+                $variant->getCategory(),
+                $variant->getNameOrigin(),
+            );
+    }
+
+    /**
+     * Renomme la variante DANS CE FOYER et régénère sa clé culinaire.
+     *
+     * Les deux ne se dissocient pas : un nom corrigé sans clé régénérée
+     * rapprocherait l'aliment des mauvais lots à la prochaine recette.
+     */
+    public function rename(HouseholdProductVariant $variant, string $name): HouseholdProductVariant
+    {
+        $label = trim($name);
+        if ('' === $label) {
+            throw new StockException('Le nom d\'un aliment ne peut pas être vide.');
+        }
+
+        if ($label === $variant->getName()) {
+            return $variant;
+        }
+
+        $identity = VariantIdentity::of(
+            $this->keyGenerator->generate($label),
+            $variant->getUnitFamily(),
+            $variant->getTraits(),
+        );
+
+        $variant->setName($label);
+        $variant->setNameOrigin(DataOrigin::User);
+
+        return $this->reidentify($variant, $identity);
+    }
+
+    /** @param list<ProductTrait> $traits */
+    public function changeTraits(HouseholdProductVariant $variant, array $traits): HouseholdProductVariant
+    {
+        $identity = VariantIdentity::of(
+            $variant->getIngredientKey(),
+            $variant->getUnitFamily(),
+            $traits,
+        );
+
+        if ($identity->hash() === $variant->getIdentityHash()) {
+            return $variant;
+        }
+
+        $variant->setTraitsOrigin(DataOrigin::User);
+
+        return $this->reidentify($variant, $identity);
+    }
+
+    /**
+     * Applique une nouvelle identité, ou refuse quand elle en heurte une existante.
+     *
+     * Fusionner automatiquement paraîtrait serviable et serait exactement le défaut
+     * qu'on corrige : deux stocks distincts confondus sans que personne ne l'ait
+     * demandé. On signale, l'utilisateur décide.
+     */
+    private function reidentify(
+        HouseholdProductVariant $variant,
+        VariantIdentity $identity,
+    ): HouseholdProductVariant {
+        $collision = $this->variants->findOneByIdentity($variant->getHousehold(), $identity->hash());
+
+        if (null !== $collision && !$collision->getId()->equals($variant->getId())) {
+            throw new StockException(sprintf(
+                'Vous avez déjà « %s » dans votre inventaire. Consommez ou archivez ce lot, '
+                .'ou déplacez-le explicitement plutôt que de fusionner deux stocks distincts.',
+                $collision->getCulinaryLabel(),
+            ));
+        }
+
+        $variant->applyIdentity($identity);
+        $variant->setSlug($this->uniqueSlug($variant->getHousehold(), $identity, $variant->getSlug()));
+        $this->entityManager->flush();
+
+        return $variant;
+    }
+
+    /**
+     * @param list<ProductTrait>|null $explicit
+     *
+     * @return array{list<ProductTrait>, DataOrigin}
+     */
+    private function resolveTraits(
+        ?Product $product,
+        string $name,
+        ?string $category,
+        ?array $explicit,
+    ): array {
+        // Ce que quelqu'un a coché l'emporte sur ce qu'une machine a déduit.
+        if (null !== $explicit) {
+            return [$explicit, DataOrigin::User];
+        }
+
+        if (null !== $product && [] !== $product->getTraits()) {
+            return [$product->getTraits(), DataOrigin::Catalog];
+        }
+
+        return [
+            $this->traitDetector->detect($name, $category ?? $product?->getCategory()),
+            DataOrigin::Detected,
+        ];
+    }
+
+    private function create(
+        Household $household,
+        ?Product $product,
+        string $name,
+        VariantIdentity $identity,
+        DataOrigin $traitsOrigin,
+        ?string $brand,
+        ?string $category,
+        DataOrigin $nameOrigin = DataOrigin::Catalog,
+    ): HouseholdProductVariant {
+        $variant = new HouseholdProductVariant(
+            $household,
+            $name,
+            $identity,
+            $this->uniqueSlug($household, $identity),
+            null !== $product ? $nameOrigin : DataOrigin::User,
+            $traitsOrigin,
+        );
+        $variant->setProduct($product);
+        $variant->setBrand($brand);
+        $variant->setCategory($category);
+
+        $this->entityManager->persist($variant);
+        $this->entityManager->flush();
+
+        return $variant;
+    }
+
+    /**
+     * Un identifiant lisible et libre : `tomate`, puis `tomate-conserve`,
+     * puis `tomate-piece`, et seulement en dernier ressort `tomate-2`.
+     *
+     * Cet identifiant est recopié tel quel par le générateur de recettes : il doit
+     * dire ce qui distingue la variante. `tomate-piece` s'explique, `tomate-2` non.
+     * Le suffixe numérique ne survient donc que si deux variantes diffèrent par un
+     * trait qui ne change pas la nature de l'aliment — épluché, coupé.
+     */
+    private function uniqueSlug(Household $household, VariantIdentity $identity, ?string $keep = null): string
+    {
+        $base = $identity->slugBase();
+        $taken = array_flip($this->variants->takenSlugs($household, $base));
+
+        if (null !== $keep) {
+            unset($taken[$keep]);
+        }
+
+        if (!isset($taken[$base])) {
+            return $base;
+        }
+
+        // Deux stocks du même aliment comptés différemment : le dire.
+        $byFamily = sprintf('%s-%s', $base, $identity->unitFamily->slug());
+        if (!isset($taken[$byFamily])) {
+            return $byFamily;
+        }
+
+        for ($suffix = 2; $suffix < 1000; ++$suffix) {
+            $candidate = sprintf('%s-%d', $base, $suffix);
+
+            if (!isset($taken[$candidate])) {
+                return $candidate;
+            }
+        }
+
+        return sprintf('%s-%s', $base, substr($identity->hash(), 0, 8));
+    }
+
+    /**
+     * Une variante née d'une saisie libre peut être rattrapée par un scan :
+     * on complète alors ce qui manquait, sans jamais écraser une correction locale.
+     */
+    private function completeMissingData(
+        HouseholdProductVariant $variant,
+        ?Product $product,
+        ?string $brand,
+        ?string $category,
+    ): void {
+        $changed = false;
+
+        if (null !== $product && null === $variant->getProduct()) {
+            $variant->setProduct($product);
+            $changed = true;
+        }
+
+        if (null === $variant->getBrand() && null !== ($brand ?? $product?->getBrand())) {
+            $variant->setBrand($brand ?? $product?->getBrand());
+            $changed = true;
+        }
+
+        if (null === $variant->getCategory() && null !== ($category ?? $product?->getCategory())) {
+            $variant->setCategory($category ?? $product?->getCategory());
+            $changed = true;
+        }
+
+        if ($changed) {
+            $this->entityManager->flush();
+        }
+    }
+}

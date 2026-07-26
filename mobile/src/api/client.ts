@@ -9,6 +9,7 @@ import type {
   Product,
   ProductTraitValue,
   Reference,
+  ShelfLifeEstimate,
   StockItem,
   StockMovement,
   SuggestionResponse,
@@ -111,6 +112,23 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return payload as T;
 }
 
+/**
+ * Une date de péremption, et ce qu'on ajoute à cette date.
+ *
+ * Trois yaourts pour le 27 et deux pour le 3 août, c'est un seul passage en
+ * caisse mais deux lots : les fondre en un seul ferait mentir la date la plus
+ * proche, donc les alertes et la consommation FEFO.
+ */
+export interface StockBatchInput {
+  numberOfPackages?: number;
+  quantityPerPackage?: number;
+  expirationDate?: string | null;
+  /** Aucune date imprimée : le serveur la déduit d'une durée de conservation. */
+  estimateExpiration?: boolean;
+  storageLocation?: string;
+  note?: string;
+}
+
 export interface CreateStockItemInput {
   productId?: string;
   barcode?: string;
@@ -122,10 +140,13 @@ export interface CreateStockItemInput {
   unit: Unit;
   storageLocation: string;
   expirationDate?: string | null;
+  estimateExpiration?: boolean;
   note?: string;
   quantityIsEstimated?: boolean;
   /** Omis, l'état est déduit du libellé côté serveur. */
   traits?: ProductTraitValue[];
+  /** Une entrée par date de péremption. Omis, un seul lot est créé. */
+  batches?: StockBatchInput[];
 }
 
 export interface StockFilters {
@@ -133,6 +154,8 @@ export interface StockFilters {
   category?: string;
   search?: string;
   expiringWithinDays?: number;
+  /** Les lots archivés ne remontent que si on les demande. */
+  archived?: boolean;
 }
 
 export const api = {
@@ -192,6 +215,7 @@ export const api = {
     if (filters.expiringWithinDays !== undefined) {
       query.set('expiringWithinDays', String(filters.expiringWithinDays));
     }
+    if (filters.archived) query.set('archived', '1');
     const suffix = query.toString();
 
     return request<{ items: StockItem[] }>(`/stock-items${suffix ? `?${suffix}` : ''}`);
@@ -199,13 +223,38 @@ export const api = {
 
   stockItem: (id: string) => request<StockItem>(`/stock-items/${id}`),
 
+  /** Un ajout crée un lot par date de péremption : la réponse est donc une liste. */
   createStockItem: (body: CreateStockItemInput) =>
-    request<StockItem>('/stock-items', { method: 'POST', body }),
+    request<{ items: StockItem[] }>('/stock-items', { method: 'POST', body }),
 
   updateStockItem: (id: string, body: Record<string, unknown>) =>
     request<StockItem>(`/stock-items/${id}`, { method: 'PATCH', body }),
 
-  deleteStockItem: (id: string) => request<void>(`/stock-items/${id}`, { method: 'DELETE' }),
+  /**
+   * Archive le lot : il quitte l'inventaire mais son journal survit, et le geste
+   * se défait. Une suppression physique effaçait l'historique en cascade —
+   * précisément dans le cas où il aurait servi.
+   */
+  archiveStockItem: (id: string, reason?: string) =>
+    request<StockItem>(`/stock-items/${id}`, { method: 'DELETE', body: { reason } }),
+
+  restoreStockItem: (id: string) =>
+    request<StockItem>(`/stock-items/${id}/restore`, { method: 'POST' }),
+
+  /** Combien de temps cet aliment se garde-t-il, et pourquoi. */
+  shelfLife: (params: {
+    name: string;
+    category?: string | null;
+    storageLocation?: string;
+    traits?: ProductTraitValue[];
+  }) => {
+    const query = new URLSearchParams({ name: params.name });
+    if (params.category) query.set('category', params.category);
+    if (params.storageLocation) query.set('storageLocation', params.storageLocation);
+    if (params.traits?.length) query.set('traits', params.traits.join(','));
+
+    return request<ShelfLifeEstimate>(`/products/shelf-life?${query.toString()}`);
+  },
 
   consume: (id: string, body: Record<string, unknown>) =>
     request<StockItem>(`/stock-items/${id}/consume`, { method: 'POST', body }),
@@ -245,9 +294,17 @@ export const api = {
     allowExtraIngredients: boolean;
   }) => request<SuggestionResponse>('/recipes/suggest', { method: 'POST', body }),
 
-  confirmRecipe: (recipeName: string, proposal: ConsumptionLine[]) =>
+  /**
+   * `operationKey` rend la confirmation rejouable sans effet supplémentaire.
+   *
+   * C'est ce qui manquait : la requête ne portait que le nom de la recette, donc
+   * une réponse réseau perdue suivie d'une nouvelle tentative déduisait deux fois.
+   * La clé reste la même pour une proposition donnée, y compris après un retour
+   * en arrière ou une erreur.
+   */
+  confirmRecipe: (operationKey: string, recipeName: string, proposal: ConsumptionLine[]) =>
     request<ConfirmationResponse>('/recipes/confirm', {
       method: 'POST',
-      body: { recipeName, stockConsumptionProposal: proposal },
+      body: { operationKey, recipeName, stockConsumptionProposal: proposal },
     }),
 };

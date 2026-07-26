@@ -29,6 +29,27 @@ export default function RecipeListScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      {/* Une proposition qui disparaît sans explication ressemble à une panne.
+          C'est au contraire le contrôle des exclusions qui a fonctionné. */}
+      {suggestion.rejected.length > 0 ? (
+        <View style={styles.rejected}>
+          <Text style={styles.rejectedTitle}>
+            {suggestion.rejected.length === 1
+              ? '1 proposition écartée'
+              : `${suggestion.rejected.length} propositions écartées`}
+          </Text>
+          {suggestion.rejected.map((entry, position) => (
+            <Text key={`rejected-${position}`} style={styles.rejectedLine}>
+              « {entry.recipeName} » — {entry.reason}
+            </Text>
+          ))}
+          <Text style={styles.rejectedFooter}>
+            Chaque recette est relue avant affichage : titre, ingrédients, adaptations
+            et étapes comprises.
+          </Text>
+        </View>
+      ) : null}
+
       {sorted.map((recipe) => {
         const originalIndex = suggestion.recipes.indexOf(recipe);
         return (
@@ -105,4 +126,13 @@ const styles = StyleSheet.create({
   metaSeparator: { fontSize: 13, color: colors.inkMuted, marginHorizontal: spacing.sm },
   missing: { fontSize: 13, color: colors.accent, marginTop: spacing.md, fontWeight: '600' },
   substitution: { fontSize: 13, color: colors.info, marginTop: spacing.xs },
+  rejected: {
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  rejectedTitle: { fontSize: 14, fontWeight: '700', color: colors.accent },
+  rejectedLine: { fontSize: 13, color: colors.accent, marginTop: spacing.xs, lineHeight: 19 },
+  rejectedFooter: { fontSize: 12, color: colors.accent, marginTop: spacing.sm, lineHeight: 17 },
 });

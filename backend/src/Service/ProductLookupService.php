@@ -61,6 +61,13 @@ class ProductLookupService
         return $product;
     }
 
+    /**
+     * Ajoute au catalogue partagé une fiche qu'Open Food Facts ne connaît pas.
+     *
+     * Un code-barres déjà connu renvoie la fiche existante plutôt que d'en créer
+     * une seconde : la colonne est unique, et deux fiches pour un même produit
+     * scinderaient l'inventaire de tous les foyers qui le scannent.
+     */
     public function createManual(
         string $name,
         ?string $brand = null,
@@ -69,6 +76,14 @@ class ProductLookupService
         ?Unit $packageUnit = null,
         ?string $barcode = null,
     ): Product {
+        if (null !== $barcode && '' !== $barcode) {
+            $existing = $this->products->findOneByBarcode($barcode);
+
+            if (null !== $existing) {
+                return $existing;
+            }
+        }
+
         $product = new Product($name, $this->keyGenerator->generate($name), ProductSource::Manual);
         $product->setBrand($brand);
         $product->setCategory($category);
@@ -86,8 +101,8 @@ class ProductLookupService
     private function applyRemoteData(Product $product, OpenFoodFactsProduct $remote): void
     {
         $product->setBarcode($remote->barcode);
-        $product->setName($remote->name);
-        $product->setIngredientKey($this->keyGenerator->generate($remote->name));
+        // Nom et clé culinaire changent ensemble, jamais l'un sans l'autre.
+        $product->renameFromCatalog($remote->name, $this->keyGenerator->generate($remote->name));
         $product->setBrand($remote->brand);
         $product->setCategory($remote->category);
 

@@ -53,6 +53,33 @@ class IngredientKeyGeneratorTest extends TestCase
         self::assertSame('huile-olive', $this->generator->generate("Huile d'olive bio"));
     }
 
+    /**
+     * Le cas rencontré en base : « Carottes en rondelles, Surgelé » donnait
+     * `carotte-rondelle`, mais « Carottes en Rondelles Surgelés » donnait
+     * `carotte-rondelle-surgele`. Le même aliment sous deux clés, donc deux
+     * variantes que rien ne distinguait à l'écran.
+     */
+    public function testNoiseWordsAreIgnoredAtThePluralToo(): void
+    {
+        self::assertSame(
+            $this->generator->generate('Carottes en rondelles, Surgelé'),
+            $this->generator->generate('Carottes en Rondelles Surgelés'),
+        );
+        self::assertSame('carotte-rondelle', $this->generator->generate('Carottes en Rondelles Surgelés'));
+        self::assertSame('tomate', $this->generator->generate('Tomates bios'));
+    }
+
+    /**
+     * Chercher le mot vide au singulier ne doit pas se mettre à effacer des
+     * aliments : seuls les mots qui n'identifient pas l'aliment disparaissent.
+     */
+    public function testAFoodIsNeverMistakenForANoiseWord(): void
+    {
+        self::assertSame('lentille', $this->generator->generate('Lentilles'));
+        self::assertSame('creme-fraiche', $this->generator->generate('Crèmes fraîches'));
+        self::assertSame('pomme-terre', $this->generator->generate('Pommes de terre'));
+    }
+
     public function testFallsBackWhenNothingUsableRemains(): void
     {
         self::assertSame('inconnu', $this->generator->generate('500 g'));

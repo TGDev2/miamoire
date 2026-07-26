@@ -161,10 +161,23 @@ export default function CookScreen() {
       </View>
 
       {household && household.dietaryExclusions.length > 0 ? (
+        <View style={styles.guarantee}>
+          <Text style={styles.guaranteeTitle}>
+            Exclusions vérifiées : {household.dietaryExclusions.join(', ')}
+          </Text>
+          <Text style={styles.guaranteeHint}>
+            Ces aliments ne sont pas seulement demandés au modèle : ils sont retirés de
+            l'inventaire qui lui est envoyé, et toute recette qui les nomme — jusque dans
+            ses étapes — est écartée avant de vous être montrée. Leurs dérivés comptent :
+            exclure l'arachide écarte aussi le beurre de cacahuète.
+          </Text>
+        </View>
+      ) : (
         <Text style={styles.exclusions}>
-          Exclusions appliquées : {household.dietaryExclusions.join(', ')}
+          Aucune exclusion enregistrée. Ajoutez-en dans Profil pour qu'elles soient
+          vérifiées automatiquement sur chaque recette.
         </Text>
-      ) : null}
+      )}
 
       <Button
         label="Proposer 3 recettes"
@@ -219,7 +232,15 @@ const styles = StyleSheet.create({
   },
   switchLabel: { fontSize: 15, fontWeight: '600', color: colors.ink },
   switchHint: { fontSize: 13, color: colors.inkMuted, marginTop: 2, lineHeight: 18 },
-  exclusions: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.md },
+  exclusions: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.md, lineHeight: 19 },
+  guarantee: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  guaranteeTitle: { fontSize: 14, fontWeight: '700', color: colors.primary },
+  guaranteeHint: { fontSize: 13, color: colors.primary, marginTop: spacing.xs, lineHeight: 19 },
   submit: { marginTop: spacing.xl },
   disclaimer: {
     fontSize: 12,

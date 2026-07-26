@@ -41,6 +41,41 @@ enum ProductTrait: string
         };
     }
 
+    /**
+     * Un trait de forme change la nature culinaire de l'aliment, pas seulement sa
+     * préparation : des tomates en conserve et des tomates fraîches ne sont pas
+     * deux états d'un même stock, ce sont deux ingrédients.
+     *
+     * Ce sont eux qui nomment la variante — « tomate-conserve » — et qui rendent
+     * l'inventaire lisible pour le générateur de recettes. « Épluché » ou « coupé »
+     * décrivent un travail déjà fait, pas un aliment différent.
+     */
+    public function isForm(): bool
+    {
+        return match ($this) {
+            self::Canned, self::Frozen, self::Dried,
+            self::Precooked, self::Cooked, self::ReadyToEat => true,
+            self::Peeled, self::Sliced, self::Sweetened, self::Unsweetened => false,
+        };
+    }
+
+    /** Fragment lisible utilisé dans l'identifiant d'une variante. */
+    public function slug(): string
+    {
+        return match ($this) {
+            self::Canned => 'conserve',
+            self::Frozen => 'surgele',
+            self::Dried => 'sec',
+            self::Peeled => 'epluche',
+            self::Precooked => 'precuit',
+            self::Cooked => 'cuit',
+            self::ReadyToEat => 'pret',
+            self::Sliced => 'coupe',
+            self::Sweetened => 'sucre',
+            self::Unsweetened => 'nature',
+        };
+    }
+
     /** Ce que le générateur de recettes doit en déduire. */
     public function instruction(): string
     {

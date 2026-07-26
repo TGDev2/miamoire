@@ -11,13 +11,22 @@ import { colors, feasibilityPresentation, radius, spacing } from '../../src/them
 export default function RecipeDetailScreen() {
   const router = useRouter();
   const { index } = useLocalSearchParams<{ index: string }>();
-  const { suggestion } = useRecipes();
+  const { suggestion, operationKeyFor, confirmationFor, rememberConfirmation } = useRecipes();
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
 
-  const recipe = suggestion?.recipes[Number(index)];
+  const position = Number(index);
+  const recipe = suggestion?.recipes[position];
+
+  /**
+   * L'état de confirmation vit dans le contexte, pas dans cet écran.
+   *
+   * Un `useState` local se réinitialisait à chaque retour sur la page : le bouton
+   * se réarmait alors qu'une déduction avait déjà eu lieu.
+   */
+  const confirmation = confirmationFor(position);
+  const confirmed = confirmation !== undefined;
 
   if (!recipe) {
     return (
@@ -53,22 +62,27 @@ export default function RecipeDetailScreen() {
     setError(null);
     setBusy(true);
     try {
+      // La même clé à chaque tentative : réessayer après une réponse perdue ne
+      // déduit rien de plus, le serveur reconnaît le geste et rejoue sa réponse.
       const result = await api.confirmRecipe(
+        operationKeyFor(position),
         recipe!.recipeName,
         recipe!.stockConsumptionProposal,
       );
-      setConfirmed(true);
+      rememberConfirmation(position, result);
 
       const detail = result.lines
         .map(
           (line) =>
             `${line.label} : ${line.applied} ${line.unit}${
-              line.shortfall > 0 ? ` (il manquait ${line.shortfall})` : ''
+              line.quantityWasEstimated ? ' (quantité estimée, à vérifier)' : ''
             }`,
         )
         .join('\n');
 
-      Alert.alert('Stock mis à jour', detail, [
+      const title = result.replayed ? 'Déjà retiré du stock' : 'Stock mis à jour';
+
+      Alert.alert(title, detail, [
         { text: 'Voir mon stock', onPress: () => router.replace('/(tabs)') },
         { text: 'Rester ici', style: 'cancel' },
       ]);
@@ -147,8 +161,16 @@ export default function RecipeDetailScreen() {
             </View>
           ))}
           <Text style={styles.help}>
-            Les lots qui périment le plus tôt seront utilisés en premier.
+            Les lots qui périment le plus tôt seront utilisés en premier. Le retrait
+            est appliqué en une seule fois : si le stock a changé entre-temps, rien
+            n'est déduit.
           </Text>
+          {confirmation?.lines.some((line) => line.quantityWasEstimated) ? (
+            <Text style={styles.warning}>
+              Une des quantités retirées était estimée, pas mesurée. Vérifiez ce qu'il
+              reste réellement après le repas.
+            </Text>
+          ) : null}
           <Button
             label={confirmed ? 'Déjà retiré du stock' : 'Retirer ces quantités du stock'}
             onPress={askConfirmation}
@@ -222,5 +244,6 @@ const styles = StyleSheet.create({
   proposalLabel: { fontSize: 15, color: colors.ink },
   proposalQuantity: { fontSize: 15, fontWeight: '700', color: colors.danger },
   help: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.md, lineHeight: 19 },
+  warning: { fontSize: 13, color: colors.accent, marginTop: spacing.md, lineHeight: 19 },
   confirm: { marginTop: spacing.lg },
 });

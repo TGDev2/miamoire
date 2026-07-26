@@ -50,6 +50,18 @@ class StockMovement
     #[ORM\Column(type: 'string', length: 255, nullable: true)]
     private ?string $reason = null;
 
+    /**
+     * L'opération qui a produit ce mouvement.
+     *
+     * Une recette confirmée déduit plusieurs lots ; sans ce lien, rien ne disait
+     * que ces mouvements appartenaient au même geste — ni comment les annuler
+     * ensemble. `SET NULL` : purger les vieilles opérations ne doit pas amputer
+     * le journal.
+     */
+    #[ORM\ManyToOne(targetEntity: StockOperation::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?StockOperation $operation = null;
+
     /** Qui a fait le geste. Nullable : un membre supprimé ne doit pas effacer l'historique. */
     #[ORM\ManyToOne(targetEntity: Member::class)]
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
@@ -66,6 +78,7 @@ class StockMovement
         float $remainingAfter,
         ?string $reason = null,
         ?Member $createdBy = null,
+        ?StockOperation $operation = null,
     ) {
         $this->id = Uuid::v7();
         $this->stockItem = $stockItem;
@@ -75,6 +88,7 @@ class StockMovement
         $this->remainingAfter = round($remainingAfter, 3);
         $this->reason = $reason;
         $this->createdBy = $createdBy;
+        $this->operation = $operation;
         $this->createdAt = new \DateTimeImmutable();
 
         $stockItem->addMovement($this);
@@ -118,6 +132,11 @@ class StockMovement
     public function getCreatedBy(): ?Member
     {
         return $this->createdBy;
+    }
+
+    public function getOperation(): ?StockOperation
+    {
+        return $this->operation;
     }
 
     public function getCreatedAt(): \DateTimeImmutable

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Service\Inventory;
 
 use App\Entity\Household;
+use App\Entity\StockItem;
 use App\Repository\StockItemRepository;
+use App\Service\Ai\Safety\DietaryGuard;
 use App\Service\UnitConverter;
 
 /**
@@ -14,6 +16,16 @@ use App\Service\UnitConverter;
  * On n'envoie jamais à l'IA une simple liste de noms : elle a besoin de
  * quantités, d'unités et de l'urgence de péremption pour proposer un repas
  * réellement réalisable.
+ *
+ * Le regroupement se fait sur la **variante du foyer**, jamais sur la seule clé
+ * d'ingrédient. Trois défauts disparaissent avec ce changement :
+ *
+ * - des tomates fraîches et des tomates en conserve ne sont plus additionnées
+ *   sous l'union de leurs états ;
+ * - un lot exprimé dans une autre famille d'unité n'est plus ignoré en silence :
+ *   il forme sa propre ligne, puisque la famille fait partie de l'identité ;
+ * - `quantityIsEstimated`, porté par les lots depuis le début, remonte enfin
+ *   jusqu'au modèle.
  */
 class InventoryAggregator
 {
@@ -23,44 +35,48 @@ class InventoryAggregator
     ) {
     }
 
-    /** @return list<InventoryLine> */
-    public function aggregate(Household $household, int $expiringWithinDays = 3): array
-    {
-        /** @var array<string, array{label: string, base: float, unit: \App\Enum\Unit, expiresSoon: bool, earliest: ?\DateTimeImmutable, category: ?string, locations: array<string, true>, lots: int, traits: array<string, \App\Enum\ProductTrait>, notes: array<string, true>}> $grouped */
+    /**
+     * @param DietaryGuard|null $guard écarte les aliments exclus AVANT l'envoi au
+     *                                 modèle : le meilleur moyen qu'une recette ne
+     *                                 propose pas un allergène est qu'il ne lui soit
+     *                                 jamais montré
+     *
+     * @return list<InventoryLine>
+     */
+    public function aggregate(
+        Household $household,
+        int $expiringWithinDays = 3,
+        ?DietaryGuard $guard = null,
+    ): array {
+        /** @var array<string, array{item: StockItem, base: float, expiresSoon: bool, earliest: ?\DateTimeImmutable, estimatedExpiration: bool, estimatedQuantity: bool, locations: array<string, true>, lots: int, notes: array<string, true>}> $grouped */
         $grouped = [];
 
         foreach ($this->stockItems->findAvailable($household) as $item) {
-            $product = $item->getProduct();
-            $key = $product->getIngredientKey();
+            $variant = $item->getVariant();
+            $key = (string) $variant->getId();
+
+            if (null !== $guard && null !== $guard->inspect($variant->getCulinaryLabel(), 'inventaire')) {
+                continue;
+            }
 
             if (!isset($grouped[$key])) {
                 $grouped[$key] = [
-                    'label' => $product->getName(),
+                    'item' => $item,
                     'base' => 0.0,
-                    'unit' => $item->getUnit()->baseUnit(),
                     'expiresSoon' => false,
                     'earliest' => null,
-                    'category' => $product->getCategory(),
+                    'estimatedExpiration' => false,
+                    'estimatedQuantity' => false,
                     'locations' => [],
                     'lots' => 0,
-                    'traits' => [],
                     'notes' => [],
                 ];
-            }
-
-            // Familles différentes sous la même clé (rare) : on garde la première rencontrée.
-            if ($grouped[$key]['unit']->family() !== $item->getUnit()->family()) {
-                continue;
             }
 
             $grouped[$key]['base'] += $this->converter->toBase($item->getRemainingQuantity(), $item->getUnit());
             $grouped[$key]['lots']++;
             $grouped[$key]['locations'][$item->getStorageLocation()->value] = true;
-
-            // Union des états : deux lots d'une même clé peuvent différer (frais et surgelé).
-            foreach ($product->getTraits() as $trait) {
-                $grouped[$key]['traits'][$trait->value] = $trait;
-            }
+            $grouped[$key]['estimatedQuantity'] = $grouped[$key]['estimatedQuantity'] || $item->isQuantityEstimated();
 
             $note = $item->getNote();
             if (null !== $note && '' !== trim($note)) {
@@ -74,24 +90,30 @@ class InventoryAggregator
             $expiration = $item->getExpirationDate();
             if (null !== $expiration && (null === $grouped[$key]['earliest'] || $expiration < $grouped[$key]['earliest'])) {
                 $grouped[$key]['earliest'] = $expiration;
+                $grouped[$key]['estimatedExpiration'] = $item->isExpirationEstimated();
             }
         }
 
         $lines = [];
-        foreach ($grouped as $key => $data) {
-            $readable = $this->converter->humanize($data['base'], $data['unit']);
+        foreach ($grouped as $data) {
+            $variant = $data['item']->getVariant();
+            $readable = $this->converter->humanize($data['base'], $data['item']->getUnit()->baseUnit());
 
             $lines[] = new InventoryLine(
-                ingredientKey: $key,
-                label: $data['label'],
+                key: $variant->getSlug(),
+                variantId: (string) $variant->getId(),
+                label: $variant->getCulinaryLabel(),
+                name: $variant->getName(),
                 quantity: $readable['quantity'],
                 unit: $readable['unit'],
                 expiresSoon: $data['expiresSoon'],
                 earliestExpiration: $data['earliest'],
-                category: $data['category'],
+                expirationIsEstimated: $data['estimatedExpiration'],
+                quantityIsEstimated: $data['estimatedQuantity'],
+                category: $variant->getCategory(),
                 locations: array_keys($data['locations']),
                 lotCount: $data['lots'],
-                traits: array_values($data['traits']),
+                traits: $variant->getTraits(),
                 notes: array_keys($data['notes']),
             );
         }

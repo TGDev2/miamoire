@@ -12,8 +12,15 @@ use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Uid\Uuid;
 
 /**
- * La référence générale d'un produit — « Lait demi-écrémé Lactel, bouteille de 1 L ».
- * Ne porte JAMAIS de quantité possédée : c'est le rôle de StockItem.
+ * Le catalogue canonique — « Lait demi-écrémé Lactel, bouteille de 1 L ».
+ *
+ * Ne porte JAMAIS de quantité possédée : c'est le rôle de StockItem. Ne porte
+ * plus non plus de correction locale : c'est le rôle de HouseholdProductVariant.
+ *
+ * Cette table est la seule que tous les foyers partagent. Elle est donc écrite
+ * par une seule voie, `ProductLookupService`, à partir d'Open Food Facts ou d'une
+ * saisie explicite — jamais au fil de l'édition d'un lot. Un foyer qui corrige le
+ * nom d'un aliment corrige sa variante, et ne change rien pour les autres.
  *
  * Sert aussi de cache local pour Open Food Facts, dont les lectures produit
  * sont limitées à 15 requêtes/minute/IP.
@@ -102,18 +109,22 @@ class Product
         return $this->name;
     }
 
-    public function setName(string $name): void
-    {
-        $this->name = $name;
-    }
-
     public function getIngredientKey(): string
     {
         return $this->ingredientKey;
     }
 
-    public function setIngredientKey(string $ingredientKey): void
+    /**
+     * Renommer et reclasser sont un seul geste.
+     *
+     * Deux accesseurs indépendants laissaient renommer sans régénérer la clé :
+     * l'aliment gardait alors l'ancienne clé culinaire et se rapprochait des
+     * mauvais lots. L'invariant était pourtant déjà respecté par le
+     * rafraîchissement Open Food Facts ; il est maintenant impossible à enfreindre.
+     */
+    public function renameFromCatalog(string $name, string $ingredientKey): void
     {
+        $this->name = $name;
         $this->ingredientKey = $ingredientKey;
     }
 

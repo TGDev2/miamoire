@@ -1,8 +1,9 @@
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
+import type { Reference } from '../../src/api/types';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../../src/components/ui';
 import { clearExpiryNotifications, ensureExpiryAlerts } from '../../src/notifications/expiry';
@@ -22,6 +23,26 @@ export default function ProfileScreen() {
   const [alertStatus, setAlertStatus] = useState('Autorisation non vérifiée sur ce téléphone.');
   /** Code fraîchement régénéré : affiché immédiatement, avant tout rechargement. */
   const [issuedKey, setIssuedKey] = useState<string | null>(null);
+  const [reference, setReference] = useState<Reference | null>(null);
+
+  // La liste des allergènes reconnus vient du serveur : elle et la table de
+  // détection ne doivent jamais diverger.
+  useEffect(() => {
+    let cancelled = false;
+
+    api
+      .reference()
+      .then((value) => {
+        if (!cancelled) setReference(value);
+      })
+      .catch(() => {
+        // Sans la liste, la saisie libre reste possible : ce n'est pas bloquant.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!household) return <Loader />;
 
@@ -150,9 +171,38 @@ export default function ProfileScreen() {
 
       <SectionTitle>Exclusions alimentaires</SectionTitle>
       <Text style={styles.help}>
-        Ces aliments ne seront jamais proposés dans les recettes générées pour ce foyer.
+        Ces aliments sont retirés de l'inventaire envoyé au générateur, et toute recette
+        qui les nomme — jusque dans ses étapes — est écartée avant de vous être montrée.
+        Le contrôle est automatique : il ne dépend pas de la bonne volonté du modèle.
       </Text>
 
+      {/* Choisir « Arachides » dans cette liste couvre aussi « beurre de cacahuète »
+          et « satay ». Un texte libre ne cherche que le mot écrit. */}
+      <Text style={styles.help}>Allergènes reconnus, avec tous leurs dérivés :</Text>
+      <View style={styles.chips}>
+        {(reference?.allergens ?? []).map((allergen) => {
+          const active = household.dietaryExclusions.includes(allergen.label);
+
+          return (
+            <Chip
+              key={allergen.value}
+              label={allergen.label}
+              selected={active}
+              onPress={() =>
+                run(() =>
+                  api.updateHousehold(household.id, {
+                    dietaryExclusions: active
+                      ? household.dietaryExclusions.filter((v) => v !== allergen.label)
+                      : [...household.dietaryExclusions, allergen.label],
+                  }),
+                )
+              }
+            />
+          );
+        })}
+      </View>
+
+      <Text style={styles.help}>Exclusions actives :</Text>
       <View style={styles.chips}>
         {household.dietaryExclusions.map((entry) => (
           <Chip
@@ -174,10 +224,11 @@ export default function ProfileScreen() {
       </View>
 
       <Field
-        label="Ajouter une exclusion"
+        label="Ajouter une autre exclusion"
         value={exclusion}
         onChangeText={setExclusion}
-        placeholder="arachide, lactose, porc…"
+        placeholder="brocoli, coriandre…"
+        hint="Un terme libre est cherché tel quel : aucun dérivé n'est deviné."
         returnKeyType="done"
         onSubmitEditing={() => {
           if (!exclusion.trim()) return;

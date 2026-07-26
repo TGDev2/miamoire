@@ -78,7 +78,9 @@ export async function syncExpiryNotifications(items: StockItem[]): Promise<void>
       await Notifications.scheduleNotificationAsync({
         identifier: `${PREFIX}${item.id}`,
         content: {
-          title: `${item.product.name} périme bientôt`,
+          title: item.expirationIsEstimated
+            ? `${item.variant.name} est à vérifier`
+            : `${item.variant.name} périme bientôt`,
           body: bodyFor(item),
           data: { stockItemId: item.id },
         },
@@ -115,11 +117,17 @@ function alertDateFor(item: StockItem): Date | null {
   return new Date(year, month - 1, day - ALERT_DAYS_BEFORE, ALERT_HOUR, 0, 0, 0);
 }
 
+/**
+ * Une date déduite d'une durée de conservation ne s'annonce pas comme une date
+ * lue sur un emballage : « avant le 2 août » ferait jeter une salade encore bonne.
+ */
 function bodyFor(item: StockItem): string {
   const quantity = `${item.displayQuantity} ${item.displayUnit}`;
   const date = item.expirationDate
     ? new Date(item.expirationDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
     : '';
 
-  return `Il reste ${quantity} à consommer avant le ${date}.`;
+  return item.expirationIsEstimated
+    ? `Il reste ${quantity}. Fraîcheur estimée jusqu'au ${date} : vérifiez avant de consommer.`
+    : `Il reste ${quantity} à consommer avant le ${date}.`;
 }

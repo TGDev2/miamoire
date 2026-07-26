@@ -32,13 +32,17 @@ class InventoryController extends AbstractApiController
         return $this->json([
             'ingredients' => array_map(
                 static fn (InventoryLine $line): array => [
-                    'key' => $line->ingredientKey,
+                    'key' => $line->key,
+                    'variantId' => $line->variantId,
                     'label' => $line->label,
+                    'name' => $line->name,
                     'quantity' => $line->quantity,
                     'unit' => $line->unit->value,
                     'unitLabel' => $line->unit->label(),
                     'expiresSoon' => $line->expiresSoon,
                     'earliestExpiration' => $line->earliestExpiration?->format('Y-m-d'),
+                    'expirationIsEstimated' => $line->expirationIsEstimated,
+                    'quantityIsEstimated' => $line->quantityIsEstimated,
                     'category' => $line->category,
                     'traits' => ProductTrait::toValues($line->traits),
                     'locations' => $line->locations,

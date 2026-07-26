@@ -165,12 +165,14 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
       <View style={styles.rowMain}>
+        {/* Le libellé culinaire distingue « Tomates » de « Tomates (en conserve) » :
+            ce sont deux stocks, et la liste doit le montrer. */}
         <Text style={styles.rowTitle} numberOfLines={1}>
-          {item.product.name}
+          {item.variant.culinaryLabel}
         </Text>
-        {item.product.brand ? (
+        {item.variant.brand ? (
           <Text style={styles.rowBrand} numberOfLines={1}>
-            {item.product.brand}
+            {item.variant.brand}
           </Text>
         ) : null}
 
@@ -194,11 +196,25 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
   );
 }
 
+/**
+ * Une date estimée ne se dit pas comme une date lue.
+ *
+ * « Périmé depuis 2 jours » sur une salade dont la date a été déduite ferait jeter
+ * un aliment parfaitement bon. « À vérifier » demande de regarder, ce qui est
+ * exactement ce qu'une estimation permet de conclure.
+ */
 function formatExpiry(item: StockItem): string {
   if (item.expirationDate === null) return 'Aucune date limite renseignée';
 
   const days = item.daysUntilExpiration;
   if (days === null) return 'Aucune date limite renseignée';
+
+  if (item.expirationIsEstimated) {
+    if (days < 0) return `À vérifier — estimé il y a ${Math.abs(days)} j`;
+    if (days === 0) return 'À vérifier aujourd\'hui (estimé)';
+    return `À consommer sous ${days} j environ (estimé)`;
+  }
+
   if (days < 0) return `Périmé depuis ${Math.abs(days)} j`;
   if (days === 0) return "Périme aujourd'hui";
   if (days === 1) return 'Périme demain';

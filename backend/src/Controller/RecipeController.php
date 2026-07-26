@@ -46,7 +46,10 @@ class RecipeController extends AbstractApiController
 
     /**
      * Applique la déduction après confirmation explicite de l'utilisateur.
-     * Chaque ligne est revalidée contre le stock réel avant écriture.
+     *
+     * `operationKey` est obligatoire : c'est elle qui rend le geste rejouable sans
+     * effet supplémentaire. Une réponse réseau perdue puis une nouvelle tentative
+     * portent la même clé, et ne déduisent donc qu'une fois.
      */
     #[Route('/confirm', methods: ['POST'])]
     public function confirm(
@@ -61,6 +64,7 @@ class RecipeController extends AbstractApiController
             $context->requireMember(),
             $payload->objectList('stockConsumptionProposal'),
             $payload->string('recipeName'),
+            $payload->requiredString('operationKey'),
         );
 
         return $this->json($result);

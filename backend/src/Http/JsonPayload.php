@@ -32,6 +32,17 @@ final readonly class JsonPayload
         return new self(is_array($decoded) ? $decoded : []);
     }
 
+    /**
+     * Lecture d'un objet imbriqué — une entrée de `batches`, par exemple —
+     * avec les mêmes garanties de typage que le corps de la requête.
+     *
+     * @param array<string, mixed> $data
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self($data);
+    }
+
     public function has(string $key): bool
     {
         return array_key_exists($key, $this->data);

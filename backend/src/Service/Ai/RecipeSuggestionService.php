@@ -8,7 +8,10 @@ use App\Entity\Household;
 use App\Enum\ProductTrait;
 use App\Exception\StockException;
 use App\Service\Ai\Generator\RecipeGeneratorFactory;
+use App\Service\Ai\Safety\DietaryGuardFactory;
+use App\Service\Ai\Safety\RecipeSafetyFilter;
 use App\Service\Inventory\InventoryAggregator;
+use App\Service\Inventory\InventoryLine;
 
 /**
  * Génération de propositions culinaires à partir de l'inventaire réel.
@@ -17,6 +20,16 @@ use App\Service\Inventory\InventoryAggregator;
  * consommation que l'utilisateur devra confirmer explicitement
  * (voir RecipeConfirmationService).
  *
+ * Les exclusions alimentaires ne reposent plus sur la seule bonne volonté du
+ * modèle. Elles sont appliquées deux fois, et cette redondance est délibérée :
+ *
+ * - **avant** — un aliment exclu ne figure pas dans l'inventaire transmis ;
+ * - **après** — chaque recette renvoyée est relue, et celles qui nomment un
+ *   aliment exclu sont écartées, y compris quand il n'apparaît qu'à l'étape 4.
+ *
+ * La consigne au modèle demeure : elle évite de gaspiller des propositions.
+ * Mais c'est le contrôle qui garantit, pas la consigne.
+ *
  * Le fournisseur de modèle est interchangeable — voir RecipeGeneratorFactory.
  */
 class RecipeSuggestionService
@@ -24,35 +37,40 @@ class RecipeSuggestionService
     public function __construct(
         private readonly RecipeGeneratorFactory $generators,
         private readonly InventoryAggregator $aggregator,
+        private readonly DietaryGuardFactory $guards,
+        private readonly RecipeSafetyFilter $safetyFilter,
     ) {
     }
 
-    /** @return array{recipes: list<array<string, mixed>>, inventory: list<array<string, mixed>>, provider: string} */
+    /** @return array<string, mixed> */
     public function suggest(Household $household, RecipeRequest $request): array
     {
         // Lève une erreur explicite si aucune clé n'est configurée.
         $generator = $this->generators->create();
 
-        $inventory = $this->aggregator->aggregate($household);
+        $guard = $this->guards->for($household, $request->exclusions);
+        $inventory = $this->aggregator->aggregate($household, guard: $guard);
 
         if ([] === $inventory) {
-            throw new StockException('Votre inventaire est vide : ajoutez au moins un aliment avant de demander une recette.');
+            throw new StockException($guard->isEmpty()
+                ? 'Votre inventaire est vide : ajoutez au moins un aliment avant de demander une recette.'
+                : 'Aucun aliment de votre inventaire ne respecte les exclusions du foyer.');
         }
 
-        $inventoryPayload = array_map(static fn ($line) => $line->toAiPayload(), $inventory);
+        $inventoryPayload = array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory);
 
         $payload = [
             'people' => $request->people,
             'mealType' => $request->mealType,
             'maxPreparationMinutes' => $request->maxMinutes,
             'availableEquipment' => $request->equipment,
-            'dietaryExclusions' => $request->exclusions,
+            'dietaryExclusions' => $guard->exclusions(),
             'allowExtraIngredients' => $request->allowExtraIngredients,
             'inventory' => $inventoryPayload,
         ];
 
         $raw = $generator->generate(
-            $this->systemPrompt(),
+            $this->systemPrompt($guard->exclusions()),
             json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
             RecipeSchema::definition(),
         );
@@ -64,11 +82,45 @@ class RecipeSuggestionService
             throw new StockException('Réponse illisible du générateur de recettes. Réessayez.');
         }
 
+        $checked = $this->safetyFilter->apply(
+            array_slice($decoded['recipes'] ?? [], 0, 3),
+            $guard,
+            $this->labelsByKey($inventory),
+        );
+
+        // Une liste vide sans explication laisserait croire à une panne. C'est au
+        // contraire le contrôle qui a fonctionné : il faut le dire.
+        if ([] === $checked['recipes'] && [] !== $checked['rejected']) {
+            throw new StockException(sprintf(
+                'Les %d propositions reçues ne respectaient pas vos exclusions (%s) : aucune ne vous est montrée. Relancez une génération.',
+                count($checked['rejected']),
+                implode(', ', array_unique(array_column($checked['rejected'], 'reason'))),
+            ));
+        }
+
         return [
-            'recipes' => array_slice($decoded['recipes'] ?? [], 0, 3),
+            'recipes' => $checked['recipes'],
+            'rejected' => $checked['rejected'],
             'inventory' => $inventoryPayload,
+            'guaranteedExclusions' => $guard->exclusions(),
             'provider' => $generator->label(),
         ];
+    }
+
+    /**
+     * @param list<InventoryLine> $inventory
+     *
+     * @return array<string, string>
+     */
+    private function labelsByKey(array $inventory): array
+    {
+        $labels = [];
+
+        foreach ($inventory as $line) {
+            $labels[$line->key] = $line->label;
+        }
+
+        return $labels;
     }
 
     /**
@@ -95,10 +147,23 @@ class RecipeSuggestionService
         return trim($trimmed);
     }
 
-    private function systemPrompt(): string
+    /** @param list<string> $exclusions */
+    private function systemPrompt(array $exclusions): string
     {
         $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
         $traits = $this->traitGlossary();
+
+        $safety = [] === $exclusions
+            ? ''
+            : sprintf(
+                "\n            CONTRÔLE AUTOMATIQUE : chaque recette que tu renvoies est relue par un\n"
+                ."            programme qui cherche %s dans son titre, son résumé, ses ingrédients,\n"
+                ."            ses substitutions ET chacune de ses étapes. Toute recette où l'un de ces\n"
+                ."            termes apparaît est supprimée avant d'atteindre l'utilisateur, sans appel.\n"
+                ."            Une recette écartée est une proposition perdue : n'en propose aucune qui\n"
+                ."            s'en approche, y compris en accompagnement ou en suggestion de service.\n",
+                implode(', ', $exclusions),
+            );
 
         return <<<PROMPT
             Tu es un assistant culinaire intégré à une application de gestion de stock alimentaire.
@@ -110,7 +175,8 @@ class RecipeSuggestionService
 
             Chaque ligne d'inventaire porte une clé stable `key`, un libellé, une quantité,
             une unité et un indicateur `expiresSoon`. Elle peut aussi porter `traits`,
-            `category` et `notes`, qui décrivent l'état réel de l'aliment.
+            `category`, `notes`, `quantityIsEstimated` et `expirationIsEstimated`, qui
+            décrivent l'état réel de l'aliment et la confiance qu'on peut lui accorder.
 
             Signification des `traits` :
 
@@ -134,21 +200,29 @@ class RecipeSuggestionService
                `servings` avec ce même nombre.
             6. Respecte `maxPreparationMinutes` et n'utilise que les équipements listés
                quand la liste n'est pas vide.
-            7. N'utilise jamais un ingrédient figurant dans `dietaryExclusions`.
+            7. N'utilise jamais un ingrédient figurant dans `dietaryExclusions`, ni aucun de ses
+               dérivés : pas de beurre de cacahuète si l'arachide est exclue, pas de semoule si
+               le gluten l'est.
             8. Les `traits` et les `notes` décrivent l'aliment tel qu'il est réellement dans
                le placard. N'écris JAMAIS une étape de préparation déjà faite : des pommes de
                terre `canned` ne s'épluchent pas et ne se cuisent pas trente minutes, elles
                s'égouttent et se réchauffent. Adapte aussi le temps de préparation en
                conséquence.
-
+            9. `quantityIsEstimated` signale une quantité approximative : ne bâtis pas une
+               recette qui exigerait cette quantité au gramme près, et reste en deçà.
+            {$safety}
             À propos de `stockConsumptionProposal` :
 
             - C'est une PROPOSITION de retrait de stock, soumise ensuite à validation humaine.
             - Le champ `key` doit reprendre EXACTEMENT une clé `key` de l'inventaire reçu.
               N'invente jamais de clé et n'y mets jamais un ingrédient à acheter.
+            - Une clé désigne un aliment DANS UN ÉTAT PRÉCIS : `tomate` et `tomate-conserve`
+              sont deux stocks différents, jamais interchangeables.
             - `quantity` ne doit jamais dépasser la quantité disponible pour cette clé.
             - `unit` doit appartenir à : {$units}, et rester compatible avec l'unité
               de l'inventaire (une masse ne devient pas un volume).
+            - N'y fais figurer chaque clé qu'UNE SEULE FOIS, en cumulant les usages de la
+              recette : deux lignes pour le même ingrédient seraient fusionnées de toute façon.
             - N'y fais figurer que ce qui est réellement consommé par la recette.
 
             Rédige des étapes courtes et concrètes. Réponds uniquement par le JSON demandé,

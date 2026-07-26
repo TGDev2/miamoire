@@ -40,10 +40,24 @@ class IngredientKeyGenerator
         $words = [];
         foreach (preg_split('/\s+/', trim($value)) ?: [] as $word) {
             // Les mots d'une lettre sont des articles élidés (« huile d'olive »).
-            if (mb_strlen($word) <= 1 || in_array($word, self::NOISE, true) || is_numeric($word)) {
+            if (mb_strlen($word) <= 1 || is_numeric($word)) {
                 continue;
             }
-            $words[] = $this->singularize($word);
+
+            $singular = $this->singularize($word);
+
+            // Le mot vide est cherché au singulier ET au pluriel.
+            //
+            // « Carottes en rondelles, Surgelé » donnait `carotte-rondelle`, mais
+            // « Carottes en Rondelles Surgelés » donnait `carotte-rondelle-surgele` :
+            // le même aliment sous deux clés, donc deux variantes que rien ne
+            // distingue à l'écran. La mention n'apprend rien de toute façon — c'est
+            // le trait `frozen` qui porte l'information.
+            if (in_array($word, self::NOISE, true) || in_array($singular, self::NOISE, true)) {
+                continue;
+            }
+
+            $words[] = $singular;
         }
 
         // Au-delà de trois mots on décrit la marque, plus l'aliment.

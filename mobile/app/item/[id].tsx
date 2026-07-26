@@ -44,7 +44,7 @@ export default function StockItemScreen() {
         api.reference(),
       ]);
       setItem(detail);
-      setEditName(detail.product.name);
+      setEditName(detail.variant.name);
       setMovements(history.movements);
       setReference(ref);
     } catch (exception) {
@@ -76,18 +76,25 @@ export default function StockItemScreen() {
     return Number.isFinite(value) && value > 0 ? value : null;
   }
 
-  function confirmDelete() {
+  /**
+   * Archiver, pas supprimer.
+   *
+   * Le `DELETE` physique effaçait les mouvements en cascade : l'historique
+   * disparaissait précisément dans le cas où il aurait servi — « qui a retiré ce
+   * lot, et que restait-il dessus ? ». Le geste est désormais réversible.
+   */
+  function confirmArchive() {
     Alert.alert(
-      'Supprimer cet aliment ?',
-      'La ligne et tout son historique seront définitivement effacés.',
+      'Archiver cet aliment ?',
+      'Il quitte votre inventaire, mais son historique est conservé et vous pourrez le restaurer.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Supprimer',
+          text: 'Archiver',
           style: 'destructive',
           onPress: () =>
             run(async () => {
-              await api.deleteStockItem(id);
+              await api.archiveStockItem(id, 'Archivé depuis la fiche');
               router.back();
             }),
         },
@@ -110,7 +117,7 @@ export default function StockItemScreen() {
   // Deux unités d'une même famille se convertissent ; entre familles, il faut redonner la quantité.
   const currentUnitFamily = reference?.units.find((option) => option.value === item.unit)?.family;
   const traitLabels = (reference?.productTraits ?? [])
-    .filter((option) => item.product.traits.includes(option.value))
+    .filter((option) => item.variant.traits.includes(option.value))
     .map((option) => option.label);
 
   return (
@@ -120,8 +127,8 @@ export default function StockItemScreen() {
       <Card>
         <View style={styles.headerRow}>
           <View style={styles.flex}>
-            <Text style={styles.name}>{item.product.name}</Text>
-            {item.product.brand ? <Text style={styles.brand}>{item.product.brand}</Text> : null}
+            <Text style={styles.name}>{item.variant.name}</Text>
+            {item.variant.brand ? <Text style={styles.brand}>{item.variant.brand}</Text> : null}
           </View>
           <Badge
             label={presentation.label}
@@ -135,9 +142,11 @@ export default function StockItemScreen() {
         </Text>
         <Text style={styles.meta}>{item.storageLocationLabel}</Text>
         <Text style={styles.meta}>
-          {item.expirationDate
-            ? `À consommer avant le ${formatDate(item.expirationDate)}`
-            : 'Aucune date limite renseignée'}
+          {item.expirationDate === null
+            ? 'Aucune date limite renseignée'
+            : item.expirationIsEstimated
+              ? `Fraîcheur estimée jusqu'au ${formatDate(item.expirationDate)} — à vérifier`
+              : `À consommer avant le ${formatDate(item.expirationDate)}`}
         </Text>
         {item.addedBy ? (
           <Text style={styles.meta}>Enregistré par {item.addedBy}</Text>
@@ -151,6 +160,35 @@ export default function StockItemScreen() {
         ) : null}
         {item.note ? <Text style={styles.note}>{item.note}</Text> : null}
       </Card>
+
+      {/* Les autres lots du même aliment : c'est ce qui permet de choisir le bon
+          plutôt que de gonfler celui-ci avec une date qui ne lui correspond pas. */}
+      {item.siblings && item.siblings.length > 0 ? (
+        <>
+          <SectionTitle>Autres lots de cet aliment</SectionTitle>
+          <Text style={styles.help}>
+            Le lot qui périme le plus tôt est consommé en premier. Pour un achat avec
+            une autre date, ajoutez un lot plutôt que d'augmenter celui-ci.
+          </Text>
+          {item.siblings.map((sibling) => (
+            <Pressable
+              key={sibling.id}
+              style={styles.sibling}
+              onPress={() => router.push(`/item/${sibling.id}`)}
+            >
+              <Text style={styles.siblingQuantity}>
+                {sibling.displayQuantity} {sibling.displayUnit}
+              </Text>
+              <Text style={styles.siblingMeta}>
+                {sibling.expirationDate
+                  ? `${sibling.expirationIsEstimated ? 'estimé' : 'avant'} le ${formatDate(sibling.expirationDate)}`
+                  : 'sans date'}{' '}
+                · {sibling.storageLocationLabel}
+              </Text>
+            </Pressable>
+          ))}
+        </>
+      ) : null}
 
       <SectionTitle>Consommer</SectionTitle>
 
@@ -269,7 +307,16 @@ export default function StockItemScreen() {
       <SectionTitle>Modifier</SectionTitle>
       {editing ? (
         <Card>
-          <Field label="Nom" value={editName} onChangeText={setEditName} />
+          <Field
+            label="Nom dans mon foyer"
+            value={editName}
+            onChangeText={setEditName}
+            hint={
+              item.variant.catalogName && item.variant.catalogName !== item.variant.name
+                ? `Fiche partagée : « ${item.variant.catalogName} ». La renommer ici ne change rien pour les autres foyers.`
+                : 'Ce nom n\'existe que dans votre foyer.'
+            }
+          />
 
           <Text style={styles.label}>Emplacement</Text>
           <View style={styles.chips}>
@@ -349,7 +396,7 @@ export default function StockItemScreen() {
           </Text>
           <View style={styles.chips}>
             {reference?.productTraits.map((option) => {
-              const selected = item.product.traits.includes(option.value);
+              const selected = item.variant.traits.includes(option.value);
 
               return (
                 <Chip
@@ -360,8 +407,8 @@ export default function StockItemScreen() {
                     run(() =>
                       api.updateStockItem(id, {
                         traits: selected
-                          ? item.product.traits.filter((trait) => trait !== option.value)
-                          : [...item.product.traits, option.value],
+                          ? item.variant.traits.filter((trait) => trait !== option.value)
+                          : [...item.variant.traits, option.value],
                       }),
                     )
                   }
@@ -385,6 +432,16 @@ export default function StockItemScreen() {
               </Pressable>
             ) : null}
           </View>
+          {/* Fruits, légumes, restes : rien n'est imprimé. La date est alors déduite
+              de l'aliment, de son état et de l'endroit où il est rangé — et signalée
+              comme estimée. */}
+          <Button
+            label="Pas de date imprimée : estimer la fraîcheur"
+            variant="secondary"
+            onPress={() => run(() => api.updateStockItem(id, { estimateExpiration: true }))}
+            disabled={busy}
+            style={styles.spaced}
+          />
 
           {showPicker ? (
             <DateTimePicker
@@ -424,12 +481,21 @@ export default function StockItemScreen() {
         onPress={() => run(() => api.discard(id, 'Produit jeté'))}
         disabled={busy || item.remainingQuantity <= 0}
       />
-      <Button
-        label="Supprimer la ligne"
-        variant="ghost"
-        onPress={confirmDelete}
-        style={styles.spaced}
-      />
+      {item.isArchived ? (
+        <Button
+          label="Restaurer ce lot"
+          variant="secondary"
+          onPress={() => run(() => api.restoreStockItem(id))}
+          style={styles.spaced}
+        />
+      ) : (
+        <Button
+          label="Archiver la ligne"
+          variant="ghost"
+          onPress={confirmArchive}
+          style={styles.spaced}
+        />
+      )}
 
       <SectionTitle>Historique</SectionTitle>
       {movements.map((movement) => (
@@ -537,6 +603,16 @@ const styles = StyleSheet.create({
   gridItem: {},
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   spaced: { marginTop: spacing.sm },
+  sibling: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  siblingQuantity: { fontSize: 15, fontWeight: '700', color: colors.ink },
+  siblingMeta: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
   grow: { flex: 1 },
   pendingUnit: {
     backgroundColor: colors.surfaceMuted,

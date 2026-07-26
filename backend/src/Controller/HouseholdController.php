@@ -164,7 +164,8 @@ class HouseholdController extends AbstractApiController
         EntityManagerInterface $entityManager,
     ): JsonResponse {
         $household = $this->sameAsContext($context, $id);
-        $items = $stockItems->search($household, ['includeEmpty' => true]);
+        // Archives comprises : supprimer un foyer efface aussi ce qu'il avait mis de côté.
+        $items = $stockItems->search($household, ['includeEmpty' => true, 'archived' => null]);
 
         // Effacer un stock entier par inadvertance serait irrattrapable.
         if ([] !== $items && !JsonPayload::fromRequest($request)->bool('confirmDeleteStock')) {

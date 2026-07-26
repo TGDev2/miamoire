@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Enum\Allergen;
 use App\Enum\FillLevel;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
@@ -51,6 +52,16 @@ class ReferenceController extends AbstractApiController
                     'label' => $trait->label(),
                 ],
                 ProductTrait::cases(),
+            ),
+            // Les exclusions proposées à la sélection plutôt que saisies à la main :
+            // « arachide » choisi dans cette liste couvre aussi « beurre de
+            // cacahuète » et « satay », ce qu'un texte libre ne peut pas faire.
+            'allergens' => array_map(
+                static fn (Allergen $allergen): array => [
+                    'value' => $allergen->value,
+                    'label' => $allergen->label(),
+                ],
+                Allergen::cases(),
             ),
             'categories' => $stockItems->findUsedCategories($context->household()),
             'mealTypes' => [

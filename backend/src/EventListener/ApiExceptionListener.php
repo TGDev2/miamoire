@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\EventListener;
 
 use App\Exception\IncompatibleUnitException;
+use App\Exception\StockConflictException;
 use App\Exception\StockException;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
@@ -32,6 +33,9 @@ class ApiExceptionListener
         $exception = $event->getThrowable();
 
         [$status, $message] = match (true) {
+            // Un conflit n'est pas une erreur de saisie : le stock a bougé entre
+            // la proposition et la confirmation. 409 le dit, 422 le cacherait.
+            $exception instanceof StockConflictException => [Response::HTTP_CONFLICT, $exception->getMessage()],
             $exception instanceof IncompatibleUnitException,
             $exception instanceof StockException => [Response::HTTP_UNPROCESSABLE_ENTITY, $exception->getMessage()],
             $exception instanceof HttpExceptionInterface => [$exception->getStatusCode(), $exception->getMessage()],
@@ -43,6 +47,12 @@ class ApiExceptionListener
         }
 
         $payload = ['error' => $message];
+
+        // Le contexte d'un conflit porte la proposition recalculée : l'application
+        // peut proposer ce qui reste possible plutôt qu'un simple échec.
+        if ($exception instanceof StockConflictException) {
+            $payload += $exception->getContext();
+        }
 
         if ($this->debug && $status >= 500) {
             $payload['detail'] = $exception->getMessage();

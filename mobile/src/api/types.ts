@@ -19,9 +19,26 @@ export type ProductTraitValue =
   | 'sweetened'
   | 'unsweetened';
 
-export type StockStatus = 'sealed' | 'opened' | 'running_low' | 'expiring_soon' | 'expired' | 'empty';
+export type StockStatus =
+  | 'sealed'
+  | 'opened'
+  | 'running_low'
+  | 'expiring_soon'
+  | 'expired'
+  | 'empty'
+  | 'archived';
 export type Feasibility = 'ready' | 'adapted' | 'needs_shopping';
+export type UnitFamily = 'mass' | 'volume' | 'count' | 'serving';
 
+/** D'où vient une information : ce que quelqu'un a choisi prime sur ce qu'une machine a déduit. */
+export type DataOrigin = 'detected' | 'catalog' | 'user';
+
+/**
+ * La fiche canonique, partagée par tous les foyers.
+ *
+ * Elle sert de cache Open Food Facts et n'est jamais corrigée depuis un lot :
+ * renommer un aliment chez soi ne change plus ce que voient les autres.
+ */
 export interface Product {
   id: string;
   barcode: string | null;
@@ -37,9 +54,50 @@ export interface Product {
   source: 'openfoodfacts' | 'manual';
 }
 
+/**
+ * L'aliment tel qu'il existe DANS CE FOYER.
+ *
+ * C'est le niveau qui manquait entre la référence et le lot : des tomates
+ * fraîches et des tomates en conserve sont deux variantes, avec leurs quantités
+ * et leurs états propres. `key` est l'identifiant lisible que le générateur de
+ * recettes recopie — `tomate`, `tomate-conserve`.
+ */
+export interface ProductVariant {
+  id: string;
+  key: string;
+  name: string;
+  displayName: string;
+  /** « Tomates (en conserve) » — ce que lit le générateur de recettes. */
+  culinaryLabel: string;
+  ingredientKey: string;
+  brand: string | null;
+  category: string | null;
+  traits: ProductTraitValue[];
+  unitFamily: UnitFamily;
+  nameOrigin: DataOrigin;
+  traitsOrigin: DataOrigin;
+  /** Ce qui vient du catalogue partagé, non modifiable localement. */
+  productId: string | null;
+  barcode: string | null;
+  imageUrl: string | null;
+  catalogName: string | null;
+}
+
+/** Un autre lot du même aliment : même variante, autre date. */
+export interface SiblingLot {
+  id: string;
+  displayQuantity: number;
+  displayUnit: string;
+  expirationDate: string | null;
+  expirationIsEstimated: boolean;
+  daysUntilExpiration: number | null;
+  storageLocationLabel: string;
+  status: StockStatus;
+}
+
 export interface StockItem {
   id: string;
-  product: Product;
+  variant: ProductVariant;
   initialQuantity: number;
   remainingQuantity: number;
   unit: Unit;
@@ -52,15 +110,21 @@ export interface StockItem {
   storageLocationLabel: string;
   purchaseDate: string | null;
   expirationDate: string | null;
+  /** La date a été déduite d'une durée de conservation, pas lue sur un emballage. */
+  expirationIsEstimated: boolean;
   daysUntilExpiration: number | null;
   openedAt: string | null;
   isOpened: boolean;
   quantityIsEstimated: boolean;
+  isArchived: boolean;
+  archivedAt: string | null;
   status: StockStatus;
   note: string | null;
   /** Prénom de la personne qui a enregistré ce produit. */
   addedBy: string | null;
   updatedAt: string;
+  /** Renseigné sur la fiche d'un lot uniquement. */
+  siblings?: SiblingLot[];
 }
 
 export interface StockMovement {
@@ -72,7 +136,18 @@ export interface StockMovement {
   remainingAfter: number;
   reason: string | null;
   author: string | null;
+  /** Les mouvements d'une même recette partagent cet identifiant. */
+  operationId: string | null;
   createdAt: string;
+}
+
+/** Combien de temps un aliment se garde, et pourquoi on le pense. */
+export interface ShelfLifeEstimate {
+  days: number;
+  until: string;
+  source: 'food' | 'trait' | 'category' | 'location';
+  matched: string | null;
+  explanation: string;
 }
 
 export interface Member {
@@ -112,23 +187,33 @@ export interface ReferenceOption {
 }
 
 export interface Reference {
-  units: Array<ReferenceOption & { family: string; isDiscrete: boolean }>;
+  units: Array<ReferenceOption & { family: UnitFamily; isDiscrete: boolean }>;
   storageLocations: ReferenceOption[];
   fillLevels: Array<ReferenceOption & { ratio: number | null }>;
   productTraits: Array<ReferenceOption & { value: ProductTraitValue }>;
+  /**
+   * Exclusions proposées à la sélection : choisir « Arachides » couvre aussi
+   * « beurre de cacahuète » et « satay », ce qu'un texte libre ne peut pas faire.
+   */
+  allergens: ReferenceOption[];
   categories: string[];
   mealTypes: ReferenceOption[];
   equipment: ReferenceOption[];
 }
 
 export interface InventoryIngredient {
+  /** Identifiant lisible de la variante : `tomate`, `tomate-conserve`. */
   key: string;
+  variantId: string;
   label: string;
+  name: string;
   quantity: number;
   unit: Unit;
   unitLabel: string;
   expiresSoon: boolean;
   earliestExpiration: string | null;
+  expirationIsEstimated: boolean;
+  quantityIsEstimated: boolean;
   category: string | null;
   traits: ProductTraitValue[];
   locations: StorageLocation[];
@@ -168,13 +253,27 @@ export interface Recipe {
   stockConsumptionProposal: ConsumptionLine[];
 }
 
+/** Une proposition écartée par le contrôle des exclusions, et la raison exacte. */
+export interface RejectedRecipe {
+  recipeName: string;
+  reason: string;
+}
+
 export interface SuggestionResponse {
   recipes: Recipe[];
+  /** Recettes supprimées avant affichage parce qu'elles touchaient un aliment exclu. */
+  rejected: RejectedRecipe[];
+  /** Les exclusions réellement vérifiées sur chaque recette, pas seulement demandées. */
+  guaranteedExclusions: string[];
   inventory: Array<{ key: string; ingredient: string; quantity: number; unit: Unit; expiresSoon: boolean }>;
 }
 
 export interface ConfirmationResponse {
   recipeName: string | null;
+  /** La clé d'idempotence : rejouée, elle renvoie cette même réponse sans rien déduire. */
+  operationKey: string;
+  /** Vrai quand le serveur a reconnu une confirmation déjà appliquée. */
+  replayed: boolean;
   lines: Array<{
     key: string;
     label: string;
@@ -182,6 +281,14 @@ export interface ConfirmationResponse {
     applied: number;
     shortfall: number;
     unit: Unit;
-    lots: Array<{ stockItemId: string; quantity: number; unit: Unit; expirationDate: string | null }>;
+    /** La déduction s'appuie sur une quantité approximative : à vérifier après le repas. */
+    quantityWasEstimated: boolean;
+    lots: Array<{
+      stockItemId: string;
+      quantity: number;
+      unit: Unit;
+      expirationDate: string | null;
+      expirationIsEstimated: boolean;
+    }>;
   }>;
 }

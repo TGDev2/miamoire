@@ -18,10 +18,14 @@ use Symfony\Component\Uid\Uuid;
  * Deux bouteilles de lait achetées le même jour mais périmant à deux dates
  * différentes sont deux StockItem distincts : c'est ce qui rend possible
  * la consommation FEFO (le lot qui expire le plus tôt part en premier).
+ *
+ * Le lot pointe vers une variante du foyer, jamais vers le catalogue partagé :
+ * corriger un lot ne peut plus changer ce que voient les autres foyers.
  */
 #[ORM\Entity(repositoryClass: StockItemRepository::class)]
 #[ORM\Table(name: 'stock_item')]
 #[ORM\Index(columns: ['household_id', 'expiration_date'], name: 'idx_stock_household_expiration')]
+#[ORM\Index(columns: ['variant_id', 'expiration_date'], name: 'idx_stock_variant_expiration')]
 #[ORM\HasLifecycleCallbacks]
 class StockItem
 {
@@ -33,9 +37,9 @@ class StockItem
     #[ORM\JoinColumn(nullable: false, onDelete: 'CASCADE')]
     private Household $household;
 
-    #[ORM\ManyToOne(targetEntity: Product::class)]
-    #[ORM\JoinColumn(nullable: false)]
-    private Product $product;
+    #[ORM\ManyToOne(targetEntity: HouseholdProductVariant::class)]
+    #[ORM\JoinColumn(name: 'variant_id', nullable: false)]
+    private HouseholdProductVariant $variant;
 
     /** Quantité totale au moment de l'ajout (nbExemplaires x contenance). */
     #[ORM\Column(type: 'float')]
@@ -59,6 +63,17 @@ class StockItem
     #[ORM\Column(type: 'date_immutable', nullable: true)]
     private ?\DateTimeImmutable $expirationDate = null;
 
+    /**
+     * La date a été déduite d'une durée de conservation, pas lue sur un emballage.
+     *
+     * Les fruits et légumes frais, le vrac, un reste de plat n'ont aucune date
+     * imprimée. Leur en inventer une sans le dire ferait passer une estimation
+     * pour une certitude — et une salade « périmée » depuis un jour serait jetée
+     * alors qu'elle est parfaitement bonne. On estime, et on l'écrit.
+     */
+    #[ORM\Column(type: 'boolean')]
+    private bool $expirationIsEstimated = false;
+
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $openedAt = null;
 
@@ -80,6 +95,17 @@ class StockItem
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $updatedAt;
 
+    /**
+     * Écarté de l'inventaire, mais toujours là.
+     *
+     * Un `DELETE` physique effaçait le lot ET ses mouvements en cascade : le
+     * journal disparaissait précisément dans le cas qu'il devait auditer — celui
+     * où quelqu'un supprime une ligne. Archiver conserve l'historique et rend le
+     * geste réversible.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $archivedAt = null;
+
     /** @var Collection<int, StockMovement> */
     #[ORM\OneToMany(targetEntity: StockMovement::class, mappedBy: 'stockItem', cascade: ['persist', 'remove'])]
     #[ORM\OrderBy(['createdAt' => 'DESC'])]
@@ -87,14 +113,14 @@ class StockItem
 
     public function __construct(
         Household $household,
-        Product $product,
+        HouseholdProductVariant $variant,
         float $quantity,
         Unit $unit,
         StorageLocation $storageLocation,
     ) {
         $this->id = Uuid::v7();
         $this->household = $household;
-        $this->product = $product;
+        $this->variant = $variant;
         $this->initialQuantity = $quantity;
         $this->remainingQuantity = $quantity;
         $this->unit = $unit;
@@ -120,14 +146,24 @@ class StockItem
         return $this->household;
     }
 
-    public function getProduct(): Product
+    public function getVariant(): HouseholdProductVariant
     {
-        return $this->product;
+        return $this->variant;
     }
 
-    public function setProduct(Product $product): void
+    /**
+     * Réaffecte le lot à une autre variante — après un renommage, ou après une
+     * correction d'unité qui change de famille.
+     */
+    public function setVariant(HouseholdProductVariant $variant): void
     {
-        $this->product = $product;
+        $this->variant = $variant;
+    }
+
+    /** La fiche canonique, quand elle existe : image, code-barres, conditionnement. */
+    public function getProduct(): ?Product
+    {
+        return $this->variant->getProduct();
     }
 
     public function getInitialQuantity(): float
@@ -195,9 +231,28 @@ class StockItem
         return $this->expirationDate;
     }
 
+    /**
+     * Une date lue sur l'emballage, ou saisie à la main : une certitude.
+     *
+     * Elle lève donc toujours le marqueur d'estimation — corriger une date déduite
+     * par une date réelle est justement le geste qui doit faire cesser le doute.
+     */
     public function setExpirationDate(?\DateTimeImmutable $expirationDate): void
     {
         $this->expirationDate = $expirationDate;
+        $this->expirationIsEstimated = false;
+    }
+
+    public function isExpirationEstimated(): bool
+    {
+        return $this->expirationIsEstimated;
+    }
+
+    /** Une date lue sur l'emballage prime toujours sur une durée de conservation déduite. */
+    public function setEstimatedExpirationDate(?\DateTimeImmutable $expirationDate): void
+    {
+        $this->expirationDate = $expirationDate;
+        $this->expirationIsEstimated = null !== $expirationDate;
     }
 
     public function getOpenedAt(): ?\DateTimeImmutable
@@ -253,6 +308,26 @@ class StockItem
     public function getUpdatedAt(): \DateTimeImmutable
     {
         return $this->updatedAt;
+    }
+
+    public function getArchivedAt(): ?\DateTimeImmutable
+    {
+        return $this->archivedAt;
+    }
+
+    public function isArchived(): bool
+    {
+        return null !== $this->archivedAt;
+    }
+
+    public function archive(): void
+    {
+        $this->archivedAt ??= new \DateTimeImmutable();
+    }
+
+    public function restore(): void
+    {
+        $this->archivedAt = null;
     }
 
     /** @return Collection<int, StockMovement> */
@@ -312,6 +387,7 @@ class StockItem
     public function getStatus(): string
     {
         return match (true) {
+            $this->isArchived() => 'archived',
             $this->isEmpty() => 'empty',
             $this->isExpired() => 'expired',
             $this->isExpiringSoon() => 'expiring_soon',
