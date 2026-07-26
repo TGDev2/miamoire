@@ -233,8 +233,25 @@ Quelle que soit la plateforme, la marche à suivre est la même :
 | `DATABASE_URL` | fourni par la base managée ; ajouter `?sslmode=require` |
 | `TRUSTED_PROXIES` | `REMOTE_ADDR` — sans quoi la limitation de débit compte tous les visiteurs comme un seul |
 | `CORS_ALLOW_ORIGIN` | `^$` : l'application mobile n'est pas un navigateur, aucune origine n'a à être autorisée |
-| `GEMINI_API_KEY` | la clé du générateur de recettes |
+| `GEMINI_API_KEY` | la clé du générateur de recettes — **sans elle, tout fonctionne sauf l'onglet Cuisiner** |
 | `PORT` | imposé par la plateforme, repli `8080` |
+
+Une variable oubliée ne se voit pas au déploiement : `GET /api/health` répond `200`
+même sans clé de recettes et même sans `TRUSTED_PROXIES`. Après chaque mise en ligne,
+vérifier les deux points que la sonde ne couvre pas :
+
+```bash
+# L'onglet Cuisiner : doit renvoyer des recettes, pas une erreur de configuration
+curl -X POST https://<votre-api>/api/recipes/suggest \
+  -H "X-Household: <id>" -H "X-Household-Key: <code>" -H "X-Member: <id>" \
+  -H "Content-Type: application/json" \
+  -d '{"people":2,"equipment":[],"exclusions":[],"allowExtraIngredients":true}'
+```
+
+`TRUSTED_PROXIES` ne se teste pas de l'extérieur, mais son absence a une conséquence
+précise : derrière le répartiteur de l'hébergeur, toutes les requêtes semblent venir
+d'une seule adresse, et la limitation de débit — 5 créations de foyer par heure —
+s'appliquerait alors au monde entier au lieu de chaque visiteur.
 
 L'application mobile n'a **jamais** connaissance de ces valeurs : les clés restent
 côté serveur.

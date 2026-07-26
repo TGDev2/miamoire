@@ -33,8 +33,11 @@ class RecipeGeneratorFactory
         };
 
         if (!$generator->isConfigured()) {
+            // Le message nomme la variable sans présumer d'où elle vient : en
+            // développement c'est backend/.env.local, en production une variable
+            // d'environnement de l'hébergeur.
             throw new StockException(sprintf(
-                'Le générateur de recettes (%s) n\'est pas configuré : renseignez %s dans backend/.env.local.',
+                'Le générateur de recettes (%s) n\'est pas configuré : définissez la variable %s sur le serveur (backend/.env.local en développement, variables d\'environnement de l\'hébergeur en production).',
                 $generator->label(),
                 $generator->configurationHint(),
             ));
