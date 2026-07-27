@@ -108,6 +108,9 @@ class ApiPresenter
 
         $payload = [
             'id' => (string) $item->getId(),
+            // Renvoyée en `expectedRevision` par une correction absolue : le
+            // serveur refuse alors d'écraser un changement qu'elle n'a pas vu.
+            'revision' => $item->getRevision(),
             'variant' => $this->variant($item->getVariant()),
             'initialQuantity' => round($item->getInitialQuantity(), 3),
             'remainingQuantity' => round($item->getRemainingQuantity(), 3),

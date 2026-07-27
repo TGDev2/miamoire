@@ -14,6 +14,7 @@ use App\Enum\FillLevel;
 use App\Enum\MovementType;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
+use App\Exception\StockConflictException;
 use App\Exception\StockException;
 use App\Service\Product\VariantResolver;
 use App\Service\UnitConverter;
@@ -146,7 +147,11 @@ class StockService
         $applied = $item->withdraw($inItemUnit);
 
         if ($applied <= 0.0001) {
-            throw new StockException('Ce produit est déjà épuisé.');
+            // Constaté sous verrou, pas une saisie invalide : quelqu'un d'autre
+            // a pu tout consommer entre la lecture et l'écriture. `StockConflictException`
+            // (et non `StockException`) le signale à `StockOperationGuard`, qui peut
+            // alors enregistrer l'échec proprement sans rien avoir muté avant ce point.
+            throw new StockConflictException('Ce produit est déjà épuisé.');
         }
 
         $movement = $this->record($item, MovementType::Consumption, -$applied, $author, $reason ?? 'Consommation', $operation);
@@ -155,9 +160,9 @@ class StockService
         return $movement;
     }
 
-    public function consumeAll(StockItem $item, Member $author, ?string $reason = null): StockMovement
+    public function consumeAll(StockItem $item, Member $author, ?string $reason = null, ?StockOperation $operation = null): StockMovement
     {
-        return $this->consume($item, $item->getRemainingQuantity(), $item->getUnit(), $author, $reason ?? 'Tout consommé');
+        return $this->consume($item, $item->getRemainingQuantity(), $item->getUnit(), $author, $reason ?? 'Tout consommé', $operation);
     }
 
     /**
@@ -168,7 +173,7 @@ class StockService
      * La contenance vient désormais du lot et non d'un `initialQuantity /
      * numberOfPackages` qui devenait faux dès la première correction.
      */
-    public function consumeOnePackage(StockItem $item, Member $author): StockMovement
+    public function consumeOnePackage(StockItem $item, Member $author, ?StockOperation $operation = null): StockMovement
     {
         $size = $item->getOpenPackageQuantity() ?? $item->getPackageSize();
 
@@ -178,19 +183,20 @@ class StockService
             $item->getUnit(),
             $author,
             'Exemplaire retiré',
+            $operation,
         );
     }
 
     /** Boutons -1 / +1 des produits comptés à l'unité (œufs, yaourts). */
-    public function adjustDiscreteUnits(StockItem $item, int $delta, Member $author): StockMovement
+    public function adjustDiscreteUnits(StockItem $item, int $delta, Member $author, ?StockOperation $operation = null): StockMovement
     {
         if (0 === $delta) {
             throw new StockException('L\'ajustement doit être différent de zéro.');
         }
 
         return $delta < 0
-            ? $this->consume($item, abs($delta), $item->getUnit(), $author, 'Ajustement à l\'unité')
-            : $this->addQuantity($item, $delta, $item->getUnit(), $author, 'Ajustement à l\'unité');
+            ? $this->consume($item, abs($delta), $item->getUnit(), $author, 'Ajustement à l\'unité', $operation)
+            : $this->addQuantity($item, $delta, $item->getUnit(), $author, 'Ajustement à l\'unité', $operation);
     }
 
     /** Réapprovisionnement d'un lot existant (bouton « Ajouter » de la fiche). */
@@ -200,6 +206,7 @@ class StockService
         Unit $unit,
         Member $author,
         ?string $reason = null,
+        ?StockOperation $operation = null,
     ): StockMovement {
         if ($quantity <= 0) {
             throw new StockException('La quantité ajoutée doit être strictement positive.');
@@ -210,7 +217,7 @@ class StockService
         $item->setRemainingQuantity($item->getRemainingQuantity() + $inItemUnit);
         $item->setInitialQuantity(max($item->getInitialQuantity(), $item->getRemainingQuantity()));
 
-        $movement = $this->record($item, MovementType::Addition, $inItemUnit, $author, $reason ?? 'Réapprovisionnement');
+        $movement = $this->record($item, MovementType::Addition, $inItemUnit, $author, $reason ?? 'Réapprovisionnement', $operation);
         $this->flush();
 
         return $movement;
@@ -226,6 +233,7 @@ class StockService
         Unit $unit,
         Member $author,
         ?string $reason = null,
+        ?StockOperation $operation = null,
     ): StockMovement {
         if ($newQuantity < 0) {
             throw new StockException('La quantité corrigée ne peut pas être négative.');
@@ -238,7 +246,7 @@ class StockService
         $item->setInitialQuantity(max($item->getInitialQuantity(), $inItemUnit));
         $item->setQuantityIsEstimated(false);
 
-        $movement = $this->record($item, MovementType::Correction, $delta, $author, $reason ?? 'Correction manuelle');
+        $movement = $this->record($item, MovementType::Correction, $delta, $author, $reason ?? 'Correction manuelle', $operation);
         $this->flush();
 
         return $movement;
@@ -266,6 +274,7 @@ class StockService
         Unit $newUnit,
         ?float $newQuantity,
         Member $author,
+        ?StockOperation $operation = null,
     ): ?StockMovement {
         $currentUnit = $item->getUnit();
 
@@ -317,6 +326,7 @@ class StockService
                 $this->format($item->getRemainingQuantity()),
                 $newUnit->label(),
             ),
+            $operation,
         );
         $this->flush();
 
@@ -324,7 +334,7 @@ class StockService
     }
 
     /** Correction approximative : « plein », « environ la moitié », « presque vide ». */
-    public function applyFillLevel(StockItem $item, FillLevel $level, Member $author): ?StockMovement
+    public function applyFillLevel(StockItem $item, FillLevel $level, Member $author, ?StockOperation $operation = null): ?StockMovement
     {
         $ratio = $level->ratio();
 
@@ -341,6 +351,7 @@ class StockService
             $item->getUnit(),
             $author,
             sprintf('Estimation : %s', $level->label()),
+            $operation,
         );
 
         $item->setQuantityIsEstimated(true);
@@ -370,16 +381,18 @@ class StockService
     }
 
     /** Produit jeté : le stock tombe à zéro mais la ligne et son historique subsistent. */
-    public function discard(StockItem $item, Member $author, ?string $reason = null): StockMovement
+    public function discard(StockItem $item, Member $author, ?string $reason = null, ?StockOperation $operation = null): StockMovement
     {
         if ($item->isEmpty()) {
-            throw new StockException('Ce produit est déjà épuisé.');
+            // Voir le commentaire équivalent dans consume() : constaté sous
+            // verrou, c'est un conflit, pas une saisie invalide.
+            throw new StockConflictException('Ce produit est déjà épuisé.');
         }
 
         $discarded = $item->getRemainingQuantity();
         $item->setRemainingQuantity(0);
 
-        $movement = $this->record($item, MovementType::Deletion, -$discarded, $author, $reason ?? 'Produit jeté');
+        $movement = $this->record($item, MovementType::Deletion, -$discarded, $author, $reason ?? 'Produit jeté', $operation);
         $this->flush();
 
         return $movement;
@@ -399,27 +412,27 @@ class StockService
      * rien n'est sorti du stock ; c'est `remainingAfter` qui dit ce que le lot
      * contenait au moment où on l'a rangé.
      */
-    public function archive(StockItem $item, Member $author, ?string $reason = null): StockItem
+    public function archive(StockItem $item, Member $author, ?string $reason = null, ?StockOperation $operation = null): StockItem
     {
         if ($item->isArchived()) {
             return $item;
         }
 
         $item->archive();
-        $this->record($item, MovementType::Correction, 0.0, $author, $reason ?? 'Lot archivé');
+        $this->record($item, MovementType::Correction, 0.0, $author, $reason ?? 'Lot archivé', $operation);
         $this->flush();
 
         return $item;
     }
 
-    public function restore(StockItem $item, Member $author): StockItem
+    public function restore(StockItem $item, Member $author, ?StockOperation $operation = null): StockItem
     {
         if (!$item->isArchived()) {
             return $item;
         }
 
         $item->restore();
-        $this->record($item, MovementType::Correction, 0.0, $author, 'Lot restauré depuis les archives');
+        $this->record($item, MovementType::Correction, 0.0, $author, 'Lot restauré depuis les archives', $operation);
         $this->flush();
 
         return $item;

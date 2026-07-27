@@ -1,9 +1,9 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { api } from '../../src/api/client';
+import { ApiError, api, generateOperationKey } from '../../src/api/client';
 import type { Reference, StockItem, StockMovement } from '../../src/api/types';
 
 type ReferenceUnit = Reference['units'][number];
@@ -36,6 +36,23 @@ export default function StockItemScreen() {
   const [pendingUnit, setPendingUnit] = useState<ReferenceUnit | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState('');
 
+  /**
+   * Une clé par geste, conservée tant qu'une coupure réseau peut le faire
+   * rejouer : le bouton pressé deux fois de suite après une panne de réseau
+   * ne doit pas déduire deux fois. Elle n'est libérée qu'au succès, ou après
+   * un échec dont on sait qu'il n'a rien écrit (le serveur a répondu).
+   */
+  const operationKeys = useRef(new Map<string, string>());
+
+  function operationKeyFor(actionId: string): string {
+    const existing = operationKeys.current.get(actionId);
+    if (existing) return existing;
+
+    const key = generateOperationKey();
+    operationKeys.current.set(actionId, key);
+    return key;
+  }
+
   const load = useCallback(async () => {
     try {
       const [detail, history, ref] = await Promise.all([
@@ -56,16 +73,38 @@ export default function StockItemScreen() {
     load();
   }, [load]);
 
-  /** Enveloppe commune : exécute l'action, rafraîchit, remonte l'erreur métier. */
-  async function run(action: () => Promise<unknown>) {
+  /**
+   * Enveloppe commune : porte la clé d'opération du geste, exécute l'action,
+   * rafraîchit, remonte l'erreur métier.
+   *
+   * Un 409 signifie que le lot a changé entre la lecture et l'écriture — une
+   * correction fondée sur une révision périmée, ou un verrou qui a fait
+   * attendre puis a découvert un état différent. On recharge le lot avant de
+   * dire pourquoi, plutôt que de laisser l'écran mentir sur ce qu'il contient.
+   */
+  async function run(actionId: string, action: (operationKey: string) => Promise<unknown>) {
     setError(null);
     setBusy(true);
+    const operationKey = operationKeyFor(actionId);
+
     try {
-      await action();
+      await action(operationKey);
+      operationKeys.current.delete(actionId);
       await load();
       setAmount('');
     } catch (exception) {
-      setError(exception instanceof Error ? exception.message : 'Action impossible.');
+      // Une panne de transport (status 0) n'a rien pu écrire : la même clé sert
+      // au prochain essai. Toute autre réponse est déjà tranchée par le serveur.
+      if (!(exception instanceof ApiError) || exception.status !== 0) {
+        operationKeys.current.delete(actionId);
+      }
+
+      if (exception instanceof ApiError && exception.status === 409) {
+        await load();
+        setError('Ce lot a été modifié entre-temps : vérifiez son état avant de recommencer.');
+      } else {
+        setError(exception instanceof Error ? exception.message : 'Action impossible.');
+      }
     } finally {
       setBusy(false);
     }
@@ -96,8 +135,8 @@ export default function StockItemScreen() {
           text: 'Archiver',
           style: 'destructive',
           onPress: () =>
-            run(async () => {
-              await api.archiveStockItem(id, 'Archivé depuis la fiche');
+            run('archive', async (operationKey) => {
+              await api.archiveStockItem(id, operationKey, 'Archivé depuis la fiche');
               router.back();
             }),
         },
@@ -230,7 +269,9 @@ export default function StockItemScreen() {
         <View style={styles.stepper}>
           <Pressable
             style={styles.stepperButton}
-            onPress={() => run(() => api.consume(id, { mode: 'units', delta: -1 }))}
+            onPress={() =>
+              run('consume-units', (operationKey) => api.consume(id, { mode: 'units', delta: -1 }, operationKey))
+            }
             disabled={busy}
             accessibilityRole="button"
             accessibilityLabel={`Consommer un ${item.unitLabel}`}
@@ -248,7 +289,9 @@ export default function StockItemScreen() {
           </Text>
           <Pressable
             style={styles.stepperButton}
-            onPress={() => run(() => api.addQuantity(id, { quantity: 1 }))}
+            onPress={() =>
+              run('add-unit', (operationKey) => api.addQuantity(id, { quantity: 1 }, operationKey))
+            }
             disabled={busy}
             accessibilityRole="button"
             accessibilityLabel={`Ajouter un ${item.unitLabel}`}
@@ -278,7 +321,9 @@ export default function StockItemScreen() {
               setError('Indiquez une quantité valide.');
               return;
             }
-            run(() => api.consume(id, { mode: 'quantity', quantity: value }));
+            run('consume-quantity', (operationKey) =>
+              api.consume(id, { mode: 'quantity', quantity: value }, operationKey),
+            );
           }}
           disabled={busy}
           style={styles.amountButton}
@@ -289,14 +334,18 @@ export default function StockItemScreen() {
         <Button
           label="Tout consommer"
           variant="secondary"
-          onPress={() => run(() => api.consume(id, { mode: 'all' }))}
+          onPress={() =>
+            run('consume-all', (operationKey) => api.consume(id, { mode: 'all' }, operationKey))
+          }
           disabled={busy}
           style={styles.gridItem}
         />
         <Button
           label="Retirer un exemplaire"
           variant="secondary"
-          onPress={() => run(() => api.consume(id, { mode: 'package' }))}
+          onPress={() =>
+            run('consume-package', (operationKey) => api.consume(id, { mode: 'package' }, operationKey))
+          }
           disabled={busy}
           style={styles.gridItem}
         />
@@ -305,7 +354,9 @@ export default function StockItemScreen() {
         <Button
           label={item.isOpened ? 'Refermer l\'exemplaire entamé' : 'Entamer un exemplaire'}
           variant="secondary"
-          onPress={() => run(() => api.setOpened(id, !item.isOpened))}
+          onPress={() =>
+            run('toggle-opened', (operationKey) => api.setOpened(id, !item.isOpened, operationKey))
+          }
           disabled={busy}
           style={styles.gridItem}
         />
@@ -318,7 +369,7 @@ export default function StockItemScreen() {
               setError('Saisissez d\'abord une quantité dans le champ ci-dessus.');
               return;
             }
-            run(() => api.addQuantity(id, { quantity: value }));
+            run('add-quantity', (operationKey) => api.addQuantity(id, { quantity: value }, operationKey));
           }}
           disabled={busy}
           style={styles.gridItem}
@@ -335,7 +386,11 @@ export default function StockItemScreen() {
             key={level.value}
             label={level.label}
             selected={false}
-            onPress={() => run(() => api.correct(id, { fillLevel: level.value }))}
+            onPress={() =>
+              run(`correct-fill-${level.value}`, (operationKey) =>
+                api.correct(id, { fillLevel: level.value }, operationKey, item.revision),
+              )
+            }
           />
         ))}
       </View>
@@ -348,7 +403,9 @@ export default function StockItemScreen() {
             setError('Saisissez la quantité exacte dans le champ « Consommer » ci-dessus.');
             return;
           }
-          run(() => api.correct(id, { quantity: value }));
+          run('correct-quantity', (operationKey) =>
+            api.correct(id, { quantity: value }, operationKey, item.revision),
+          );
         }}
         disabled={busy}
       />
@@ -375,7 +432,9 @@ export default function StockItemScreen() {
                 label={option.label}
                 selected={item.storageLocation === option.value}
                 onPress={() =>
-                  run(() => api.updateStockItem(id, { storageLocation: option.value }))
+                  run(`location-${option.value}`, (operationKey) =>
+                    api.updateStockItem(id, { storageLocation: option.value }, operationKey),
+                  )
                 }
               />
             ))}
@@ -397,7 +456,9 @@ export default function StockItemScreen() {
 
                   if (option.family === currentUnitFamily) {
                     setPendingUnit(null);
-                    run(() => api.changeUnit(id, option.value as StockItem['unit']));
+                    run(`unit-${option.value}`, (operationKey) =>
+                      api.changeUnit(id, option.value as StockItem['unit'], undefined, operationKey, item.revision),
+                    );
                     return;
                   }
 
@@ -428,7 +489,9 @@ export default function StockItemScreen() {
                     }
                     const unit = pendingUnit.value as StockItem['unit'];
                     setPendingUnit(null);
-                    run(() => api.changeUnit(id, unit, value));
+                    run('unit-pending', (operationKey) =>
+                      api.changeUnit(id, unit, value, operationKey, item.revision),
+                    );
                   }}
                   disabled={busy}
                   style={styles.grow}
@@ -453,12 +516,16 @@ export default function StockItemScreen() {
                   label={option.label}
                   selected={selected}
                   onPress={() =>
-                    run(() =>
-                      api.updateStockItem(id, {
-                        traits: selected
-                          ? item.variant.traits.filter((trait) => trait !== option.value)
-                          : [...item.variant.traits, option.value],
-                      }),
+                    run(`trait-${option.value}`, (operationKey) =>
+                      api.updateStockItem(
+                        id,
+                        {
+                          traits: selected
+                            ? item.variant.traits.filter((trait) => trait !== option.value)
+                            : [...item.variant.traits, option.value],
+                        },
+                        operationKey,
+                      ),
                     )
                   }
                 />
@@ -485,7 +552,11 @@ export default function StockItemScreen() {
             </Pressable>
             {item.expirationDate ? (
               <Pressable
-                onPress={() => run(() => api.updateStockItem(id, { expirationDate: null }))}
+                onPress={() =>
+                  run('clear-expiration', (operationKey) =>
+                    api.updateStockItem(id, { expirationDate: null }, operationKey),
+                  )
+                }
                 accessibilityRole="button"
                 accessibilityLabel="Effacer la date de péremption"
               >
@@ -499,7 +570,11 @@ export default function StockItemScreen() {
           <Button
             label="Pas de date imprimée : estimer la fraîcheur"
             variant="secondary"
-            onPress={() => run(() => api.updateStockItem(id, { estimateExpiration: true }))}
+            onPress={() =>
+              run('estimate-expiration', (operationKey) =>
+                api.updateStockItem(id, { estimateExpiration: true }, operationKey),
+              )
+            }
             disabled={busy}
             style={styles.spaced}
           />
@@ -511,8 +586,8 @@ export default function StockItemScreen() {
               onChange={(event, selected) => {
                 setShowPicker(false);
                 if (event.type === 'set' && selected) {
-                  run(() =>
-                    api.updateStockItem(id, { expirationDate: toIsoDate(selected) }),
+                  run('set-expiration', (operationKey) =>
+                    api.updateStockItem(id, { expirationDate: toIsoDate(selected) }, operationKey),
                   );
                 }
               }}
@@ -521,7 +596,9 @@ export default function StockItemScreen() {
 
           <Button
             label="Enregistrer le nom"
-            onPress={() => run(() => api.updateStockItem(id, { name: editName }))}
+            onPress={() =>
+              run('rename', (operationKey) => api.updateStockItem(id, { name: editName }, operationKey))
+            }
             disabled={busy}
           />
           <Button
@@ -539,14 +616,14 @@ export default function StockItemScreen() {
       <Button
         label="Jeter le produit"
         variant="danger"
-        onPress={() => run(() => api.discard(id, 'Produit jeté'))}
+        onPress={() => run('discard', (operationKey) => api.discard(id, operationKey, 'Produit jeté'))}
         disabled={busy || item.remainingQuantity <= 0}
       />
       {item.isArchived ? (
         <Button
           label="Restaurer ce lot"
           variant="secondary"
-          onPress={() => run(() => api.restoreStockItem(id))}
+          onPress={() => run('restore', (operationKey) => api.restoreStockItem(id, operationKey))}
           style={styles.spaced}
         />
       ) : (

@@ -48,6 +48,18 @@ final readonly class JsonPayload
         return array_key_exists($key, $this->data);
     }
 
+    /**
+     * Le corps brut — pour calculer l'empreinte d'une requête (idempotence),
+     * pas pour lire un champ : les accesseurs typés ci-dessous restent le seul
+     * point de passage pour ça.
+     *
+     * @return array<string, mixed>
+     */
+    public function raw(): array
+    {
+        return $this->data;
+    }
+
     public function string(string $key, ?string $default = null): ?string
     {
         $value = $this->data[$key] ?? null;

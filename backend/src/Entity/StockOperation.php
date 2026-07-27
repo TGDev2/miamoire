@@ -71,6 +71,17 @@ class StockOperation
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $completedAt = null;
 
+    /**
+     * Empêche deux relances concurrentes de la même clé périmée de gagner
+     * toutes les deux : Doctrine ajoute `WHERE version = :attendue` à l'UPDATE
+     * de `retry()` et lève `OptimisticLockException` si une autre l'a emporté
+     * entre-temps — sans quoi le stock pouvait être débité deux fois pour une
+     * seule opération, exactement ce que la clé d'opération devait empêcher.
+     */
+    #[ORM\Version]
+    #[ORM\Column(type: 'integer')]
+    private int $version = 1;
+
     public function __construct(
         Household $household,
         string $operationKey,
@@ -149,7 +160,12 @@ class StockOperation
         $this->completedAt = new \DateTimeImmutable();
     }
 
-    /** Remise en attente : une nouvelle tentative sur une opération échouée. */
+    /**
+     * Remise en attente : une nouvelle tentative sur une opération échouée.
+     *
+     * Ce n'est pas la seule protection : `$version` est vérifiée par Doctrine
+     * au flush qui suit cet appel.
+     */
     public function retry(string $requestHash): void
     {
         $this->status = StockOperationStatus::Pending;

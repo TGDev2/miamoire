@@ -109,6 +109,8 @@ export interface SiblingLot {
 
 export interface StockItem {
   id: string;
+  /** Renvoyée en `expectedRevision` pour une correction absolue (quantité, unité). */
+  revision: number;
   variant: ProductVariant;
   initialQuantity: number;
   remainingQuantity: number;

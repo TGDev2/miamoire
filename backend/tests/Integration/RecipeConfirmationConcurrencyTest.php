@@ -15,6 +15,7 @@ use App\Exception\StockException;
 use App\Repository\StockOperationRepository;
 use App\Service\Ai\RecipeConfirmationService;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
+use Symfony\Component\Uid\Uuid;
 
 /**
  * Ce que seule une vraie base peut démontrer.
@@ -208,6 +209,62 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
 
         self::assertFalse($result['replayed']);
         self::assertSame(300.0, $this->remainingInDatabase($this->lot));
+    }
+
+    /**
+     * Le défaut le plus grave de tous : `succeed()` était flushé APRÈS que la
+     * transaction de consommation avait déjà commité. Un arrêt entre les deux
+     * laissait le stock débité et l'opération `pending`, redevenant rejouable
+     * après péremption — double déduction. Depuis, `succeed()` est plié DANS la
+     * même transaction (`StockOperationGuard`), et `retry()` est protégé par la
+     * colonne `#[ORM\Version]` de `StockOperation`.
+     *
+     * Ce test-ci prouve la seconde moitié : deux relances concurrentes de la
+     * MÊME clé périmée ne peuvent pas gagner toutes les deux. On simule la
+     * course sans second processus — l'optimistic lock ne bloque pas, il rejette,
+     * donc il n'y a rien à observer qui exige un vrai parallélisme : il suffit
+     * qu'une autre connexion ait fait avancer la version en base pendant que
+     * celle du test tenait encore l'ancienne valeur en mémoire.
+     */
+    public function testARetriedStaleOperationRacingAnotherRetryIsRejected(): void
+    {
+        $connection = $this->entityManager->getConnection();
+        $operationId = (string) Uuid::v7();
+
+        // Une opération restée « en cours » depuis plus de deux minutes :
+        // abandonnée, sa clé devrait redevenir utilisable.
+        $connection->executeStatement(
+            'INSERT INTO stock_operation (id, household_id, operation_key, type, request_hash, status, version, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $operationId,
+                (string) $this->household->getId(),
+                'operation-key-hhhh8888',
+                'recipe_confirmation',
+                str_repeat('0', 64),
+                'pending',
+                1,
+                (new \DateTimeImmutable('-5 minutes'))->format('Y-m-d H:i:s'),
+            ],
+        );
+
+        // On la charge maintenant, AVANT qu'une autre relance ne fasse avancer sa
+        // version en base : c'est exactement l'état d'un process qui a lu
+        // l'opération, puis attendu, pendant qu'un autre la relançait le premier.
+        $this->operations->findOneByKey($this->household, 'operation-key-hhhh8888');
+
+        // « L'autre relance », gagnante : une autre écriture avance la version.
+        $connection->executeStatement('UPDATE stock_operation SET version = 2 WHERE id = ?', [$operationId]);
+
+        $this->expectException(StockConflictException::class);
+
+        $this->service->confirm(
+            $this->household,
+            $this->member,
+            $this->proposal(50),
+            'Nouvelle tentative',
+            'operation-key-hhhh8888',
+        );
     }
 
     /**

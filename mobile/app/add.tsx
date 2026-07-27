@@ -1,9 +1,9 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { ApiError, api } from '../src/api/client';
+import { ApiError, api, generateOperationKey } from '../src/api/client';
 import type { Product, ProductTraitValue, Reference, ShelfLifeEstimate, Unit } from '../src/api/types';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
 import { colors, radius, spacing } from '../src/theme';
@@ -50,6 +50,12 @@ export default function AddScreen() {
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /**
+   * Conservée jusqu'au succès : un double appui, ou une réponse réseau perdue
+   * suivie d'une nouvelle tentative, ne doit pas créer les mêmes lots deux fois.
+   */
+  const operationKey = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,28 +165,38 @@ export default function AddScreen() {
     }
 
     setBusy(true);
+    if (!operationKey.current) operationKey.current = generateOperationKey();
+
     try {
-      await api.createStockItem({
-        productId: product?.id,
-        barcode: product ? undefined : barcode,
-        name: product ? undefined : name.trim(),
-        brand: product ? undefined : brand.trim() || undefined,
-        numberOfPackages: 1,
-        quantityPerPackage: perPackage,
-        unit,
-        storageLocation: location,
-        // Sans sélection, le serveur déduit l'état du libellé plutôt que de le vider.
-        traits: traits.length > 0 ? traits : undefined,
-        note: note.trim() || undefined,
-        // Une ligne par date : le serveur crée les lots en une seule transaction.
-        batches: batches.map((batch) => ({
-          numberOfPackages: Math.max(1, Math.round(Number(batch.packages.replace(',', '.')) || 1)),
-          expirationDate: batch.estimate || !batch.expiration ? null : toIsoDate(batch.expiration),
-          estimateExpiration: batch.estimate,
-        })),
-      });
+      await api.createStockItem(
+        {
+          productId: product?.id,
+          barcode: product ? undefined : barcode,
+          name: product ? undefined : name.trim(),
+          brand: product ? undefined : brand.trim() || undefined,
+          numberOfPackages: 1,
+          quantityPerPackage: perPackage,
+          unit,
+          storageLocation: location,
+          // Sans sélection, le serveur déduit l'état du libellé plutôt que de le vider.
+          traits: traits.length > 0 ? traits : undefined,
+          note: note.trim() || undefined,
+          // Une ligne par date : le serveur crée les lots en une seule transaction.
+          batches: batches.map((batch) => ({
+            numberOfPackages: Math.max(1, Math.round(Number(batch.packages.replace(',', '.')) || 1)),
+            expirationDate: batch.estimate || !batch.expiration ? null : toIsoDate(batch.expiration),
+            estimateExpiration: batch.estimate,
+          })),
+        },
+        operationKey.current,
+      );
+      operationKey.current = null;
       router.replace('/(tabs)');
     } catch (exception) {
+      // Une panne de transport n'a rien pu écrire : la même clé sert au prochain essai.
+      if (!(exception instanceof ApiError) || exception.status !== 0) {
+        operationKey.current = null;
+      }
       setError(exception instanceof Error ? exception.message : 'Ajout impossible.');
     } finally {
       setBusy(false);

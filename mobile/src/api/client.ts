@@ -18,6 +18,16 @@ import type {
   Unit,
 } from './types';
 
+/**
+ * Une clé stable pour un même geste, à conserver jusqu'à la réponse.
+ *
+ * Rejouée après une coupure réseau — la même clé, pas une nouvelle — le
+ * serveur reconnaît le geste au lieu de l'appliquer une seconde fois.
+ */
+export function generateOperationKey(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -241,23 +251,34 @@ export const api = {
 
   stockItem: (id: string) => request<StockItem>(`/stock-items/${id}`),
 
-  /** Un ajout crée un lot par date de péremption : la réponse est donc une liste. */
-  createStockItem: (body: CreateStockItemInput) =>
-    request<{ items: StockItem[] }>('/stock-items', { method: 'POST', body }),
+  /**
+   * Un ajout crée un lot par date de péremption : la réponse est donc une liste.
+   *
+   * `operationKey` rend le geste rejouable sans effet supplémentaire : un
+   * double appui, ou une réponse réseau perdue suivie d'une nouvelle tentative,
+   * ne crée pas deux fois les mêmes lots.
+   */
+  createStockItem: (body: CreateStockItemInput, operationKey: string) =>
+    request<{ items: StockItem[] }>('/stock-items', { method: 'POST', body: { ...body, operationKey } }),
 
-  updateStockItem: (id: string, body: Record<string, unknown>) =>
-    request<StockItem>(`/stock-items/${id}`, { method: 'PATCH', body }),
+  /**
+   * `expectedRevision` — la révision lue avant l'envoi — protège une correction
+   * de quantité contre l'écrasement d'un changement survenu entre-temps : le
+   * serveur répond alors 409 plutôt que d'écraser silencieusement.
+   */
+  updateStockItem: (id: string, body: Record<string, unknown>, operationKey: string, expectedRevision?: number) =>
+    request<StockItem>(`/stock-items/${id}`, { method: 'PATCH', body: { ...body, operationKey, expectedRevision } }),
 
   /**
    * Archive le lot : il quitte l'inventaire mais son journal survit, et le geste
    * se défait. Une suppression physique effaçait l'historique en cascade —
    * précisément dans le cas où il aurait servi.
    */
-  archiveStockItem: (id: string, reason?: string) =>
-    request<StockItem>(`/stock-items/${id}`, { method: 'DELETE', body: { reason } }),
+  archiveStockItem: (id: string, operationKey: string, reason?: string) =>
+    request<StockItem>(`/stock-items/${id}`, { method: 'DELETE', body: { operationKey, reason } }),
 
-  restoreStockItem: (id: string) =>
-    request<StockItem>(`/stock-items/${id}/restore`, { method: 'POST' }),
+  restoreStockItem: (id: string, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/restore`, { method: 'POST', body: { operationKey } }),
 
   /** Combien de temps cet aliment se garde-t-il, et pourquoi. */
   shelfLife: (params: {
@@ -274,29 +295,34 @@ export const api = {
     return request<ShelfLifeEstimate>(`/products/shelf-life?${query.toString()}`);
   },
 
-  consume: (id: string, body: Record<string, unknown>) =>
-    request<StockItem>(`/stock-items/${id}/consume`, { method: 'POST', body }),
+  consume: (id: string, body: Record<string, unknown>, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/consume`, { method: 'POST', body: { ...body, operationKey } }),
 
-  addQuantity: (id: string, body: { quantity: number; unit?: Unit }) =>
-    request<StockItem>(`/stock-items/${id}/add`, { method: 'POST', body }),
+  addQuantity: (id: string, body: { quantity: number; unit?: Unit }, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/add`, { method: 'POST', body: { ...body, operationKey } }),
 
-  correct: (id: string, body: Record<string, unknown>) =>
-    request<StockItem>(`/stock-items/${id}/correct`, { method: 'POST', body }),
+  /** `expectedRevision`, si fourni, protège contre l'écrasement d'une correction survenue entre-temps. */
+  correct: (id: string, body: Record<string, unknown>, operationKey: string, expectedRevision?: number) =>
+    request<StockItem>(`/stock-items/${id}/correct`, { method: 'POST', body: { ...body, operationKey, expectedRevision } }),
 
   /**
    * Répare une unité mal choisie à la saisie.
    *
    * `quantity` n'est requis que pour changer de famille d'unité (g → unité) :
    * aucune conversion n'existe alors, le serveur refuse plutôt que de deviner.
+   * `expectedRevision`, si fourni, protège contre une écriture périmée.
    */
-  changeUnit: (id: string, unit: Unit, quantity?: number) =>
-    request<StockItem>(`/stock-items/${id}/unit`, { method: 'POST', body: { unit, quantity } }),
+  changeUnit: (id: string, unit: Unit, quantity: number | undefined, operationKey: string, expectedRevision?: number) =>
+    request<StockItem>(`/stock-items/${id}/unit`, {
+      method: 'POST',
+      body: { unit, quantity, operationKey, expectedRevision },
+    }),
 
-  setOpened: (id: string, isOpened: boolean) =>
-    request<StockItem>(`/stock-items/${id}/open`, { method: 'POST', body: { isOpened } }),
+  setOpened: (id: string, isOpened: boolean, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/open`, { method: 'POST', body: { isOpened, operationKey } }),
 
-  discard: (id: string, reason?: string) =>
-    request<StockItem>(`/stock-items/${id}/discard`, { method: 'POST', body: { reason } }),
+  discard: (id: string, operationKey: string, reason?: string) =>
+    request<StockItem>(`/stock-items/${id}/discard`, { method: 'POST', body: { reason, operationKey } }),
 
   movements: (id: string) =>
     request<{ movements: StockMovement[] }>(`/stock-items/${id}/movements`),

@@ -35,4 +35,37 @@ abstract class AbstractApiController extends AbstractController
 
         return $item;
     }
+
+    /**
+     * La même chose, mais verrouillée pour la durée de la transaction en cours.
+     *
+     * Deux téléphones qui liraient chacun 500 g puis retireraient 100 g et 200 g
+     * peuvent, sans verrou, écrire deux soldes concurrents — une mise à jour
+     * perdue. Le verrou doit être pris AVANT toute lecture des champs du lot
+     * dans cette requête : verrouiller un lot déjà chargé ne le rafraîchit pas
+     * (Doctrine ne réhydrate pas une entité déjà gérée), ce qui annulerait
+     * l'intérêt même du verrou. C'est pourquoi cette méthode verrouille d'abord,
+     * et ne doit être appelée qu'à l'intérieur d'un `StockService::transactional()`
+     * — un verrou pessimiste exige une transaction ouverte.
+     */
+    protected function ownedStockItemForUpdate(
+        StockItemRepository $repository,
+        RequestContext $context,
+        string $id,
+    ): StockItem {
+        if (!Uuid::isValid($id)) {
+            throw new NotFoundHttpException('Aliment introuvable.');
+        }
+
+        $uuid = Uuid::fromString($id);
+        $repository->lockForUpdate([$uuid]);
+
+        $item = $repository->find($uuid);
+
+        if (null === $item || !$item->getHousehold()->getId()->equals($context->household()->getId())) {
+            throw new NotFoundHttpException('Aliment introuvable.');
+        }
+
+        return $item;
+    }
 }

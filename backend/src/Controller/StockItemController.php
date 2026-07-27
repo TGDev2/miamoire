@@ -7,10 +7,13 @@ namespace App\Controller;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Product;
 use App\Entity\StockItem;
+use App\Entity\StockOperation;
 use App\Enum\FillLevel;
 use App\Enum\ProductTrait;
+use App\Enum\StockOperationType;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
+use App\Exception\StockConflictException;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
@@ -20,8 +23,8 @@ use App\Repository\StockMovementRepository;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\Product\VariantResolver;
 use App\Service\ProductLookupService;
+use App\Service\Stock\StockOperationGuard;
 use App\Service\Stock\StockService;
-use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -68,13 +71,17 @@ class StockItemController extends AbstractApiController
      * obligeait à refaire tout le formulaire ; les fondre en un seul lot aurait
      * fait mentir la date la plus proche, donc les alertes et FEFO.
      *
-     * `batches` décrit donc les dates, et tout le reste est commun.
+     * `batches` décrit donc les dates, et tout le reste est commun. `operationKey`
+     * rend le geste rejouable sans effet supplémentaire : un double appui, ou une
+     * réponse réseau perdue suivie d'une nouvelle tentative, ne crée pas deux fois
+     * les mêmes lots.
      */
     #[Route('', methods: ['POST'])]
     public function create(
         Request $request,
         RequestContext $context,
         StockService $stockService,
+        StockOperationGuard $guard,
         ProductLookupService $lookup,
         ProductRepository $products,
         VariantResolver $variants,
@@ -125,28 +132,37 @@ class StockItemController extends AbstractApiController
             $batches = [[]];
         }
 
-        // Un ajout partiel — trois lots créés, le quatrième en échec — laisserait
-        // un inventaire que personne n'a saisi. Tout ou rien.
-        $items = $stockService->transactional(
-            fn (): array => array_map(
-                fn (array $batch): StockItem => $this->addBatch(
-                    $stockService,
-                    $shelfLife,
-                    $household,
-                    $author,
-                    $variant,
-                    $unit,
-                    $defaults,
-                    $batch,
-                ),
-                $batches,
-            ),
+        $response = $guard->run(
+            $household,
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $author,
+            $stockService,
+            // Un ajout partiel — trois lots créés, le quatrième en échec — laisserait
+            // un inventaire que personne n'a saisi. Tout ou rien : une erreur de saisie
+            // sur un batch n'est pas rattrapée ici (voir StockOperationGuard), elle
+            // remonte et fait annuler toute la transaction, batches déjà créés compris.
+            function () use ($stockService, $shelfLife, $household, $author, $variant, $unit, $defaults, $batches, $presenter): array {
+                $items = array_map(
+                    fn (array $batch): StockItem => $this->addBatch(
+                        $stockService,
+                        $shelfLife,
+                        $household,
+                        $author,
+                        $variant,
+                        $unit,
+                        $defaults,
+                        $batch,
+                    ),
+                    $batches,
+                );
+
+                return ['items' => array_map(static fn (StockItem $item) => $presenter->stockItem($item), $items)];
+            },
         );
 
-        return $this->json(
-            ['items' => array_map(static fn (StockItem $item) => $presenter->stockItem($item), $items)],
-            Response::HTTP_CREATED,
-        );
+        return $this->json($response, Response::HTTP_CREATED);
     }
 
     #[Route('/{id}', methods: ['GET'])]
@@ -161,7 +177,11 @@ class StockItemController extends AbstractApiController
         return $this->json($presenter->stockItem($item, $stockItems->findSiblings($item)));
     }
 
-    /** Modifications sans impact quantitatif : emplacement, dates, nom, état ouvert. */
+    /**
+     * Modifications sans impact quantitatif : emplacement, dates, nom, état ouvert.
+     * Peut aussi porter `remainingQuantity`, auquel cas `expectedRevision` — si
+     * fourni — protège contre l'écrasement d'un changement qu'on n'a pas vu.
+     */
     #[Route('/{id}', methods: ['PATCH'])]
     public function update(
         string $id,
@@ -169,68 +189,98 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         VariantResolver $variants,
         ShelfLifeEstimator $shelfLife,
-        EntityManagerInterface $entityManager,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
+        $expectedRevision = $payload->int('expectedRevision');
 
-        if ($payload->has('storageLocation')) {
-            $item->setStorageLocation($payload->requiredEnum('storageLocation', StorageLocation::class));
-        }
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $context->member(),
+            $stockService,
+            function (StockOperation $operation) use (
+                $id,
+                $context,
+                $stockItems,
+                $stockService,
+                $variants,
+                $shelfLife,
+                $presenter,
+                $payload,
+                $expectedRevision,
+            ): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
 
-        if ($payload->has('expirationDate')) {
-            $item->setExpirationDate($payload->date('expirationDate'));
-        }
+                if (null !== $expectedRevision && $expectedRevision !== $item->getRevision()) {
+                    throw new StockConflictException(
+                        'Ce lot a été modifié entre-temps : revoyez son état avant de recommencer.',
+                        ['current' => $presenter->stockItem($item, $stockItems->findSiblings($item))],
+                    );
+                }
 
-        // « Je n'ai pas de date, mais estime-la » : recalculée depuis l'aliment,
-        // son état et l'endroit où il est rangé.
-        if ($payload->bool('estimateExpiration')) {
-            $item->setEstimatedExpirationDate($this->estimateFor($shelfLife, $item->getVariant(), $item->getStorageLocation()));
-        }
+                if ($payload->has('storageLocation')) {
+                    $item->setStorageLocation($payload->requiredEnum('storageLocation', StorageLocation::class));
+                }
 
-        if ($payload->has('purchaseDate')) {
-            $item->setPurchaseDate($payload->date('purchaseDate'));
-        }
+                if ($payload->has('expirationDate')) {
+                    $item->setExpirationDate($payload->date('expirationDate'));
+                }
 
-        if ($payload->has('note')) {
-            $item->setNote($payload->string('note'));
-        }
+                // « Je n'ai pas de date, mais estime-la » : recalculée depuis l'aliment,
+                // son état et l'endroit où il est rangé.
+                if ($payload->bool('estimateExpiration')) {
+                    $item->setEstimatedExpirationDate($this->estimateFor($shelfLife, $item->getVariant(), $item->getStorageLocation()));
+                }
 
-        // Renommer, c'est renommer DANS CE FOYER : le catalogue partagé n'est plus
-        // touché, et la clé culinaire est régénérée du même geste.
-        if ($payload->has('name')) {
-            $item->setVariant($variants->rename($item->getVariant(), $payload->requiredString('name')));
-        }
+                if ($payload->has('purchaseDate')) {
+                    $item->setPurchaseDate($payload->date('purchaseDate'));
+                }
 
-        // L'état du produit (en conserve, épluché…) conditionne les étapes de recette.
-        if ($payload->has('traits')) {
-            $item->setVariant($variants->changeTraits(
-                $item->getVariant(),
-                ProductTrait::fromValues($payload->stringList('traits')),
-            ));
-        }
+                if ($payload->has('note')) {
+                    $item->setNote($payload->string('note'));
+                }
 
-        if ($payload->has('isOpened')) {
-            $stockService->markOpened($item, $payload->bool('isOpened'));
-        }
+                // Renommer, c'est renommer DANS CE FOYER : le catalogue partagé n'est plus
+                // touché, et la clé culinaire est régénérée du même geste.
+                if ($payload->has('name')) {
+                    $item->setVariant($variants->rename($item->getVariant(), $payload->requiredString('name')));
+                }
 
-        // Toute variation de quantité passe par une correction journalisée.
-        if ($payload->has('remainingQuantity')) {
-            $stockService->correct(
-                $item,
-                $payload->requiredFloat('remainingQuantity'),
-                $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-                $context->requireMember(),
-                $payload->string('reason'),
-            );
-        }
+                // L'état du produit (en conserve, épluché…) conditionne les étapes de recette.
+                if ($payload->has('traits')) {
+                    $item->setVariant($variants->changeTraits(
+                        $item->getVariant(),
+                        ProductTrait::fromValues($payload->stringList('traits')),
+                    ));
+                }
 
-        $entityManager->flush();
+                if ($payload->has('isOpened')) {
+                    $stockService->markOpened($item, $payload->bool('isOpened'));
+                }
 
-        return $this->json($presenter->stockItem($item, $stockItems->findSiblings($item)));
+                // Toute variation de quantité passe par une correction journalisée.
+                if ($payload->has('remainingQuantity')) {
+                    $stockService->correct(
+                        $item,
+                        $payload->requiredFloat('remainingQuantity'),
+                        $payload->enum('unit', Unit::class) ?? $item->getUnit(),
+                        $context->requireMember(),
+                        $payload->string('reason'),
+                        $operation,
+                    );
+                }
+
+                return $presenter->stockItem($item, $stockItems->findSiblings($item));
+            },
+        );
+
+        return $this->json($response);
     }
 
     /**
@@ -244,31 +294,59 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $stockService->archive(
-            $this->ownedStockItem($stockItems, $context, $id),
-            $context->requireMember(),
-            JsonPayload::fromRequest($request)->string('reason'),
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $payload, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->archive($item, $member, $payload->string('reason'), $operation);
+
+                return $presenter->stockItem($item);
+            },
         );
 
-        return $this->json($presenter->stockItem($item));
+        return $this->json($response);
     }
 
     #[Route('/{id}/restore', methods: ['POST'])]
     public function restore(
         string $id,
+        Request $request,
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $stockService->restore(
-            $this->ownedStockItem($stockItems, $context, $id),
-            $context->requireMember(),
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->restore($item, $member, $operation);
+
+                return $presenter->stockItem($item);
+            },
         );
 
-        return $this->json($presenter->stockItem($item));
+        return $this->json($response);
     }
 
     #[Route('/{id}/consume', methods: ['POST'])]
@@ -278,28 +356,43 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
         $mode = $payload->string('mode', 'quantity');
         $member = $context->requireMember();
 
-        match ($mode) {
-            'all' => $stockService->consumeAll($item, $member, $payload->string('reason')),
-            'package' => $stockService->consumeOnePackage($item, $member),
-            'units' => $stockService->adjustDiscreteUnits($item, $payload->int('delta', -1) ?? -1, $member),
-            'quantity' => $stockService->consume(
-                $item,
-                $payload->requiredFloat('quantity'),
-                $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-                $member,
-                $payload->string('reason'),
-            ),
-            default => throw new BadRequestHttpException(sprintf('Mode de consommation « %s » inconnu.', $mode)),
-        };
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $payload, $member, $mode): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
 
-        return $this->json($presenter->stockItem($item));
+                match ($mode) {
+                    'all' => $stockService->consumeAll($item, $member, $payload->string('reason'), $operation),
+                    'package' => $stockService->consumeOnePackage($item, $member, $operation),
+                    'units' => $stockService->adjustDiscreteUnits($item, $payload->int('delta', -1) ?? -1, $member, $operation),
+                    'quantity' => $stockService->consume(
+                        $item,
+                        $payload->requiredFloat('quantity'),
+                        $payload->enum('unit', Unit::class) ?? $item->getUnit(),
+                        $member,
+                        $payload->string('reason'),
+                        $operation,
+                    ),
+                    default => throw new BadRequestHttpException(sprintf('Mode de consommation « %s » inconnu.', $mode)),
+                };
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
     }
 
     #[Route('/{id}/add', methods: ['POST'])]
@@ -309,22 +402,39 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
 
-        $stockService->addQuantity(
-            $item,
-            $payload->requiredFloat('quantity'),
-            $payload->enum('unit', Unit::class) ?? $item->getUnit(),
-            $context->requireMember(),
-            $payload->string('reason'),
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $payload, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+
+                $stockService->addQuantity(
+                    $item,
+                    $payload->requiredFloat('quantity'),
+                    $payload->enum('unit', Unit::class) ?? $item->getUnit(),
+                    $member,
+                    $payload->string('reason'),
+                    $operation,
+                );
+
+                return $presenter->stockItem($item);
+            },
         );
 
-        return $this->json($presenter->stockItem($item));
+        return $this->json($response);
     }
 
+    /** Correction absolue : `expectedRevision`, si fourni, protège contre une écriture périmée. */
     #[Route('/{id}/correct', methods: ['POST'])]
     public function correct(
         string $id,
@@ -332,28 +442,60 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
         $member = $context->requireMember();
+        $expectedRevision = $payload->int('expectedRevision');
 
-        // Correction approximative (« environ la moitié ») ou quantité exacte.
-        $fillLevel = $payload->enum('fillLevel', FillLevel::class);
-
-        if (null !== $fillLevel) {
-            $stockService->applyFillLevel($item, $fillLevel, $member);
-        } else {
-            $stockService->correct(
-                $item,
-                $payload->requiredFloat('quantity'),
-                $payload->enum('unit', Unit::class) ?? $item->getUnit(),
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use (
+                $id,
+                $context,
+                $stockItems,
+                $stockService,
+                $presenter,
+                $payload,
                 $member,
-                $payload->string('reason'),
-            );
-        }
+                $expectedRevision,
+            ): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
 
-        return $this->json($presenter->stockItem($item));
+                if (null !== $expectedRevision && $expectedRevision !== $item->getRevision()) {
+                    throw new StockConflictException(
+                        'Ce lot a été modifié entre-temps : revoyez son état avant de recommencer.',
+                        ['current' => $presenter->stockItem($item)],
+                    );
+                }
+
+                // Correction approximative (« environ la moitié ») ou quantité exacte.
+                $fillLevel = $payload->enum('fillLevel', FillLevel::class);
+
+                if (null !== $fillLevel) {
+                    $stockService->applyFillLevel($item, $fillLevel, $member, $operation);
+                } else {
+                    $stockService->correct(
+                        $item,
+                        $payload->requiredFloat('quantity'),
+                        $payload->enum('unit', Unit::class) ?? $item->getUnit(),
+                        $member,
+                        $payload->string('reason'),
+                        $operation,
+                    );
+                }
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
     }
 
     /**
@@ -362,7 +504,8 @@ class StockItemController extends AbstractApiController
      * `quantity` n'est requis que si la nouvelle unité appartient à une autre
      * famille : convertir des grammes en unités demanderait un poids unitaire
      * qu'on n'a pas. C'est refusé plutôt que deviné. Le lot rejoint alors la
-     * variante correspondante du foyer.
+     * variante correspondante du foyer. `expectedRevision`, si fourni, protège
+     * contre une écriture fondée sur une lecture périmée.
      */
     #[Route('/{id}/unit', methods: ['POST'])]
     public function changeUnit(
@@ -371,19 +514,52 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
         $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+        $expectedRevision = $payload->int('expectedRevision');
 
-        $stockService->changeUnit(
-            $item,
-            $payload->requiredEnum('unit', Unit::class),
-            $payload->float('quantity'),
-            $context->requireMember(),
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use (
+                $id,
+                $context,
+                $stockItems,
+                $stockService,
+                $presenter,
+                $payload,
+                $member,
+                $expectedRevision,
+            ): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+
+                if (null !== $expectedRevision && $expectedRevision !== $item->getRevision()) {
+                    throw new StockConflictException(
+                        'Ce lot a été modifié entre-temps : revoyez son état avant de recommencer.',
+                        ['current' => $presenter->stockItem($item)],
+                    );
+                }
+
+                $stockService->changeUnit(
+                    $item,
+                    $payload->requiredEnum('unit', Unit::class),
+                    $payload->float('quantity'),
+                    $member,
+                    $operation,
+                );
+
+                return $presenter->stockItem($item);
+            },
         );
 
-        return $this->json($presenter->stockItem($item));
+        return $this->json($response);
     }
 
     #[Route('/{id}/open', methods: ['POST'])]
@@ -393,12 +569,27 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
-        $stockService->markOpened($item, JsonPayload::fromRequest($request)->bool('isOpened', true));
+        $payload = JsonPayload::fromRequest($request);
 
-        return $this->json($presenter->stockItem($item));
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $context->member(),
+            $stockService,
+            function () use ($id, $context, $stockItems, $stockService, $presenter, $payload): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->markOpened($item, $payload->bool('isOpened', true));
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
     }
 
     #[Route('/{id}/discard', methods: ['POST'])]
@@ -408,16 +599,28 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockItemRepository $stockItems,
         StockService $stockService,
+        StockOperationGuard $guard,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $item = $this->ownedStockItem($stockItems, $context, $id);
-        $stockService->discard(
-            $item,
-            $context->requireMember(),
-            JsonPayload::fromRequest($request)->string('reason'),
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $payload, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->discard($item, $member, $payload->string('reason'), $operation);
+
+                return $presenter->stockItem($item);
+            },
         );
 
-        return $this->json($presenter->stockItem($item));
+        return $this->json($response);
     }
 
     #[Route('/{id}/movements', methods: ['GET'])]
@@ -522,5 +725,19 @@ class StockItemController extends AbstractApiController
         }
 
         return null;
+    }
+
+    /**
+     * L'empreinte d'une requête, pour reconnaître qu'une clé d'opération rejouée
+     * porte bien le même geste — et refuser plutôt que de la confondre avec un
+     * autre si son contenu diffère. `operationKey`/`expectedRevision` sont des
+     * détails de transport, pas le geste lui-même : ils n'entrent pas dans l'empreinte.
+     */
+    private function requestHash(JsonPayload $payload): string
+    {
+        $data = $payload->raw();
+        unset($data['operationKey'], $data['expectedRevision']);
+
+        return hash('sha256', json_encode($data, \JSON_THROW_ON_ERROR));
     }
 }

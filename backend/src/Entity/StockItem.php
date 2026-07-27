@@ -147,6 +147,16 @@ class StockItem
     #[ORM\OrderBy(['createdAt' => 'DESC'])]
     private Collection $movements;
 
+    /**
+     * Incrémentée par Doctrine à chaque écriture ; c'est elle que le mobile
+     * renvoie en `expectedRevision` pour une correction absolue. Une correction
+     * fondée sur une lecture périmée est ainsi refusée avec un 409 plutôt que
+     * d'écraser silencieusement un changement qu'elle n'a jamais vu.
+     */
+    #[ORM\Version]
+    #[ORM\Column(type: 'integer')]
+    private int $revision = 1;
+
     public function __construct(
         Household $household,
         HouseholdProductVariant $variant,
@@ -177,6 +187,11 @@ class StockItem
     public function getId(): Uuid
     {
         return $this->id;
+    }
+
+    public function getRevision(): int
+    {
+        return $this->revision;
     }
 
     public function getHousehold(): Household

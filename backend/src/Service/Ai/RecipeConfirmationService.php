@@ -8,57 +8,44 @@ use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
 use App\Entity\StockOperation;
-use App\Enum\StockOperationStatus;
 use App\Enum\StockOperationType;
 use App\Exception\StockConflictException;
 use App\Exception\StockException;
 use App\Repository\HouseholdProductVariantRepository;
-use App\Repository\StockOperationRepository;
 use App\Service\Ai\Safety\DietaryGuardFactory;
 use App\Service\Stock\ConsumptionLine;
 use App\Service\Stock\FefoAllocator;
 use App\Service\Stock\FefoPlan;
 use App\Service\Stock\ProposalConsolidator;
+use App\Service\Stock\StockOperationGuard;
 use App\Service\Stock\StockService;
-use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
-use Doctrine\ORM\EntityManagerInterface;
 
 /**
  * Applique une proposition de consommation APRÈS confirmation explicite de l'utilisateur.
  *
- * C'est la seule porte par laquelle une recette peut toucher au stock. Elle tient
- * quatre garanties, et chacune corrige un défaut constaté :
+ * C'est la seule porte par laquelle une recette peut toucher au stock. L'idempotence,
+ * l'atomicité et le rejeu sont portés par `StockOperationGuard` (partagé avec les
+ * mutations de stock ordinaires) ; cette classe se concentre sur ce qui lui est
+ * propre :
  *
- * 1. **Idempotence.** La requête porte une clé d'opération. Une réponse réseau
- *    perdue suivie d'une nouvelle tentative ne déduit plus deux fois : la seconde
- *    relit la réponse figée de la première.
- * 2. **Atomicité.** Les lots sont verrouillés, FEFO est recalculé À L'INTÉRIEUR de
- *    la transaction, et un plan devenu incomplet n'écrit rien du tout. Auparavant
- *    les plans étaient tous calculés avant la transaction, et une allocation
- *    partielle suffisait à déclencher l'écriture.
- * 3. **Honnêteté.** Les lignes en double sont fusionnées avant planification, si
+ * 1. **Atomicité du plan.** Les lots sont verrouillés, FEFO est recalculé À
+ *    L'INTÉRIEUR de la transaction, et un plan devenu incomplet n'écrit rien du
+ *    tout — la vérification précède toujours l'application.
+ * 2. **Honnêteté.** Les lignes en double sont fusionnées avant planification, si
  *    bien que la quantité annoncée comme appliquée est celle qui a réellement été
  *    retirée — le plafonnement silencieux ne peut plus mentir.
- * 4. **Sûreté alimentaire.** Les exclusions du foyer sont revérifiées ici : une
+ * 3. **Sûreté alimentaire.** Les exclusions du foyer sont revérifiées ici : une
  *    proposition ancienne, ou forgée, ne peut pas déduire un aliment exclu.
  */
 class RecipeConfirmationService
 {
-    /**
-     * Au-delà de ce délai, une opération restée « en cours » est considérée comme
-     * abandonnée — processus tué, conteneur redémarré — et sa clé redevient
-     * utilisable. Sans cela, un incident bloquerait définitivement une recette.
-     */
-    private const STALE_PENDING_MINUTES = 2;
-
     public function __construct(
         private readonly FefoAllocator $allocator,
         private readonly StockService $stockService,
         private readonly ProposalConsolidator $consolidator,
         private readonly HouseholdProductVariantRepository $variants,
-        private readonly StockOperationRepository $operations,
+        private readonly StockOperationGuard $operationGuard,
         private readonly DietaryGuardFactory $guards,
-        private readonly EntityManagerInterface $entityManager,
     ) {
     }
 
@@ -74,7 +61,6 @@ class RecipeConfirmationService
         ?string $recipeName,
         string $operationKey,
     ): array {
-        $key = $this->validateKey($operationKey);
         $lines = $this->consolidator->consolidate($proposal);
         $requestHash = $this->consolidator->hash($lines, $recipeName);
 
@@ -82,44 +68,31 @@ class RecipeConfirmationService
         $targets = $this->resolveTargets($household, $lines);
         $this->assertAllowed($household, $targets);
 
-        $replay = $this->replayIfKnown($household, $key, $requestHash);
-        if (null !== $replay) {
-            return $replay;
-        }
-
-        $operation = $this->reserve($household, $key, $requestHash, $author);
-
-        $outcome = $this->stockService->transactional(
-            fn (): array => $this->applyWithin($operation, $targets, $author, $recipeName),
+        return $this->operationGuard->run(
+            $household,
+            $operationKey,
+            StockOperationType::RecipeConfirmation,
+            $requestHash,
+            $author,
+            $this->stockService,
+            fn (StockOperation $operation): array => $this->applyWithin($operation, $targets, $author, $recipeName),
         );
-
-        if (!$outcome['complete']) {
-            $operation->fail('Stock insuffisant au moment de la confirmation.');
-            $this->entityManager->flush();
-
-            throw new StockConflictException(
-                'Le stock a changé depuis la proposition : rien n\'a été retiré. Voici ce qui est encore disponible.',
-                ['proposal' => $outcome['shortages']],
-            );
-        }
-
-        $response = $outcome['response'];
-        $operation->succeed($response);
-        $this->entityManager->flush();
-
-        return $response;
     }
 
     /**
      * Le cœur transactionnel.
      *
-     * Ne lève jamais d'exception métier : un `throw` ici fermerait l'EntityManager
-     * et empêcherait d'enregistrer l'échec de l'opération. Le manque est donc
-     * remonté comme un résultat, et l'appelant décide.
+     * Tout est planifié — et vérifié complet — AVANT la moindre écriture : une
+     * fois la boucle de consommation commencée, plus rien ne doit pouvoir lever
+     * d'exception, sous peine de faire valider une déduction partielle par
+     * `StockOperationGuard`, qui traite tout rejet survenant ici comme un rejet
+     * propre plutôt que comme une écriture à moitié faite.
      *
      * @param list<array{line: ConsumptionLine, variant: HouseholdProductVariant}> $targets
      *
-     * @return array{complete: bool, response: array<string, mixed>, shortages: list<array<string, mixed>>}
+     * @return array<string, mixed>
+     *
+     * @throws StockConflictException si le plan n'est plus réalisable
      */
     private function applyWithin(
         StockOperation $operation,
@@ -155,7 +128,10 @@ class RecipeConfirmationService
         // Tout ou rien : une recette à moitié déduite laisse un stock faux et un
         // utilisateur qui ne sait pas ce qu'il lui reste.
         if ([] !== $shortages) {
-            return ['complete' => false, 'response' => [], 'shortages' => $shortages];
+            throw new StockConflictException(
+                'Le stock a changé depuis la proposition : rien n\'a été retiré. Voici ce qui est encore disponible.',
+                ['proposal' => $shortages],
+            );
         }
 
         $reason = null !== $recipeName && '' !== $recipeName
@@ -175,11 +151,7 @@ class RecipeConfirmationService
             }
         }
 
-        return [
-            'complete' => true,
-            'response' => $this->describe($operation, $plans, $recipeName),
-            'shortages' => [],
-        ];
+        return $this->describe($operation, $plans, $recipeName);
     }
 
     /**
@@ -289,99 +261,5 @@ class RecipeConfirmationService
                 ));
             }
         }
-    }
-
-    /**
-     * La réponse figée d'une opération déjà menée à bien, s'il y en a une.
-     *
-     * @return array<string, mixed>|null
-     */
-    private function replayIfKnown(Household $household, string $key, string $requestHash): ?array
-    {
-        $existing = $this->operations->findOneByKey($household, $key);
-
-        if (null === $existing) {
-            return null;
-        }
-
-        // Le contenu ne compte que pour une opération ABOUTIE : c'est la seule qui
-        // détient une réponse, et renvoyer celle d'un autre geste serait pire que
-        // de refuser. Une opération échouée, elle, n'a rien écrit — sa clé est
-        // libre, quel que soit le contenu de la nouvelle tentative.
-        if (StockOperationStatus::Succeeded === $existing->getStatus()) {
-            if (!$existing->matches($requestHash)) {
-                throw new StockException(
-                    'Cette confirmation a déjà servi pour une autre recette. Regénérez des propositions.',
-                );
-            }
-
-            return ['replayed' => true] + ($existing->getResponse() ?? []);
-        }
-
-        if (StockOperationStatus::Pending === $existing->getStatus() && !$this->isStale($existing)) {
-            throw new StockConflictException(
-                'Cette confirmation est déjà en cours de traitement. Patientez quelques instants.',
-            );
-        }
-
-        // Échouée, ou abandonnée depuis assez longtemps : la clé se réemploie.
-        $existing->retry($requestHash);
-        $this->entityManager->flush();
-
-        return null;
-    }
-
-    private function reserve(
-        Household $household,
-        string $key,
-        string $requestHash,
-        Member $author,
-    ): StockOperation {
-        $existing = $this->operations->findOneByKey($household, $key);
-
-        if (null !== $existing) {
-            return $existing;
-        }
-
-        $operation = new StockOperation(
-            $household,
-            $key,
-            StockOperationType::RecipeConfirmation,
-            $requestHash,
-            $author,
-        );
-
-        $this->entityManager->persist($operation);
-
-        try {
-            $this->entityManager->flush();
-        } catch (UniqueConstraintViolationException) {
-            // Deux téléphones ont confirmé la même recette au même instant.
-            // L'index unique a tranché : celui qui perd n'écrit rien.
-            throw new StockConflictException(
-                'Cette confirmation est déjà en cours de traitement. Patientez quelques instants.',
-            );
-        }
-
-        return $operation;
-    }
-
-    private function isStale(StockOperation $operation): bool
-    {
-        return $operation->getCreatedAt()
-            < new \DateTimeImmutable(sprintf('-%d minutes', self::STALE_PENDING_MINUTES));
-    }
-
-    private function validateKey(string $operationKey): string
-    {
-        $key = trim($operationKey);
-
-        if (1 !== preg_match('/^[A-Za-z0-9_-]{8,64}$/', $key)) {
-            throw new StockException(
-                'Identifiant de confirmation invalide : l\'application doit en fournir un stable.',
-            );
-        }
-
-        return $key;
     }
 }
