@@ -4,8 +4,9 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { useExpiryAlerts } from '../src/notifications/useExpiryAlerts';
 import { RecipeProvider } from '../src/recipes/RecipeContext';
-import { SessionProvider } from '../src/session/SessionContext';
+import { SessionProvider, useSession } from '../src/session/SessionContext';
 import { colors } from '../src/theme';
 
 // Une alerte de péremption doit s'afficher même si l'application est ouverte :
@@ -38,6 +39,7 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <SessionProvider>
+        <ExpiryAlerts />
         <RecipeProvider>
           <StatusBar style="dark" />
           <Stack
@@ -62,4 +64,19 @@ export default function RootLayout() {
       </SessionProvider>
     </SafeAreaProvider>
   );
+}
+
+/**
+ * Les alertes se resynchronisent au niveau de l'application, pas d'un écran.
+ *
+ * Le hook a besoin de la session : il doit donc vivre SOUS `SessionProvider`, ce
+ * qui demande ce composant sans rendu plutôt qu'un appel dans `RootLayout`.
+ * Il n'affiche rien, il écoute le retour au premier plan.
+ */
+function ExpiryAlerts() {
+  const { household } = useSession();
+
+  useExpiryAlerts(household !== null);
+
+  return null;
 }

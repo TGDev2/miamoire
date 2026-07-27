@@ -29,19 +29,9 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
  */
 abstract class DatabaseTestCase extends KernelTestCase
 {
-    protected EntityManagerInterface $entityManager;
+    use RequiresDatabase;
 
-    /** Ordre de purge : les dépendantes d'abord, sinon les clés étrangères refusent. */
-    private const TABLES = [
-        'stock_movement',
-        'stock_operation',
-        'saved_recipe',
-        'stock_item',
-        'household_product_variant',
-        'household_member',
-        'household',
-        'product',
-    ];
+    protected EntityManagerInterface $entityManager;
 
     protected function setUp(): void
     {
@@ -51,15 +41,7 @@ abstract class DatabaseTestCase extends KernelTestCase
         $entityManager = static::getContainer()->get(EntityManagerInterface::class);
         $this->entityManager = $entityManager;
 
-        try {
-            $this->entityManager->getConnection()->executeQuery('SELECT 1');
-        } catch (\Throwable $exception) {
-            self::markTestSkipped(sprintf(
-                'Base de test injoignable (%s). Créez-la avec doctrine:database:create --env=test.',
-                $exception->getMessage(),
-            ));
-        }
-
+        $this->skipUnlessDatabaseIsReachable($this->entityManager);
         $this->purge();
     }
 
@@ -74,11 +56,7 @@ abstract class DatabaseTestCase extends KernelTestCase
 
     protected function purge(): void
     {
-        $connection = $this->entityManager->getConnection();
-
-        foreach (self::TABLES as $table) {
-            $connection->executeStatement(sprintf('DELETE FROM %s', $table));
-        }
+        $this->purgeDatabase($this->entityManager);
     }
 
     /**

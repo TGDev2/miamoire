@@ -315,6 +315,8 @@ export default function AddScreen() {
             {batches.length > 1 ? (
               <Pressable
                 onPress={() => setBatches((current) => current.filter((entry) => entry.id !== batch.id))}
+                accessibilityRole="button"
+                accessibilityLabel={`Retirer le lot ${position + 1}`}
               >
                 <Text style={styles.clearDateText}>Retirer</Text>
               </Pressable>
@@ -331,7 +333,17 @@ export default function AddScreen() {
             />
             <View style={styles.pairInput}>
               <Text style={styles.fieldLabel}>À consommer avant</Text>
-              <Pressable style={styles.dateButton} onPress={() => setPickerFor(batch.id)}>
+              <Pressable
+                style={styles.dateButton}
+                onPress={() => setPickerFor(batch.id)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  batch.expiration
+                    ? `Lot ${position + 1}, à consommer avant le ${formatDate(batch.expiration)}`
+                    : `Lot ${position + 1}, aucune date de péremption`
+                }
+                accessibilityHint="Ouvre le sélecteur de date"
+              >
                 <Text style={styles.dateText}>
                   {batch.expiration ? formatDate(batch.expiration) : 'Aucune date'}
                 </Text>

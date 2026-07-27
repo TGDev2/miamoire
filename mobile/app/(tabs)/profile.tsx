@@ -130,6 +130,8 @@ export default function ProfileScreen() {
         <Pressable
           key={`remove-${entry.id}`}
           onPress={() => confirmRemoveMember(entry.id, entry.firstName)}
+          accessibilityRole="button"
+          accessibilityLabel={`Retirer ${entry.firstName} du foyer`}
           style={styles.removeRow}
         >
           <Text style={styles.removeText}>Retirer {entry.firstName} du foyer</Text>

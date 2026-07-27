@@ -164,6 +164,9 @@ export default function SetupScreen() {
             <View style={styles.tabs}>
               <Pressable
                 onPress={() => setMode('join')}
+                accessibilityRole="tab"
+                accessibilityLabel="J'ai un code"
+                accessibilityState={{ selected: mode === 'join' }}
                 style={[styles.tab, mode === 'join' && styles.tabActive]}
               >
                 <Text style={[styles.tabText, mode === 'join' && styles.tabTextActive]}>
@@ -172,6 +175,9 @@ export default function SetupScreen() {
               </Pressable>
               <Pressable
                 onPress={() => setMode('create')}
+                accessibilityRole="tab"
+                accessibilityLabel="Créer un foyer"
+                accessibilityState={{ selected: mode === 'create' }}
                 style={[styles.tab, mode === 'create' && styles.tabActive]}
               >
                 <Text style={[styles.tabText, mode === 'create' && styles.tabTextActive]}>
@@ -225,6 +231,8 @@ export default function SetupScreen() {
               <Pressable
                 key={entry.id}
                 onPress={() => selectMember(entry)}
+                accessibilityRole="button"
+                accessibilityLabel={`Je suis ${entry.firstName}`}
                 style={({ pressed }) => [styles.choice, pressed && styles.pressed]}
               >
                 <Text style={styles.choiceName}>{entry.firstName}</Text>

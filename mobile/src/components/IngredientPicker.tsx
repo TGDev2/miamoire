@@ -75,6 +75,11 @@ export function IngredientPicker({
     <>
       <Pressable
         onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={
+          selected ? `Aliment imposé : ${selected.label}` : 'Aucun aliment imposé'
+        }
+        accessibilityHint="Ouvre la liste des aliments de votre stock"
         style={({ pressed }) => [styles.trigger, pressed && styles.pressed]}
       >
         <View style={styles.flex}>
@@ -100,11 +105,19 @@ export function IngredientPicker({
         {/* Retirer sa sélection sans rouvrir la liste : c'est le geste le plus
             fréquent après l'avoir posée. */}
         {selected ? (
-          <Pressable onPress={() => choose(null)} hitSlop={12} style={styles.clear}>
+          <Pressable
+            onPress={() => choose(null)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Retirer l'aliment imposé ${selected.label}`}
+            style={styles.clear}
+          >
             <Text style={styles.clearLabel}>Retirer</Text>
           </Pressable>
         ) : (
-          <Text style={styles.chevron}>›</Text>
+          <Text style={styles.chevron} importantForAccessibility="no">
+            ›
+          </Text>
         )}
       </Pressable>
 
@@ -115,11 +128,20 @@ export function IngredientPicker({
         onRequestClose={() => setOpen(false)}
       >
         {/* Un `Modal` sort de l'arbre des marges de sécurité : sans ce
-            `SafeAreaView`, le titre passe sous la barre d'état sur Android. */}
-        <SafeAreaView style={styles.sheet}>
+            `SafeAreaView`, le titre passe sous la barre d'état sur Android.
+            `accessibilityViewIsModal` fait de même pour le lecteur d'écran, qui
+            continuerait sinon à parcourir l'écran resté dessous. */}
+        <SafeAreaView style={styles.sheet} accessibilityViewIsModal>
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Aliment à utiliser</Text>
-            <Pressable onPress={() => setOpen(false)} hitSlop={12}>
+            <Text style={styles.sheetTitle} accessibilityRole="header">
+              Aliment à utiliser
+            </Text>
+            <Pressable
+              onPress={() => setOpen(false)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Fermer la liste des aliments"
+            >
               <Text style={styles.close}>Fermer</Text>
             </Pressable>
           </View>
@@ -129,6 +151,7 @@ export function IngredientPicker({
             onChangeText={setSearch}
             placeholder="Rechercher un aliment…"
             placeholderTextColor={colors.inkMuted}
+            accessibilityLabel="Rechercher un aliment"
             style={styles.search}
             autoCorrect={false}
           />
@@ -141,41 +164,60 @@ export function IngredientPicker({
             ListHeaderComponent={
               <Pressable
                 onPress={() => choose(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Aucun aliment imposé"
+                accessibilityState={{ selected: selectedKey === null }}
                 style={({ pressed }) => [styles.row, pressed && styles.pressed]}
               >
                 <Text style={[styles.rowLabel, selectedKey === null && styles.rowLabelSelected]}>
                   Aucun aliment imposé
                 </Text>
-                {selectedKey === null ? <Text style={styles.check}>✓</Text> : null}
+                {selectedKey === null ? (
+                  <Text style={styles.check} importantForAccessibility="no">
+                    ✓
+                  </Text>
+                ) : null}
               </Pressable>
             }
             renderSectionHeader={({ section }) => (
               <Text style={styles.sectionHeader}>{section.title}</Text>
             )}
-            renderItem={({ item }) => (
-              <Pressable
-                onPress={() => choose(item.key)}
-                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-              >
-                <View style={styles.flex}>
-                  <Text
-                    style={[styles.rowLabel, selectedKey === item.key && styles.rowLabelSelected]}
-                  >
-                    {item.label}
-                  </Text>
-                  <Text style={styles.rowMeta}>
-                    {[
-                      `${item.quantity} ${item.unitLabel}`,
-                      item.expiresSoon ? 'périme bientôt' : null,
-                      item.alreadyOpened ? 'paquet entamé' : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </Text>
-                </View>
-                {selectedKey === item.key ? <Text style={styles.check}>✓</Text> : null}
-              </Pressable>
-            )}
+            renderItem={({ item }) => {
+              const meta = [
+                `${item.quantity} ${item.unitLabel}`,
+                item.expiresSoon ? 'périme bientôt' : null,
+                item.alreadyOpened ? 'paquet entamé' : null,
+              ]
+                .filter(Boolean)
+                .join(' · ');
+
+              return (
+                <Pressable
+                  onPress={() => choose(item.key)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.label}, ${meta}`}
+                  // La sélection n'était marquée que par un « ✓ » décoratif :
+                  // invisible pour un lecteur d'écran, qui lisait donc deux
+                  // lignes identiques sans savoir laquelle était choisie.
+                  accessibilityState={{ selected: selectedKey === item.key }}
+                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                >
+                  <View style={styles.flex}>
+                    <Text
+                      style={[styles.rowLabel, selectedKey === item.key && styles.rowLabelSelected]}
+                    >
+                      {item.label}
+                    </Text>
+                    <Text style={styles.rowMeta}>{meta}</Text>
+                  </View>
+                  {selectedKey === item.key ? (
+                    <Text style={styles.check} importantForAccessibility="no">
+                      ✓
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            }}
             ListEmptyComponent={
               <Text style={styles.empty}>
                 Aucun aliment ne correspond à « {search.trim()} ».

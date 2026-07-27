@@ -110,21 +110,38 @@ export default function CookScreen() {
       />
 
       <SectionTitle>Nous sommes</SectionTitle>
-      <View style={styles.stepper}>
+      {/* Les deux boutons n'avaient pour libellé que leur glyphe : un lecteur
+          d'écran annonçait « moins » et « plus » sans dire de quoi, ni combien
+          on est déjà. `accessibilityValue` porte le nombre courant. */}
+      <View style={styles.stepper} accessibilityRole="adjustable">
         <Pressable
           style={styles.stepperButton}
           onPress={() => setPeople((value) => Math.max(1, value - 1))}
+          accessibilityRole="button"
+          accessibilityLabel="Un convive de moins"
+          accessibilityState={{ disabled: people <= 1 }}
         >
-          <Text style={styles.stepperGlyph}>−</Text>
+          <Text style={styles.stepperGlyph} importantForAccessibility="no">
+            −
+          </Text>
         </Pressable>
-        <Text style={styles.stepperValue}>
+        <Text
+          style={styles.stepperValue}
+          accessibilityLabel="Nombre de convives"
+          accessibilityValue={{ min: 1, max: 20, now: people, text: `${people}` }}
+        >
           {people} {people > 1 ? 'personnes' : 'personne'}
         </Text>
         <Pressable
           style={styles.stepperButton}
           onPress={() => setPeople((value) => Math.min(20, value + 1))}
+          accessibilityRole="button"
+          accessibilityLabel="Un convive de plus"
+          accessibilityState={{ disabled: people >= 20 }}
         >
-          <Text style={styles.stepperGlyph}>+</Text>
+          <Text style={styles.stepperGlyph} importantForAccessibility="no">
+            +
+          </Text>
         </Pressable>
       </View>
 

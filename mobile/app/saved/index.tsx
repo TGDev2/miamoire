@@ -87,6 +87,9 @@ export default function SavedRecipesScreen() {
           <Pressable
             key={saved.id}
             onPress={() => router.push(`/saved/${saved.id}`)}
+            accessibilityRole="button"
+            accessibilityLabel={`${saved.recipeName}. ${presentation.label}. ${saved.recipe.preparationTime} minutes, ${saved.recipe.servings} ${saved.recipe.servings > 1 ? 'personnes' : 'personne'}`}
+            accessibilityHint="Ouvre la recette"
             style={({ pressed }) => [styles.card, pressed && styles.pressed]}
           >
             <Badge
@@ -101,7 +104,14 @@ export default function SavedRecipesScreen() {
               {saved.recipe.servings > 1 ? 'personnes' : 'personne'}
               {saved.savedBy ? ` · enregistrée par ${saved.savedBy}` : ''}
             </Text>
-            <Pressable onPress={() => confirmRemoval(saved)} hitSlop={8}>
+            {/* Imbriqué dans la carte : sans libellé propre, il se confond avec
+                elle et l'on ne sait plus quelle recette on retire. */}
+            <Pressable
+              onPress={() => confirmRemoval(saved)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={`Retirer « ${saved.recipeName} » de mes recettes`}
+            >
               <Text style={styles.remove}>Retirer de mes recettes</Text>
             </Pressable>
           </Pressable>

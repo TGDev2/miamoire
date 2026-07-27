@@ -386,12 +386,18 @@ class StockService
     }
 
     /**
-     * Sort le lot de l'inventaire sans effacer son passé.
+     * Sort le lot de l'inventaire sans effacer son passé — ni son contenu.
      *
      * La suppression physique emportait les mouvements en cascade : le journal
      * disparaissait exactement dans le cas où il aurait servi — « qui a supprimé
-     * ce lot, et que restait-il dessus ? ». Ce qui reste est d'abord journalisé
-     * comme retiré, puis la ligne est archivée.
+     * ce lot, et que restait-il dessus ? ».
+     *
+     * L'archivage ne touche donc pas à la quantité. Il l'a fait un temps, et
+     * c'était contradictoire : le geste s'annonce réversible alors que `restore()`
+     * ne rendait qu'un lot vide. Déclarer une perte est un autre geste, `discard()`,
+     * et lui met bien à zéro. Le mouvement écrit ici porte un delta nul parce que
+     * rien n'est sorti du stock ; c'est `remainingAfter` qui dit ce que le lot
+     * contenait au moment où on l'a rangé.
      */
     public function archive(StockItem $item, Member $author, ?string $reason = null): StockItem
     {
@@ -399,13 +405,8 @@ class StockService
             return $item;
         }
 
-        if (!$item->isEmpty()) {
-            $remaining = $item->getRemainingQuantity();
-            $item->setRemainingQuantity(0);
-            $this->record($item, MovementType::Deletion, -$remaining, $author, $reason ?? 'Lot archivé');
-        }
-
         $item->archive();
+        $this->record($item, MovementType::Correction, 0.0, $author, $reason ?? 'Lot archivé');
         $this->flush();
 
         return $item;

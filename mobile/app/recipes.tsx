@@ -83,7 +83,17 @@ function RecipeCard({ recipe, onPress }: { recipe: Recipe; onPress: () => void }
   const missingEssential = recipe.missingIngredients.filter((entry) => entry.essential);
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${recipe.recipeName}. ${presentation.label}. ${recipe.preparationTime} minutes, ${recipe.servings} ${recipe.servings > 1 ? 'personnes' : 'personne'}, ${recipe.ingredientsFromInventory.length} ingrédients de votre stock${
+        missingEssential.length > 0
+          ? `. À acheter : ${missingEssential.map((entry) => entry.label).join(', ')}`
+          : ''
+      }`}
+      accessibilityHint="Ouvre la recette et sa préparation"
+      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+    >
       <Badge
         label={presentation.label}
         color={presentation.color}

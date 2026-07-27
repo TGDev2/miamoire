@@ -330,10 +330,14 @@ class StockServiceTest extends TestCase
     }
 
     /**
-     * Le défaut corrigé : `remove()` emportait les mouvements en cascade, donc le
-     * journal disparaissait dans le seul cas où il servait vraiment.
+     * Deux défauts corrigés au même endroit.
+     *
+     * `remove()` emportait d'abord les mouvements en cascade, donc le journal
+     * disparaissait dans le seul cas où il servait vraiment. Puis l'archivage a
+     * mis la quantité à zéro — un geste annoncé réversible qui détruisait ce
+     * qu'il prétendait mettre de côté. Ranger un lot n'est pas le consommer.
      */
-    public function testArchivingKeepsTheHistoryAndJournalsWhatWasLeft(): void
+    public function testArchivingKeepsWhatTheLotContained(): void
     {
         $item = $this->item(800, Unit::Gram);
 
@@ -341,10 +345,28 @@ class StockServiceTest extends TestCase
 
         self::assertTrue($item->isArchived());
         self::assertSame('archived', $item->getStatus());
-        self::assertSame(0.0, $item->getRemainingQuantity());
-        self::assertCount(1, $item->getMovements(), 'Le retrait doit rester tracé.');
-        self::assertSame(MovementType::Deletion, $item->getMovements()->first()->getType());
-        self::assertSame(-800.0, $item->getMovements()->first()->getQuantity());
+        self::assertSame(800.0, $item->getRemainingQuantity(), 'Archiver ne consomme rien.');
+        self::assertCount(1, $item->getMovements(), 'Le geste doit rester tracé, et son auteur avec.');
+
+        $movement = $item->getMovements()->first();
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame(0.0, $movement->getQuantity(), 'Rien n\'est sorti du stock : le delta est nul.');
+        self::assertSame(800.0, $movement->getRemainingAfter(), 'C\'est lui qui dit ce que le lot contenait.');
+        self::assertSame('Rangement', $movement->getReason());
+        self::assertSame($this->member, $movement->getCreatedBy());
+    }
+
+    /** « Jeter » reste le geste qui vide — et il est distinct d'« archiver ». */
+    public function testDiscardingEmptiesWhereArchivingDoesNot(): void
+    {
+        $discarded = $this->item(800, Unit::Gram);
+        $archived = $this->item(800, Unit::Gram);
+
+        $this->service->discard($discarded, $this->member);
+        $this->service->archive($archived, $this->member);
+
+        self::assertSame(0.0, $discarded->getRemainingQuantity());
+        self::assertSame(800.0, $archived->getRemainingQuantity());
     }
 
     public function testArchivingIsIdempotent(): void
@@ -359,15 +381,18 @@ class StockServiceTest extends TestCase
         self::assertCount(1, $item->getMovements(), 'Archiver deux fois n\'écrit qu\'un mouvement.');
     }
 
-    public function testRestoringBringsTheLotBackWithATrace(): void
+    /** Le sens même du mot « réversible » : on retrouve le lot tel qu'on l'a laissé. */
+    public function testRestoringBringsTheLotBackWithItsQuantity(): void
     {
         $item = $this->item(800, Unit::Gram);
+        $this->service->consume($item, 300, Unit::Gram, $this->member);
         $this->service->archive($item, $this->member);
 
         $this->service->restore($item, $this->member);
 
         self::assertFalse($item->isArchived());
-        self::assertCount(2, $item->getMovements());
+        self::assertSame(500.0, $item->getRemainingQuantity());
+        self::assertCount(3, $item->getMovements(), 'Consommation, archivage, restauration.');
     }
 
     /** Une date déduite d'une durée de conservation ne se confond pas avec une date lue. */

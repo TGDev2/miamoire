@@ -97,7 +97,23 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as unknown) : null;
+
+  // Toutes les réponses de l'API sont du JSON — sauf celles qui ne viennent pas
+  // d'elle. Une page d'erreur HTML de répartiteur, un portail Wi-Fi captif, une
+  // passerelle en 502 : `JSON.parse` lançait alors un `SyntaxError` brut, que
+  // les écrans affichent tel quel (« Unexpected token < in JSON »). C'est une
+  // panne de transport, et elle doit se présenter comme telle.
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      throw new ApiError(
+        `Réponse inattendue du serveur (${response.status}). Vérifiez l'adresse de l'API.`,
+        response.status,
+      );
+    }
+  }
 
   if (!response.ok) {
     const message =

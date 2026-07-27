@@ -14,7 +14,7 @@ import {
 import { api } from '../../src/api/client';
 import type { Reference, StockItem } from '../../src/api/types';
 import { Badge, Chip, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
-import { syncExpiryNotifications } from '../../src/notifications/expiry';
+import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
 import { colors, radius, spacing, statusPresentation } from '../../src/theme';
 
 const EXPIRY_FILTER_DAYS = 3;
@@ -28,6 +28,8 @@ export default function StockScreen() {
   const [location, setLocation] = useState<string | null>(null);
   const [category, setCategory] = useState<string | null>(null);
   const [urgentOnly, setUrgentOnly] = useState(false);
+  /** Les archives sont un autre inventaire, pas un filtre qui s'ajoute aux autres. */
+  const [archived, setArchived] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +43,7 @@ export default function StockScreen() {
           location: location ?? undefined,
           category: category ?? undefined,
           expiringWithinDays: urgentOnly ? EXPIRY_FILTER_DAYS : undefined,
+          archived: archived || undefined,
         }),
         api.reference(),
       ]);
@@ -52,7 +55,7 @@ export default function StockScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [search, location, category, urgentOnly]);
+  }, [search, location, category, urgentOnly, archived]);
 
   // Le stock change depuis d'autres écrans (scan, consommation, recette) :
   // on recharge à chaque retour sur l'onglet.
@@ -62,24 +65,13 @@ export default function StockScreen() {
     }, [load]),
   );
 
-  // Les alertes se programment sur l'inventaire ENTIER, pas sur la liste filtrée :
-  // filtrer sur « Bientôt périmés » ne doit pas annuler les alertes des autres lots.
+  // Les alertes partent de l'inventaire ENTIER, jamais de la liste affichée : filtrer
+  // l'écran ne doit pas annuler les alertes des lots masqués (leçon nº 6). La
+  // reprogrammation vit au niveau de l'application ; on n'ajoute ici que le focus
+  // de l'onglet, le moment où l'on vient justement regarder son stock.
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-
-      (async () => {
-        try {
-          const all = await api.stockItems();
-          if (!cancelled) await syncExpiryNotifications(all.items);
-        } catch {
-          // Une alerte non programmée ne doit jamais empêcher de consulter son stock.
-        }
-      })();
-
-      return () => {
-        cancelled = true;
-      };
+      void resyncExpiryAlerts();
     }, []),
   );
 
@@ -109,6 +101,13 @@ export default function StockScreen() {
             label={`Bientôt périmés${urgentCount ? ` (${urgentCount})` : ''}`}
             selected={urgentOnly}
             onPress={() => setUrgentOnly((value) => !value)}
+          />
+          {/* Les archives n'étaient atteignables par aucun écran : le geste
+              s'annonçait réversible sans que rien ne permette de le défaire. */}
+          <Chip
+            label="Archivés"
+            selected={archived}
+            onPress={() => setArchived((value) => !value)}
           />
           {reference?.storageLocations.map((option) => (
             <Chip
@@ -148,7 +147,14 @@ export default function StockScreen() {
           // « Votre stock est vide » sous une recherche active est faux, et c'est
           // la seule lecture qui décourage : on croit avoir perdu son inventaire
           // alors qu'on a simplement tapé un mot qui ne correspond à rien.
-          filtering ? (
+          // Les archives ajoutent un troisième cas, qui ne dit pas la même chose
+          // que les deux autres : « rien n'a été rangé ici », pas « rien à voir ».
+          archived && !filtering ? (
+            <EmptyState
+              title="Aucun lot archivé"
+              description="Archiver un aliment le sort de l'inventaire sans rien lui retirer, et il revient ici en attendant d'être restauré."
+            />
+          ) : filtering || archived ? (
             <EmptyState
               title="Aucun résultat"
               description={
@@ -169,7 +175,12 @@ export default function StockScreen() {
         )}
       />
 
-      <Pressable style={styles.fab} onPress={() => router.push('/add')}>
+      <Pressable
+        style={styles.fab}
+        onPress={() => router.push('/add')}
+        accessibilityRole="button"
+        accessibilityLabel="Ajouter un aliment au stock"
+      >
         <Text style={styles.fabLabel}>+</Text>
       </Pressable>
     </View>
@@ -180,7 +191,15 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      accessibilityRole="button"
+      // Sans cela, le lecteur d'écran énumère cinq textes séparés puis un badge,
+      // sans dire qu'ils forment une ligne ni qu'elle s'ouvre.
+      accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${formatExpiry(item)}`}
+      accessibilityHint="Ouvre la fiche de l'aliment"
+    >
       <View style={styles.rowMain}>
         {/* Le libellé culinaire distingue « Tomates » de « Tomates (en conserve) » :
             ce sont deux stocks, et la liste doit le montrer. */}

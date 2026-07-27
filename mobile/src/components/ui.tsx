@@ -27,7 +27,7 @@ export function Badge({
   background: string;
 }) {
   return (
-    <View style={[styles.badge, { backgroundColor: background }]}>
+    <View style={[styles.badge, { backgroundColor: background }]} accessible accessibilityLabel={label}>
       <Text style={[styles.badgeText, { color }]}>{label}</Text>
     </View>
   );
@@ -35,12 +35,18 @@ export function Badge({
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
+/**
+ * L'état de chargement remplace le texte par un indicateur : sans
+ * `accessibilityState`, le bouton devient donc muet ET inactif, sans qu'un
+ * lecteur d'écran puisse dire pourquoi. Le libellé est conservé dans tous les cas.
+ */
 export function Button({
   label,
   onPress,
   variant = 'primary',
   disabled = false,
   loading = false,
+  hint,
   style,
 }: {
   label: string;
@@ -48,6 +54,8 @@ export function Button({
   variant?: ButtonVariant;
   disabled?: boolean;
   loading?: boolean;
+  /** Ce que l'action va faire, quand le libellé seul ne suffit pas à le dire. */
+  hint?: string;
   /** `StyleProp` et non `ViewStyle` : un état conditionnel se compose en tableau. */
   style?: StyleProp<ViewStyle>;
 }) {
@@ -57,6 +65,10 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={isInactive}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={hint}
+      accessibilityState={{ disabled: isInactive, busy: loading }}
       style={({ pressed }) => [
         styles.button,
         buttonVariants[variant].container,
@@ -74,6 +86,7 @@ export function Button({
   );
 }
 
+/** La sélection n'est portée que par la couleur : sans `selected`, elle est invisible. */
 export function Chip({
   label,
   selected,
@@ -86,6 +99,9 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected }}
       style={[styles.chip, selected ? styles.chipSelected : styles.chipIdle]}
     >
       <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
@@ -93,6 +109,11 @@ export function Chip({
   );
 }
 
+/**
+ * Le libellé et l'aide sont des `Text` voisins, donc invisibles pour le champ
+ * lui-même : à la saisie, un lecteur d'écran n'annonçait que « champ de texte ».
+ * On les rattache, sans empêcher un appelant de préciser son propre libellé.
+ */
 export function Field({
   label,
   hint,
@@ -104,6 +125,8 @@ export function Field({
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
         placeholderTextColor={colors.inkMuted}
+        accessibilityLabel={label}
+        accessibilityHint={hint}
         style={styles.input}
         {...inputProps}
       />
@@ -113,14 +136,29 @@ export function Field({
 }
 
 export function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <Text style={styles.sectionTitle}>{children}</Text>;
+  return (
+    <Text style={styles.sectionTitle} accessibilityRole="header">
+      {children}
+    </Text>
+  );
 }
 
+/**
+ * Une erreur apparaît en haut de l'écran, souvent loin du geste qui l'a causée.
+ * `assertive` parce qu'elle répond à une action que la personne vient de faire :
+ * attendre la fin de la lecture en cours lui ferait croire que rien ne s'est passé.
+ */
 export function ErrorBanner({ message }: { message: string | null }) {
   if (!message) return null;
 
   return (
-    <View style={styles.errorBanner}>
+    <View
+      style={styles.errorBanner}
+      accessible
+      accessibilityRole="alert"
+      accessibilityLiveRegion="assertive"
+      accessibilityLabel={`Erreur : ${message}`}
+    >
       <Text style={styles.errorText}>{message}</Text>
     </View>
   );
@@ -128,7 +166,7 @@ export function ErrorBanner({ message }: { message: string | null }) {
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <View style={styles.empty}>
+    <View style={styles.empty} accessible accessibilityLabel={`${title}. ${description}`}>
       <Text style={styles.emptyTitle}>{title}</Text>
       <Text style={styles.emptyDescription}>{description}</Text>
     </View>
@@ -137,7 +175,12 @@ export function EmptyState({ title, description }: { title: string; description:
 
 export function Loader({ label }: { label?: string }) {
   return (
-    <View style={styles.loader}>
+    <View
+      style={styles.loader}
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={label ?? 'Chargement en cours'}
+    >
       <ActivityIndicator color={colors.primary} size="large" />
       {label ? <Text style={styles.loaderLabel}>{label}</Text> : null}
     </View>

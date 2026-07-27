@@ -349,10 +349,27 @@ Supprimer un lot effaçait ses mouvements en cascade — le journal disparaissai
 précisément dans le cas où il aurait servi : « qui a retiré ce lot, et que restait-il
 dessus ? ».
 
-`DELETE /stock-items/{id}` **archive** désormais : ce qui restait est journalisé comme
-retiré, la ligne quitte l'inventaire, et l'historique demeure. `POST
-/stock-items/{id}/restore` défait le geste, `GET /stock-items?archived=1` liste les
-archives.
+`DELETE /stock-items/{id}` **archive** donc : la ligne quitte l'inventaire, et
+l'historique demeure. `POST /stock-items/{id}/restore` défait le geste, `GET
+/stock-items?archived=1` liste les archives, et l'onglet Stock les atteint par le
+filtre « Archivés ».
+
+**L'archivage ne touche pas à la quantité.** Il l'a fait un temps, et c'était une
+contradiction : le geste s'annonçait réversible alors que la restauration ne rendait
+qu'un lot vide. Deux règles séparées, chacune raisonnable, se neutralisaient même
+complètement — la recherche écarte par défaut les lots vides, si bien qu'un stock
+archivé, donc mis à zéro, n'était **listé nulle part** : ni dans l'inventaire, ni
+dans les archives. Le geste destructeur reste `POST /stock-items/{id}/discard`,
+« Jeter le produit », et c'est le seul.
+
+Le mouvement écrit à l'archivage porte donc un delta nul : rien n'est sorti du stock.
+C'est `remainingAfter` qui dit ce que le lot contenait quand on l'a rangé, et
+l'interface affiche « — » plutôt qu'un « 0 g » qui se lirait comme une perte.
+
+> Les lots archivés **avant** ce correctif restent à zéro. Leur quantité d'origine
+> figure dans le journal, mais la déduire automatiquement reviendrait à deviner :
+> `discard()` écrit un mouvement de même nature, et rien ne les distingue avec
+> certitude. Ils sont laissés tels quels plutôt que reconstitués à l'aveugle.
 
 ## Démarrer
 
@@ -421,9 +438,22 @@ du stock qu'il vient d'afficher, sans jeton d'appareil ni tâche planifiée côt
 serveur. Elles fonctionnent donc hors connexion, et chaque membre du foyer autorise
 les siennes depuis l'onglet Profil.
 
-À chaque passage sur l'onglet Stock, les alertes sont annulées puis reprogrammées
-en bloc à partir de l'inventaire entier — jamais de la liste filtrée à l'écran.
-L'inventaire reste la seule source de vérité ; aucun état parallèle ne peut mentir.
+Les alertes sont annulées puis reprogrammées en bloc à partir de l'inventaire entier
+— jamais de la liste filtrée à l'écran. L'inventaire reste la seule source de vérité ;
+aucun état parallèle ne peut mentir.
+
+Deux moments déclenchent cette reprogrammation : le passage sur l'onglet Stock, et
+**le retour de l'application au premier plan**. Le second est celui qui compte pour
+un stock partagé : une consommation faite depuis un autre téléphone ne se voyait
+qu'en repassant par l'onglet Stock, c'est-à-dire potentiellement jamais, puisque
+l'application s'ouvre aussi sur Cuisiner, sur Profil, ou directement sur une fiche
+depuis une notification.
+
+> **Ce que les notifications locales ne peuvent pas faire.** Tant que l'application
+> dort, l'appareil n'apprend rien : si quelqu'un consomme le dernier yaourt pendant
+> la nuit, l'alerte du matin part quand même. La corriger demanderait des
+> notifications serveur, donc des jetons d'appareil — un autre chantier, pas une
+> option de celui-ci. La limite est écrite ici plutôt que suggérée par l'interface.
 
 > Un lot enregistré alors qu'il périme dans moins de trois jours n'a pas d'alerte :
 > l'instant est déjà passé. Il apparaît en revanche d'emblée en rouge dans la liste
@@ -682,9 +712,16 @@ périme plus tôt.
 
 ## API
 
-Toutes les routes sont sous `/api`. Sauf les quatre exceptions ci-dessous — santé,
-création, adhésion — elles exigent `X-Household` **et** `X-Household-Key` ; celles
-qui écrivent exigent en plus `X-Member`.
+Toutes les routes sont sous `/api`. **Trois** sont publiques, et elles seules : santé,
+création, adhésion — c'est-à-dire ce qui précède l'accès à un foyer. Toutes les autres
+exigent `X-Household` **et** `X-Household-Key` ; celles qui écrivent exigent en plus
+`X-Member`.
+
+Cette règle était écrite ici avant d'être tenue : les trois routes `/products` ne
+demandaient rien, dont `POST /products`, une écriture dans le catalogue partagé par
+tous les foyers. Elle est désormais vérifiée route par route par
+`ApiAuthenticationTest`, qui attaque l'API en HTTP — aucun test de service ne peut
+voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 
 | Méthode | Route | Rôle |
 | --- | --- | --- |
@@ -758,9 +795,35 @@ qui écrivent exigent en plus `X-Member`.
   comme pour les exclusions ; la clé fait foi, pas le libellé.
 - **Même recette enregistrée deux fois** — l'empreinte du contenu porte un index
   unique par foyer : aucun doublon, même depuis deux téléphones au même instant.
+- **Lot archivé par erreur** — l'archivage ne retire rien : le lot revient avec sa
+  quantité, son exemplaire entamé et son historique. Le filtre « Archivés » de
+  l'onglet Stock le retrouve.
+- **Serveur injoignable pendant le chargement d'une recette enregistrée** — un 404
+  seul conclut à « Recette introuvable » ; une panne s'affiche comme une panne, avec
+  un bouton « Réessayer ». Annoncer la disparition d'une recette qui n'a pas bougé
+  ferait chercher un problème là où il n'y en a pas.
+- **Réponse qui n'est pas du JSON** — page d'erreur d'un répartiteur, portail Wi-Fi
+  captif, passerelle en 502 : le client renvoyait le `SyntaxError` brut de
+  `JSON.parse` (« Unexpected token < »). C'est une panne de transport, et elle se
+  présente comme telle.
 
-## Hors périmètre du MVP
+## Accessibilité
 
-Reconnaissance de ticket de caisse, reconnaissance d'aliments par photo, calcul
-nutritionnel, comparaison de prix, liste de courses automatique, partage entre
-plusieurs logements, planification hebdomadaire.
+Les composants partagés — `Button`, `Chip`, `Field`, `Badge`, `ErrorBanner`,
+`EmptyState`, `Loader` — portent leur rôle, leur libellé et leur état. C'est là que
+le travail est le plus rentable : tout l'écran en hérite.
+
+Trois cas demandaient davantage, parce que l'information n'existait que visuellement :
+
+- un `Chip` sélectionné ne l'était que par sa couleur, et une ligne du sélecteur
+  d'aliment que par un « ✓ » — `accessibilityState={{ selected }}` le dit désormais,
+  et le glyphe est marqué comme décoratif ;
+- les boutons `−` et `+` n'avaient pour libellé que leur glyphe : ils annoncent leur
+  action, et la valeur courante est portée par `accessibilityValue` ;
+- une ligne de stock ou de journal est lue d'un bloc plutôt qu'en cinq textes
+  séparés, et un `Pressable` imbriqué dans une carte (« Retirer de mes recettes »)
+  nomme la recette qu'il retire.
+
+> Vérifié par lecture et par `tsc`, **pas encore avec TalkBack sur un appareil**.
+> Comme pour l'ordre des rendus, seul le téléphone fait foi.
+

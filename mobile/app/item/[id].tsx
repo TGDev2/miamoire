@@ -77,16 +77,19 @@ export default function StockItemScreen() {
   }
 
   /**
-   * Archiver, pas supprimer.
+   * Archiver, pas supprimer — ni jeter.
    *
    * Le `DELETE` physique effaçait les mouvements en cascade : l'historique
    * disparaissait précisément dans le cas où il aurait servi — « qui a retiré ce
-   * lot, et que restait-il dessus ? ». Le geste est désormais réversible.
+   * lot, et que restait-il dessus ? ». L'archivage a ensuite mis la quantité à
+   * zéro, ce qui revenait à jeter ce qu'on prétendait ranger. Il ne touche plus
+   * à rien : « Jeter le produit », juste au-dessus, est le geste qui déclare une
+   * perte, et c'est le seul.
    */
   function confirmArchive() {
     Alert.alert(
       'Archiver cet aliment ?',
-      'Il quitte votre inventaire, mais son historique est conservé et vous pourrez le restaurer.',
+      'Il quitte votre inventaire sans rien perdre : sa quantité et son historique sont conservés, et vous pourrez le restaurer depuis le filtre « Archivés ».',
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -199,6 +202,13 @@ export default function StockItemScreen() {
               key={sibling.id}
               style={styles.sibling}
               onPress={() => router.push(`/item/${sibling.id}`)}
+              accessibilityRole="button"
+              accessibilityLabel={`Autre lot : ${sibling.displayQuantity} ${sibling.displayUnit}, ${
+                sibling.expirationDate
+                  ? `${sibling.expirationIsEstimated ? 'estimé' : 'à consommer avant'} le ${formatDate(sibling.expirationDate)}`
+                  : 'sans date'
+              }, ${sibling.storageLocationLabel}`}
+              accessibilityHint="Ouvre la fiche de ce lot"
             >
               <Text style={styles.siblingQuantity}>
                 {sibling.displayQuantity} {sibling.displayUnit}
@@ -222,18 +232,31 @@ export default function StockItemScreen() {
             style={styles.stepperButton}
             onPress={() => run(() => api.consume(id, { mode: 'units', delta: -1 }))}
             disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel={`Consommer un ${item.unitLabel}`}
+            accessibilityState={{ disabled: busy }}
           >
-            <Text style={styles.stepperGlyph}>−1</Text>
+            <Text style={styles.stepperGlyph} importantForAccessibility="no">
+              −1
+            </Text>
           </Pressable>
-          <Text style={styles.stepperValue}>
+          <Text
+            style={styles.stepperValue}
+            accessibilityLabel={`Il reste ${item.remainingQuantity} ${item.unitLabel}`}
+          >
             {item.remainingQuantity} {item.unitLabel}
           </Text>
           <Pressable
             style={styles.stepperButton}
             onPress={() => run(() => api.addQuantity(id, { quantity: 1 }))}
             disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel={`Ajouter un ${item.unitLabel}`}
+            accessibilityState={{ disabled: busy }}
           >
-            <Text style={styles.stepperGlyph}>+1</Text>
+            <Text style={styles.stepperGlyph} importantForAccessibility="no">
+              +1
+            </Text>
           </Pressable>
         </View>
       ) : null}
@@ -445,7 +468,17 @@ export default function StockItemScreen() {
 
           <Text style={styles.label}>Date de péremption</Text>
           <View style={styles.dateRow}>
-            <Pressable style={styles.dateButton} onPress={() => setShowPicker(true)}>
+            <Pressable
+              style={styles.dateButton}
+              onPress={() => setShowPicker(true)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                item.expirationDate
+                  ? `Date de péremption : ${formatDate(item.expirationDate)}`
+                  : 'Aucune date de péremption'
+              }
+              accessibilityHint="Ouvre le sélecteur de date"
+            >
               <Text style={styles.dateText}>
                 {item.expirationDate ? formatDate(item.expirationDate) : 'Aucune date'}
               </Text>
@@ -453,6 +486,8 @@ export default function StockItemScreen() {
             {item.expirationDate ? (
               <Pressable
                 onPress={() => run(() => api.updateStockItem(id, { expirationDate: null }))}
+                accessibilityRole="button"
+                accessibilityLabel="Effacer la date de péremption"
               >
                 <Text style={styles.clearText}>Effacer</Text>
               </Pressable>
@@ -525,23 +560,37 @@ export default function StockItemScreen() {
 
       <SectionTitle>Historique</SectionTitle>
       {movements.map((movement) => (
-        <View key={movement.id} style={styles.movement}>
+        <View
+          key={movement.id}
+          style={styles.movement}
+          accessible
+          accessibilityLabel={describeMovement(movement)}
+        >
           <View style={styles.flex}>
             <Text style={styles.movementLabel}>{movement.typeLabel}</Text>
             {movement.reason ? (
               <Text style={styles.movementReason}>{movement.reason}</Text>
             ) : null}
-            <Text style={styles.movementDate}>{formatDateTime(movement.createdAt)}</Text>
+            <Text style={styles.movementDate}>
+              {formatDateTime(movement.createdAt)}
+              {movement.author ? ` · par ${movement.author}` : ''}
+            </Text>
+            {/* Deux lots débités par la même recette portent le même identifiant :
+                c'est ce qui permet de les rapprocher d'une fiche à l'autre. */}
+            {movement.operationId ? (
+              <Text style={styles.movementOperation}>
+                Opération {shortOperation(movement.operationId)}
+              </Text>
+            ) : null}
           </View>
           <View style={styles.movementRight}>
             <Text
               style={[
                 styles.movementQuantity,
-                { color: movement.quantity < 0 ? colors.danger : colors.primary },
+                { color: movementColor(movement.quantity) },
               ]}
             >
-              {movement.quantity > 0 ? '+' : ''}
-              {formatNumber(movement.quantity)} {movement.unit}
+              {formatDelta(movement)}
             </Text>
             <Text style={styles.movementAfter}>
               reste {formatNumber(movement.remainingAfter)} {movement.unit}
@@ -551,6 +600,48 @@ export default function StockItemScreen() {
       ))}
     </ScrollView>
   );
+}
+
+/**
+ * Un delta nul n'est pas une quantité, c'est un changement d'état.
+ *
+ * Archiver un lot ou le restaurer ne fait rien sortir du stock : afficher
+ * « 0 g » laisserait croire à une opération sur la quantité, et surtout à une
+ * perte. Le tiret dit qu'il ne s'est rien passé de ce côté-là ; la ligne de
+ * gauche, elle, dit ce qui s'est passé.
+ */
+function formatDelta(movement: StockMovement): string {
+  if (movement.quantity === 0) return '—';
+
+  return `${movement.quantity > 0 ? '+' : ''}${formatNumber(movement.quantity)} ${movement.unit}`;
+}
+
+function movementColor(quantity: number): string {
+  if (quantity === 0) return colors.inkMuted;
+
+  return quantity < 0 ? colors.danger : colors.primary;
+}
+
+/** Assez pour rapprocher deux lignes à l'œil, trop court pour être lu comme une donnée. */
+function shortOperation(operationId: string): string {
+  return operationId.slice(0, 8);
+}
+
+/** Une ligne de journal se lit d'un bloc au lecteur d'écran, pas colonne par colonne. */
+function describeMovement(movement: StockMovement): string {
+  const parts = [movement.typeLabel];
+
+  if (movement.reason) parts.push(movement.reason);
+  parts.push(
+    movement.quantity === 0
+      ? 'aucune quantité modifiée'
+      : `${formatNumber(movement.quantity)} ${movement.unit}`,
+  );
+  parts.push(`reste ${formatNumber(movement.remainingAfter)} ${movement.unit}`);
+  if (movement.author) parts.push(`par ${movement.author}`);
+  parts.push(formatDateTime(movement.createdAt));
+
+  return parts.join(', ');
 }
 
 /** Ce que le découpage en exemplaires signifie concrètement, en une phrase. */
@@ -702,6 +793,7 @@ const styles = StyleSheet.create({
   movementLabel: { fontSize: 15, fontWeight: '600', color: colors.ink },
   movementReason: { fontSize: 13, color: colors.inkMuted, marginTop: 1 },
   movementDate: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },
+  movementOperation: { fontSize: 11, color: colors.inkMuted, marginTop: 2, fontVariant: ['tabular-nums'] },
   movementRight: { alignItems: 'flex-end' },
   movementQuantity: { fontSize: 15, fontWeight: '700' },
   movementAfter: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },

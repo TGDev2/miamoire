@@ -9,6 +9,7 @@ use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
+use App\Http\RequestContext;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\ProductLookupService;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -17,6 +18,17 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 
+/**
+ * Le catalogue partagé — et pourquoi ces routes exigent un foyer.
+ *
+ * Elles ne renvoient aucune donnée d'inventaire, ce qui les a longtemps fait
+ * passer pour inoffensives. Elles ne le sont pas : `POST /api/products` écrit
+ * dans une table partagée par tous les foyers, et `GET /barcode/{barcode}`
+ * déclenche un appel sortant vers Open Food Facts, dont le quota est commun.
+ * Sans code d'accès, n'importe qui pouvait donc polluer le catalogue de tout le
+ * monde ou épuiser le quota de l'API. La règle documentée — santé, création,
+ * adhésion, et rien d'autre — s'applique désormais ici aussi.
+ */
 #[Route('/api/products')]
 class ProductController extends AbstractApiController
 {
@@ -27,8 +39,14 @@ class ProductController extends AbstractApiController
      * collaborative, l'application bascule alors sur la saisie manuelle.
      */
     #[Route('/barcode/{barcode}', methods: ['GET'], requirements: ['barcode' => '\d{6,20}'])]
-    public function lookup(string $barcode, ProductLookupService $lookup, ApiPresenter $presenter): JsonResponse
-    {
+    public function lookup(
+        string $barcode,
+        RequestContext $context,
+        ProductLookupService $lookup,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $context->household();
+
         $product = $lookup->findByBarcode($barcode);
 
         if (null === $product) {
@@ -52,9 +70,12 @@ class ProductController extends AbstractApiController
     #[Route('/shelf-life', methods: ['GET'])]
     public function shelfLife(
         Request $request,
+        RequestContext $context,
         ShelfLifeEstimator $estimator,
         ApiPresenter $presenter,
     ): JsonResponse {
+        $context->household();
+
         $name = trim($request->query->getString('name'));
 
         if ('' === $name) {
@@ -88,9 +109,18 @@ class ProductController extends AbstractApiController
     #[Route('', methods: ['POST'])]
     public function createManual(
         Request $request,
+        RequestContext $context,
         ProductLookupService $lookup,
         ApiPresenter $presenter,
     ): JsonResponse {
+        // Le foyer d'abord : sans quoi un appel sans code mais sans en-tête de
+        // membre repartirait en 400 « indiquez qui agit » au lieu du 401 qu'il
+        // mérite. Puis le membre, car c'est une écriture — la règle documentée
+        // vaut ici comme ailleurs, même si la fiche produite n'appartient à aucun
+        // foyer en particulier.
+        $context->household();
+        $context->requireMember();
+
         $payload = JsonPayload::fromRequest($request);
         $barcode = $payload->string('barcode');
 

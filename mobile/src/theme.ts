@@ -33,8 +33,15 @@ export const radius = {
   pill: 999,
 } as const;
 
-/** Correspondance entre l'état renvoyé par l'API et sa présentation. */
+/**
+ * Correspondance entre l'état renvoyé par l'API et sa présentation.
+ *
+ * `archived` manquait alors que le serveur le renvoie en priorité sur tous les
+ * autres : un lot archivé s'affichait donc « Fermé », par le repli. Toute clé
+ * de `StockItem::getStatus()` doit avoir son entrée ici.
+ */
 export const statusPresentation: Record<string, { label: string; color: string; background: string }> = {
+  archived: { label: 'Archivé', color: colors.inkMuted, background: colors.surfaceMuted },
   expired: { label: 'Périmé', color: colors.danger, background: colors.dangerSoft },
   expiring_soon: { label: 'À consommer vite', color: colors.accent, background: colors.accentSoft },
   running_low: { label: 'Bientôt terminé', color: colors.accent, background: colors.accentSoft },

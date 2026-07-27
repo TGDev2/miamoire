@@ -1,10 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 
-import { api } from '../../src/api/client';
+import { ApiError, api } from '../../src/api/client';
 import type { ConfirmationResponse, SavedRecipe } from '../../src/api/types';
-import { EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
+import { Button, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
 import { RecipeDetailView } from '../../src/recipes/RecipeDetailView';
+import { spacing } from '../../src/theme';
 
 /**
  * Une recette enregistrée, affichée par le même écran qu'une proposition.
@@ -25,11 +27,26 @@ export default function SavedRecipeScreen() {
   const [confirmation, setConfirmation] = useState<ConfirmationResponse | undefined>();
   const operationKey = useRef(`saved${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`);
 
+  /**
+   * Une panne n'est pas une absence.
+   *
+   * Toute exception concluait ici à « Recette introuvable » — serveur éteint,
+   * Wi-Fi coupé, 500, code du foyer périmé : la seule réponse était « elle a été
+   * retirée », et le message capturé n'était même pas affiché. On annonçait donc
+   * la disparition d'une recette qui n'a jamais bougé. Seul un 404 le dit ;
+   * le reste est un incident, et un incident se réessaie.
+   */
   const load = useCallback(async () => {
+    setError(null);
     try {
       setSaved(await api.savedRecipe(id));
+      setMissing(false);
     } catch (exception) {
-      setMissing(true);
+      if (exception instanceof ApiError && exception.status === 404) {
+        setMissing(true);
+        return;
+      }
+
       setError(exception instanceof Error ? exception.message : 'Chargement impossible.');
     }
   }, [id]);
@@ -48,11 +65,13 @@ export default function SavedRecipeScreen() {
   }
 
   if (!saved) {
-    return (
-      <>
+    return error ? (
+      <View style={styles.failure}>
         <ErrorBanner message={error} />
-        <Loader />
-      </>
+        <Button label="Réessayer" onPress={() => void load()} />
+      </View>
+    ) : (
+      <Loader />
     );
   }
 
@@ -70,3 +89,7 @@ export default function SavedRecipeScreen() {
     />
   );
 }
+
+const styles = StyleSheet.create({
+  failure: { padding: spacing.lg },
+});
