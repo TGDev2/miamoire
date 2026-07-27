@@ -17,9 +17,10 @@ use App\Enum\Unit;
 final readonly class InventoryLine
 {
     /**
-     * @param list<string>       $locations
-     * @param list<ProductTrait> $traits    état réel du produit : en conserve, épluché, surgelé…
-     * @param list<string>       $notes     précisions saisies à la main sur les lots
+     * @param list<string>                 $locations
+     * @param list<ProductTrait>           $traits    état réel du produit : en conserve, épluché, surgelé…
+     * @param list<string>                 $notes     précisions saisies à la main sur les lots
+     * @param list<InventoryDeadlineBucket> $buckets   la même quantité, ventilée par échéance effective
      */
     public function __construct(
         /** Identifiant lisible et stable, recopié par le générateur de recettes. */
@@ -31,8 +32,9 @@ final readonly class InventoryLine
         public string $name,
         public float $quantity,
         public Unit $unit,
+        /** Dérivé de `buckets` : vrai si au moins un groupe l'est. */
         public bool $expiresSoon,
-        /** Au moins un exemplaire est entamé : il se dégrade, il passe avant. */
+        /** Dérivé de `buckets` : au moins un exemplaire est entamé, il passe avant. */
         public bool $alreadyOpened,
         public ?\DateTimeImmutable $earliestExpiration,
         /** La date la plus proche a été déduite, pas lue sur un emballage. */
@@ -44,6 +46,7 @@ final readonly class InventoryLine
         public int $lotCount,
         public array $traits = [],
         public array $notes = [],
+        public array $buckets = [],
     ) {
     }
 
@@ -55,15 +58,14 @@ final readonly class InventoryLine
             'ingredient' => $this->label,
             'quantity' => $this->quantity,
             'unit' => $this->unit->value,
-            'expiresSoon' => $this->expiresSoon,
+            // Plutôt qu'un total assorti d'un booléen global : « 250 g entamés à
+            // utiliser demain, 1 kg scellé plus tard » — pas de version dégradée
+            // à un seul groupe, un seul chemin de code.
+            'deadlines' => array_map(
+                static fn (InventoryDeadlineBucket $bucket) => $bucket->toAiPayload(),
+                $this->buckets,
+            ),
         ];
-
-        // Un paquet ouvert se dégrade alors qu'un paquet scellé attend : le
-        // signaler au modèle est ce qui lui fait terminer l'entamé plutôt que
-        // d'en faire ouvrir un second.
-        if ($this->alreadyOpened) {
-            $payload['alreadyOpened'] = true;
-        }
 
         // Ces trois champs décrivent l'aliment lui-même : sans eux, le modèle
         // propose d'éplucher des pommes de terre déjà pelées par le conserveur.

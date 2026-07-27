@@ -50,6 +50,7 @@ class RecipeNormalizer
             'servings' => max(1, (int) ($raw['servings'] ?? 1)),
             'preparationTime' => max(0, (int) ($raw['preparationTime'] ?? 0)),
             'summary' => is_string($raw['summary'] ?? null) ? mb_substr(trim($raw['summary']), 0, 1000) : '',
+            'includesSideDish' => (bool) ($raw['includesSideDish'] ?? false),
             'ingredientsFromInventory' => $this->ingredients($raw['ingredientsFromInventory'] ?? null, true),
             'missingIngredients' => $this->ingredients($raw['missingIngredients'] ?? null, false),
             'substitutions' => $this->substitutions($raw['substitutions'] ?? null),

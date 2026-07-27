@@ -230,9 +230,15 @@ class RecipeSuggestionService
             d'ajouter des ingrédients manquants, et l'inventaire du foyer.
 
             Chaque ligne d'inventaire porte une clé stable `key`, un libellé, une quantité,
-            une unité et un indicateur `expiresSoon`. Elle peut aussi porter `alreadyOpened`,
-            `traits`, `category`, `notes`, `quantityIsEstimated` et `expirationIsEstimated`,
-            qui décrivent l'état réel de l'aliment et la confiance qu'on peut lui accorder.
+            une unité et `deadlines` : la même quantité ventilée par échéance effective,
+            chaque part portant sa propre quantité et, si présents, `useBy`, `opened`
+            (exemplaire entamé, ouvert ou refermé) et `expiresSoon`. Une ligne dont
+            `deadlines` compte plusieurs parts a des lots aux échéances différentes —
+            250 g à utiliser demain, 1 kg scellé plus tard, par exemple : ne traite jamais
+            la quantité totale comme uniformément urgente dans ce cas. Elle peut aussi
+            porter `traits`, `category`, `notes`, `quantityIsEstimated` et
+            `expirationIsEstimated`, qui décrivent l'état réel de l'aliment et la confiance
+            qu'on peut lui accorder.
 
             Signification des `traits` :
 
@@ -240,10 +246,12 @@ class RecipeSuggestionService
 
             Règles impératives :
 
-            1. Priorise les ingrédients dont `expiresSoon` vaut true : ils doivent apparaître
-               dans au moins deux des trois propositions quand c'est culinairement cohérent.
-               Puis, à égalité, ceux dont `alreadyOpened` vaut true : un paquet entamé se
-               dégrade pendant qu'un paquet scellé attend. La date passe toujours devant.
+            1. Priorise les ingrédients dont au moins une part de `deadlines` a
+               `expiresSoon` à true : ils doivent apparaître dans au moins deux des trois
+               propositions quand c'est culinairement cohérent, et la quantité utilisée doit
+               d'abord venir de cette part-là. Puis, à égalité, ceux dont une part a `opened`
+               à true : un paquet entamé se dégrade pendant qu'un paquet scellé attend. La
+               date passe toujours devant.
             2. Classe chaque recette par `feasibility` :
                - "ready" : tous les ingrédients essentiels sont dans l'inventaire ;
                - "adapted" : tu remplaces un ingrédient absent par un autre réellement disponible
@@ -268,6 +276,15 @@ class RecipeSuggestionService
                conséquence.
             9. `quantityIsEstimated` signale une quantité approximative : ne bâtis pas une
                recette qui exigerait cette quantité au gramme près, et reste en deçà.
+            10. Un plat principal qui ne constitue pas un repas complet à lui seul (une
+                viande, un poisson ou une sauce sans base féculente ni légume, par exemple)
+                DOIT être complété par un accompagnement (féculent, légume, salade…) intégré
+                À LA MÊME recette — ses ingrédients, ses quantités et son étape de
+                préparation font partie de `ingredientsFromInventory`/`missingIngredients`/
+                `steps` de cette recette, ce n'est jamais une recette séparée. N'en invente
+                aucun pour un plat déjà complet (une quiche, un curry déjà servi avec son
+                riz, une salade composée). `includesSideDish` doit refléter honnêtement ce
+                choix : true seulement si tu as effectivement ajouté un accompagnement.
             {$imposed}{$safety}
             À propos de `stockConsumptionProposal` :
 

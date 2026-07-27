@@ -199,7 +199,16 @@ class StockService
             : $this->addQuantity($item, $delta, $item->getUnit(), $author, 'Ajustement à l\'unité', $operation);
     }
 
-    /** Réapprovisionnement d'un lot existant (bouton « Ajouter » de la fiche). */
+    /**
+     * Réapprovisionnement d'un lot existant (bouton « Ajouter » de la fiche).
+     *
+     * `purchaseDate`/`expirationDate` sont optionnels : sans eux, l'appelant
+     * affirme implicitement qu'il s'agit du même achat que celui déjà décrit
+     * par ce lot — le cas majoritaire (« correction de quantité »). Fournis et
+     * différents de ce que porte déjà le lot, ils sont refusés : un lot est
+     * homogène par construction, et une nouvelle date de péremption ne peut
+     * pas venir d'un même achat.
+     */
     public function addQuantity(
         StockItem $item,
         float $quantity,
@@ -207,10 +216,14 @@ class StockService
         Member $author,
         ?string $reason = null,
         ?StockOperation $operation = null,
+        ?\DateTimeImmutable $purchaseDate = null,
+        ?\DateTimeImmutable $expirationDate = null,
     ): StockMovement {
         if ($quantity <= 0) {
             throw new StockException('La quantité ajoutée doit être strictement positive.');
         }
+
+        $this->assertSameBatch($item, $purchaseDate, $expirationDate);
 
         $inItemUnit = $this->converter->convert($quantity, $unit, $item->getUnit());
 
@@ -366,18 +379,42 @@ class StockService
      * Le geste porte sur UN exemplaire, pas sur le lot entier : marquer comme
      * entamé un lot de trois sachets en ouvre un et laisse les deux autres
      * scellés — c'est exactement ce que l'ancien drapeau unique ne savait pas dire.
+     *
+     * « Refermer » ne fait plus disparaître l'exemplaire entamé : c'est un
+     * geste physique (voir {@see StockItem::resealOpenPackage()}), pas une
+     * correction. Pour annuler une ouverture par erreur, voir {@see cancelOpening()}.
      */
     public function markOpened(StockItem $item, bool $opened): StockItem
     {
         if ($opened) {
             $item->openNextPackage();
         } else {
-            $item->closeOpenPackage();
+            $item->resealOpenPackage();
         }
 
         $this->flush();
 
         return $item;
+    }
+
+    /**
+     * Corrige une erreur de saisie : annule l'ouverture comme si elle n'avait
+     * jamais eu lieu. Contrairement à « refermer » (voir {@see markOpened()}),
+     * qui garde la trace de l'exemplaire entamé, ce geste l'efface
+     * volontairement — d'où sa journalisation explicite plutôt qu'un silence.
+     */
+    public function cancelOpening(StockItem $item, Member $author, ?StockOperation $operation = null): ?StockMovement
+    {
+        if (!$item->isOpened()) {
+            return null;
+        }
+
+        $item->closeOpenPackage();
+
+        $movement = $this->record($item, MovementType::Correction, 0.0, $author, 'Ouverture annulée : erreur de saisie', $operation);
+        $this->flush();
+
+        return $movement;
     }
 
     /** Produit jeté : le stock tombe à zéro mais la ligne et son historique subsistent. */
@@ -436,6 +473,32 @@ class StockService
         $this->flush();
 
         return $item;
+    }
+
+    /**
+     * Refuse un réapprovisionnement dont la date déclarée contredit celle déjà
+     * portée par le lot : un lot est homogène par construction (voir la
+     * doc de {@see StockItem}), un ajout qui ne l'est pas doit créer un nouveau
+     * lot plutôt que mélanger deux achats sous une seule date.
+     */
+    private function assertSameBatch(
+        StockItem $item,
+        ?\DateTimeImmutable $purchaseDate,
+        ?\DateTimeImmutable $expirationDate,
+    ): void {
+        if (null !== $purchaseDate && null !== $item->getPurchaseDate()
+            && $purchaseDate->format('Y-m-d') !== $item->getPurchaseDate()->format('Y-m-d')) {
+            throw new StockException(
+                'Cette date d\'achat ne correspond pas à celle de ce lot : ajoutez plutôt une nouvelle course.',
+            );
+        }
+
+        if (null !== $expirationDate && null !== $item->getExpirationDate()
+            && $expirationDate->format('Y-m-d') !== $item->getExpirationDate()->format('Y-m-d')) {
+            throw new StockException(
+                'Cette date de péremption ne correspond pas à celle de ce lot : ajoutez plutôt une nouvelle course.',
+            );
+        }
     }
 
     /** « 1500 » plutôt que « 1500.0 », « 1.5 » plutôt que « 1.500 ». */

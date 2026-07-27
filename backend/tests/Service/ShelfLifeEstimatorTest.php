@@ -136,4 +136,34 @@ class ShelfLifeEstimatorTest extends TestCase
             $estimate->until()->format('Y-m-d'),
         );
     }
+
+    /** Une durée avant ouverture n'a aucun rapport avec la durée après : le lait UHT en est l'exemple. */
+    public function testAfterOpeningDurationIsKnownForSomeFoods(): void
+    {
+        $estimate = $this->estimator->estimateAfterOpening('Lait UHT', null, []);
+
+        self::assertNotNull($estimate);
+        self::assertSame(4, $estimate->days);
+        self::assertSame('lait', $estimate->matched);
+    }
+
+    /**
+     * Contrairement à `estimate()`, il n'y a pas de repli sur l'emplacement :
+     * ne pas savoir combien de temps un aliment se garde après ouverture
+     * n'autorise pas à inventer une réponse.
+     */
+    public function testAfterOpeningDurationIsNullRatherThanInvented(): void
+    {
+        self::assertNull($this->estimator->estimateAfterOpening('Machin inconnu', null, []));
+        self::assertNull($this->estimator->estimateAfterOpening('Pommes de terre', null, []));
+    }
+
+    public function testAfterOpeningDurationFallsBackToTraitsWhenTheFoodIsUnknown(): void
+    {
+        $estimate = $this->estimator->estimateAfterOpening('Ratatouille du chef', null, [ProductTrait::Canned]);
+
+        self::assertNotNull($estimate);
+        self::assertSame(3, $estimate->days);
+        self::assertSame('trait', $estimate->source);
+    }
 }

@@ -46,6 +46,7 @@ export const statusPresentation: Record<string, { label: string; color: string; 
   expiring_soon: { label: 'À consommer vite', color: colors.accent, background: colors.accentSoft },
   running_low: { label: 'Bientôt terminé', color: colors.accent, background: colors.accentSoft },
   opened: { label: 'Entamé', color: colors.info, background: colors.infoSoft },
+  resealed: { label: 'Entamé et refermé', color: colors.info, background: colors.infoSoft },
   sealed: { label: 'Fermé', color: colors.primary, background: colors.primarySoft },
   empty: { label: 'Épuisé', color: colors.inkMuted, background: colors.surfaceMuted },
 };

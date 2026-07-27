@@ -10,12 +10,11 @@ use App\Enum\Unit;
 use App\Repository\StockItemRepository;
 
 /**
- * L'ordre de consommation, vérifié là où il est écrit : dans le SQL.
- *
- * `applyFefoOrder()` trie en base ; une doublure de dépôt renverrait la liste
- * qu'on lui aurait donnée et ne démontrerait rien du `ORDER BY` réellement
- * envoyé à PostgreSQL. Deux règles y coexistent et leur ordre relatif est tout
- * l'enjeu : la date de péremption d'abord, l'exemplaire entamé ensuite.
+ * L'ordre de consommation, vérifié là où il est vraiment appliqué : à travers
+ * le repository, pas une doublure qui renverrait simplement la liste qu'on lui
+ * aurait donnée. Deux règles y coexistent et leur ordre relatif est tout
+ * l'enjeu : la date (effective) de péremption d'abord, l'exemplaire entamé
+ * ensuite.
  */
 class OpenedLotPriorityTest extends DatabaseTestCase
 {
@@ -120,5 +119,28 @@ class OpenedLotPriorityTest extends DatabaseTestCase
         $ordered = $this->stockItems->findAvailableByVariant($this->variant);
 
         self::assertSame((string) $stillOpen->getId(), (string) $ordered[0]->getId());
+    }
+
+    /**
+     * Le bug corrigé : « refermer » ne devait plus faire perdre sa priorité à
+     * l'exemplaire entamé. Avant ce correctif, refermer effaçait
+     * `open_package_quantity`, et ce lot retombait au rang d'un lot scellé.
+     */
+    public function testAResealedLotKeepsItsPriorityOverASealedOne(): void
+    {
+        $sealed = $this->makeLot($this->household, $this->variant, 500, Unit::Gram);
+        $resealed = $this->makeLot($this->household, $this->variant, 500, Unit::Gram);
+
+        $resealed->withdraw(100);
+        $resealed->resealOpenPackage();
+        $this->entityManager->flush();
+
+        self::assertTrue($resealed->isOpened());
+        self::assertTrue($resealed->isPackageResealed());
+
+        $ordered = $this->stockItems->findAvailableByVariant($this->variant);
+
+        self::assertSame((string) $resealed->getId(), (string) $ordered[0]->getId());
+        self::assertSame((string) $sealed->getId(), (string) $ordered[1]->getId());
     }
 }

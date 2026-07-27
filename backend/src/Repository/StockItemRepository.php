@@ -8,6 +8,7 @@ use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\StockItem;
 use App\Enum\StorageLocation;
+use App\Service\Freshness\EffectiveUseByCalculator;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\LockMode;
 use Doctrine\ORM\QueryBuilder;
@@ -17,8 +18,10 @@ use Symfony\Component\Uid\Uuid;
 /** @extends ServiceEntityRepository<StockItem> */
 class StockItemRepository extends ServiceEntityRepository
 {
-    public function __construct(ManagerRegistry $registry)
-    {
+    public function __construct(
+        ManagerRegistry $registry,
+        private readonly EffectiveUseByCalculator $effectiveUseBy,
+    ) {
         parent::__construct($registry, StockItem::class);
     }
 
@@ -65,7 +68,7 @@ class StockItemRepository extends ServiceEntityRepository
                 ->setParameter('limitDate', new \DateTimeImmutable(sprintf('today +%d days', $filters['expiringWithinDays'])));
         }
 
-        return $this->applyFefoOrder($qb)->getQuery()->getResult();
+        return $this->sortForFefo($qb->getQuery()->getResult());
     }
 
     /**
@@ -84,7 +87,7 @@ class StockItemRepository extends ServiceEntityRepository
             ->andWhere('s.variant = :variant')
             ->setParameter('variant', $variant->getId(), 'uuid');
 
-        return $this->applyFefoOrder($qb)->getQuery()->getResult();
+        return $this->sortForFefo($qb->getQuery()->getResult());
     }
 
     /**
@@ -110,7 +113,7 @@ class StockItemRepository extends ServiceEntityRepository
     /** @return list<StockItem> */
     public function findAvailable(Household $household): array
     {
-        return $this->applyFefoOrder($this->baseQuery($household, false, false))->getQuery()->getResult();
+        return $this->sortForFefo($this->baseQuery($household, false, false)->getQuery()->getResult());
     }
 
     /**
@@ -126,7 +129,7 @@ class StockItemRepository extends ServiceEntityRepository
             ->setParameter('variant', $item->getVariant()->getId(), 'uuid')
             ->setParameter('self', $item->getId(), 'uuid');
 
-        return $this->applyFefoOrder($qb)->getQuery()->getResult();
+        return $this->sortForFefo($qb->getQuery()->getResult());
     }
 
     /** @return list<string> */
@@ -170,24 +173,55 @@ class StockItemRepository extends ServiceEntityRepository
     }
 
     /**
-     * L'ordre de consommation : date d'abord, exemplaire entamé ensuite.
+     * L'ordre de consommation : échéance effective d'abord, exemplaire entamé
+     * ensuite.
      *
-     * L'entamé départage à date égale, il ne passe pas devant : un lot qui périme
-     * demain reste servi avant un paquet ouvert qui périme dans un mois — sinon
-     * la priorité aux produits ouverts se paierait en produits jetés. À date
-     * égale, en revanche — trois sachets de pâtes du même achat, ou trois lots
-     * sans date — c'est le paquet déjà ouvert qui part, et lui seul.
+     * Triée en PHP plutôt qu'en SQL : l'échéance effective d'un lot entamé
+     * dépend d'une durée de conservation après ouverture
+     * ({@see EffectiveUseByCalculator}) que DQL ne peut pas calculer sans
+     * dupliquer cette logique. Un foyer compte des dizaines de lots, pas des
+     * milliers : trier la liste déjà chargée ne coûte rien qui justifie cette
+     * duplication.
      *
-     * DQL n'expose pas NULLS LAST : on trie d'abord sur « a une date ou non ».
+     * L'entamé départage à échéance égale, il ne passe pas devant : un lot qui
+     * périme demain reste servi avant un paquet ouvert qui périme dans un mois —
+     * sinon la priorité aux produits ouverts se paierait en produits jetés. À
+     * échéance égale, en revanche — trois sachets de pâtes du même achat, ou
+     * trois lots sans date — c'est le paquet déjà ouvert (ou refermé) qui part,
+     * et lui seul.
+     *
+     * @param list<StockItem> $items
+     *
+     * @return list<StockItem>
      */
-    private function applyFefoOrder(QueryBuilder $qb): QueryBuilder
+    private function sortForFefo(array $items): array
     {
-        return $qb
-            ->addSelect('CASE WHEN s.expirationDate IS NULL THEN 1 ELSE 0 END AS HIDDEN hasNoDate')
-            ->addSelect('CASE WHEN s.openPackageQuantity IS NULL THEN 1 ELSE 0 END AS HIDDEN isSealed')
-            ->orderBy('hasNoDate', 'ASC')
-            ->addOrderBy('s.expirationDate', 'ASC')
-            ->addOrderBy('isSealed', 'ASC')
-            ->addOrderBy('s.createdAt', 'ASC');
+        $usable = array_map(
+            fn (StockItem $item): array => [$item, $this->effectiveUseBy->compute($item)->date],
+            $items,
+        );
+
+        usort($usable, static function (array $a, array $b): int {
+            /** @var array{0: StockItem, 1: ?\DateTimeImmutable} $a */
+            /** @var array{0: StockItem, 1: ?\DateTimeImmutable} $b */
+            [$itemA, $dateA] = $a;
+            [$itemB, $dateB] = $b;
+
+            if ((null === $dateA) !== (null === $dateB)) {
+                return null === $dateA ? 1 : -1;
+            }
+
+            if (null !== $dateA && null !== $dateB && $dateA != $dateB) {
+                return $dateA <=> $dateB;
+            }
+
+            if ($itemA->isOpened() !== $itemB->isOpened()) {
+                return $itemA->isOpened() ? -1 : 1;
+            }
+
+            return $itemA->getCreatedAt() <=> $itemB->getCreatedAt();
+        });
+
+        return array_column($usable, 0);
     }
 }

@@ -96,4 +96,22 @@ class RecipeNormalizerTest extends TestCase
         self::assertArrayNotHasKey('key', $recipe['missingIngredients'][0]);
         self::assertSame('Gruyère', $recipe['missingIngredients'][0]['label']);
     }
+
+    /** Sans ce champ, une recette enregistrée perdrait silencieusement l'information. */
+    public function testIncludesSideDishIsKept(): void
+    {
+        $recipe = $this->normalizer->normalize([
+            'recipeName' => 'Poulet rôti',
+            'includesSideDish' => true,
+        ]);
+
+        self::assertTrue($recipe['includesSideDish']);
+    }
+
+    public function testIncludesSideDishDefaultsToFalse(): void
+    {
+        $recipe = $this->normalizer->normalize(['recipeName' => 'Quiche lorraine']);
+
+        self::assertFalse($recipe['includesSideDish']);
+    }
 }

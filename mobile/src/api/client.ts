@@ -298,8 +298,18 @@ export const api = {
   consume: (id: string, body: Record<string, unknown>, operationKey: string) =>
     request<StockItem>(`/stock-items/${id}/consume`, { method: 'POST', body: { ...body, operationKey } }),
 
-  addQuantity: (id: string, body: { quantity: number; unit?: Unit }, operationKey: string) =>
-    request<StockItem>(`/stock-items/${id}/add`, { method: 'POST', body: { ...body, operationKey } }),
+  /**
+   * `purchaseDate`/`expirationDate` sont facultatifs : sans eux, l'appelant
+   * affirme implicitement qu'il s'agit du même achat que ce lot (correction de
+   * quantité). Fournis et différents de ce que porte déjà le lot, le serveur
+   * refuse — un lot est homogène, un nouvel achat crée un nouveau lot plutôt
+   * que de s'y mélanger.
+   */
+  addQuantity: (
+    id: string,
+    body: { quantity: number; unit?: Unit; purchaseDate?: string; expirationDate?: string },
+    operationKey: string,
+  ) => request<StockItem>(`/stock-items/${id}/add`, { method: 'POST', body: { ...body, operationKey } }),
 
   /** `expectedRevision`, si fourni, protège contre l'écrasement d'une correction survenue entre-temps. */
   correct: (id: string, body: Record<string, unknown>, operationKey: string, expectedRevision?: number) =>
@@ -320,6 +330,14 @@ export const api = {
 
   setOpened: (id: string, isOpened: boolean, operationKey: string) =>
     request<StockItem>(`/stock-items/${id}/open`, { method: 'POST', body: { isOpened, operationKey } }),
+
+  /**
+   * Corrige une erreur de saisie : annule l'ouverture comme si elle n'avait
+   * jamais eu lieu. Distinct de `setOpened(id, false, …)` (« refermer »), qui
+   * garde la trace de l'exemplaire entamé.
+   */
+  cancelOpening: (id: string, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/cancel-opening`, { method: 'POST', body: { operationKey } }),
 
   discard: (id: string, operationKey: string, reason?: string) =>
     request<StockItem>(`/stock-items/${id}/discard`, { method: 'POST', body: { reason, operationKey } }),

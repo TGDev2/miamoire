@@ -183,13 +183,7 @@ export function IngredientPicker({
               <Text style={styles.sectionHeader}>{section.title}</Text>
             )}
             renderItem={({ item }) => {
-              const meta = [
-                `${item.quantity} ${item.unitLabel}`,
-                item.expiresSoon ? 'périme bientôt' : null,
-                item.alreadyOpened ? 'paquet entamé' : null,
-              ]
-                .filter(Boolean)
-                .join(' · ');
+              const meta = describeDeadlines(item);
 
               return (
                 <Pressable
@@ -228,6 +222,44 @@ export function IngredientPicker({
       </Modal>
     </>
   );
+}
+
+/**
+ * Une seule quantité globale marquée « périme bientôt » mentait dès qu'un
+ * ingrédient avait deux lots aux échéances différentes — 250 g à utiliser
+ * demain, 1 kg scellé sans urgence, tous deux fondus sous un même badge.
+ * Au-delà d'un groupe, on décrit chaque part séparément plutôt que de
+ * continuer à mentir sur la part qui n'est pas concernée.
+ */
+function describeDeadlines(item: InventoryIngredient): string {
+  if (item.deadlines.length > 1) {
+    return item.deadlines
+      .map((bucket) => {
+        const quantity = `${formatQuantity(bucket.quantity)} ${item.unitLabel}`;
+
+        if (bucket.opened) return `${quantity} entamés`;
+        if (bucket.useBy) return `${quantity} à utiliser avant le ${formatShortDate(bucket.useBy)}`;
+
+        return `${quantity} sans date`;
+      })
+      .join(' · ');
+  }
+
+  return [
+    `${item.quantity} ${item.unitLabel}`,
+    item.expiresSoon ? 'périme bientôt' : null,
+    item.alreadyOpened ? 'paquet entamé' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function formatQuantity(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100);
+}
+
+function formatShortDate(value: string): string {
+  return new Date(value).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
 const styles = StyleSheet.create({

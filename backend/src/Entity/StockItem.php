@@ -113,6 +113,18 @@ class StockItem
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $openedAt = null;
 
+    /**
+     * Vrai seulement quand l'exemplaire entamé a été explicitement refermé sans
+     * être fini — jamais vrai quand `openPackageQuantity` est `null`.
+     *
+     * « Refermer » est un geste physique (on remet le couvercle), pas une
+     * correction : il ne doit ni effacer `openPackageQuantity` ni `openedAt`.
+     * Sans ce champ, un exemplaire refermé redevenait indiscernable d'un
+     * exemplaire jamais ouvert — {@see resealOpenPackage()}.
+     */
+    #[ORM\Column(type: 'boolean')]
+    private bool $packageResealed = false;
+
     /** Renseigné quand l'utilisateur a déclaré une quantité approximative plutôt qu'exacte. */
     #[ORM\Column(type: 'boolean')]
     private bool $quantityIsEstimated = false;
@@ -425,14 +437,24 @@ class StockItem
     }
 
     /**
-     * Entame un exemplaire : celui en cours s'il y en a un, sinon le suivant.
+     * Entame un exemplaire : celui en cours s'il y en a un (y compris refermé),
+     * sinon le suivant.
      *
      * Geste manuel (« marquer comme entamé ») autant qu'effet du retrait d'une
-     * quantité — d'où l'idempotence : ouvrir deux fois n'ouvre qu'un exemplaire.
+     * quantité. Un exemplaire refermé n'est pas rouvert de zéro : sa quantité et
+     * sa date de première ouverture (`openedAt`) sont conservées, seul l'état
+     * « refermé » est levé — d'où l'idempotence : entamer deux fois n'ouvre
+     * qu'un exemplaire et ne réinitialise jamais sa date d'ouverture.
      */
     public function openNextPackage(): void
     {
-        if (null !== $this->openPackageQuantity || $this->isEmpty()) {
+        if ($this->isEmpty()) {
+            return;
+        }
+
+        if (null !== $this->openPackageQuantity) {
+            $this->packageResealed = false;
+
             return;
         }
 
@@ -440,13 +462,37 @@ class StockItem
 
         $this->openPackageQuantity = round(min($size, $this->remainingQuantity), 3);
         $this->openedAt = new \DateTimeImmutable();
+        $this->packageResealed = false;
     }
 
-    /** Plus aucun exemplaire entamé : fini, ou refermé à la main. */
+    /**
+     * Referme l'exemplaire entamé sans effacer son histoire : c'est un geste
+     * physique (on remet le couvercle), pas une correction. `openPackageQuantity`
+     * et `openedAt` survivent — l'exemplaire reste le plus dégradé du lot et
+     * garde sa priorité FEFO. N'a d'effet que s'il y a un exemplaire entamé.
+     */
+    public function resealOpenPackage(): void
+    {
+        if (null === $this->openPackageQuantity) {
+            return;
+        }
+
+        $this->packageResealed = true;
+    }
+
+    /**
+     * Remise à zéro complète : plus aucun exemplaire entamé, comme s'il n'avait
+     * jamais existé. Réservée aux cas où l'exemplaire cesse réellement d'exister
+     * — épuisement (voir {@see withdraw()}, {@see setRemainingQuantity()}) ou
+     * redéfinition du conditionnement ({@see repackageAsSingle()}) — et à la
+     * correction explicite d'une erreur de saisie côté service. Ce n'est PAS le
+     * geste « refermer », qui doit garder la trace : voir {@see resealOpenPackage()}.
+     */
     public function closeOpenPackage(): void
     {
         $this->openPackageQuantity = null;
         $this->openedAt = null;
+        $this->packageResealed = false;
     }
 
     public function getStorageLocation(): StorageLocation
@@ -511,6 +557,16 @@ class StockItem
     public function isOpened(): bool
     {
         return null !== $this->openPackageQuantity;
+    }
+
+    /**
+     * Entamé, mais refermé sans être fini. Toujours faux tant qu'aucun
+     * exemplaire n'est entamé — invariant garanti par {@see closeOpenPackage()}
+     * et {@see resealOpenPackage()}, pas revérifié ici par défense inutile.
+     */
+    public function isPackageResealed(): bool
+    {
+        return $this->packageResealed;
     }
 
     public function isQuantityEstimated(): bool
@@ -601,6 +657,15 @@ class StockItem
         return ($this->remainingQuantity / $this->initialQuantity) < 0.2;
     }
 
+    /**
+     * Jours avant la date imprimée ou estimée — pas l'échéance effective.
+     *
+     * Un exemplaire entamé peut se dégrader plus vite que cette date ne le dit :
+     * c'est {@see \App\Service\Freshness\EffectiveUseByCalculator} qui rend le
+     * jugement réellement actionnable (urgence, statut), en tenant compte de la
+     * durée de conservation après ouverture. Cette méthode-ci ne renvoie qu'un
+     * fait brut, jamais un jugement.
+     */
     public function getDaysUntilExpiration(): ?int
     {
         if (null === $this->expirationDate) {
@@ -610,33 +675,5 @@ class StockItem
         $today = new \DateTimeImmutable('today');
 
         return (int) $today->diff($this->expirationDate)->format('%r%a');
-    }
-
-    public function isExpiringSoon(int $withinDays = 3): bool
-    {
-        $days = $this->getDaysUntilExpiration();
-
-        return null !== $days && $days <= $withinDays;
-    }
-
-    public function isExpired(): bool
-    {
-        $days = $this->getDaysUntilExpiration();
-
-        return null !== $days && $days < 0;
-    }
-
-    /** État synthétique affiché dans la liste d'inventaire. */
-    public function getStatus(): string
-    {
-        return match (true) {
-            $this->isArchived() => 'archived',
-            $this->isEmpty() => 'empty',
-            $this->isExpired() => 'expired',
-            $this->isExpiringSoon() => 'expiring_soon',
-            $this->isRunningLow() => 'running_low',
-            $this->isOpened() => 'opened',
-            default => 'sealed',
-        };
     }
 }

@@ -32,6 +32,9 @@ export default function StockItemScreen() {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [showPicker, setShowPicker] = useState(false);
+  /** Date d'achat facultative pour « Ajouter une quantité » : `null` affirme implicitement le même achat. */
+  const [addPurchaseDate, setAddPurchaseDate] = useState<string | null>(null);
+  const [showAddDatePicker, setShowAddDatePicker] = useState(false);
   /** Unité choisie mais pas encore appliquée : elle attend une quantité. */
   const [pendingUnit, setPendingUnit] = useState<ReferenceUnit | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState('');
@@ -92,6 +95,7 @@ export default function StockItemScreen() {
       operationKeys.current.delete(actionId);
       await load();
       setAmount('');
+      setAddPurchaseDate(null);
     } catch (exception) {
       // Une panne de transport (status 0) n'a rien pu écrire : la même clé sert
       // au prochain essai. Toute autre réponse est déjà tranchée par le serveur.
@@ -183,13 +187,7 @@ export default function StockItemScreen() {
           {item.displayQuantity} {item.displayUnit} disponibles
         </Text>
         <Text style={styles.meta}>{item.storageLocationLabel}</Text>
-        <Text style={styles.meta}>
-          {item.expirationDate === null
-            ? 'Aucune date limite renseignée'
-            : item.expirationIsEstimated
-              ? `Fraîcheur estimée jusqu'au ${formatDate(item.expirationDate)} — à vérifier`
-              : `À consommer avant le ${formatDate(item.expirationDate)}`}
-        </Text>
+        <Text style={styles.meta}>{effectiveUseByText(item)}</Text>
         {item.addedBy ? (
           <Text style={styles.meta}>Enregistré par {item.addedBy}</Text>
         ) : null}
@@ -369,12 +367,77 @@ export default function StockItemScreen() {
               setError('Saisissez d\'abord une quantité dans le champ ci-dessus.');
               return;
             }
-            run('add-quantity', (operationKey) => api.addQuantity(id, { quantity: value }, operationKey));
+            run('add-quantity', (operationKey) =>
+              api.addQuantity(
+                id,
+                { quantity: value, purchaseDate: addPurchaseDate ?? undefined },
+                operationKey,
+              ),
+            );
           }}
           disabled={busy}
           style={styles.gridItem}
         />
       </View>
+
+      {/* Distinct de « Refermer », juste au-dessus : celui-ci garde la trace de
+          l'exemplaire entamé, ce geste-ci l'efface — réservé à une vraie erreur
+          de saisie, pas à un simple couvercle remis en place. */}
+      {item.isOpened ? (
+        <Button
+          label="Corriger : annuler l'ouverture"
+          variant="ghost"
+          onPress={() =>
+            Alert.alert(
+              'Annuler l\'ouverture ?',
+              'À utiliser seulement si ce lot n\'a jamais été réellement entamé — une erreur de saisie. Pour simplement remettre le couvercle, utilisez plutôt « Refermer l\'exemplaire entamé ».',
+              [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                  text: 'Confirmer',
+                  style: 'destructive',
+                  onPress: () =>
+                    run('cancel-opening', (operationKey) => api.cancelOpening(id, operationKey)),
+                },
+              ],
+            )
+          }
+          disabled={busy}
+          style={styles.spaced}
+        />
+      ) : null}
+
+      {/* Un lot est homogène : un ajout dont la date d'achat diffère de celle
+          déjà connue est refusé plutôt que mélangé — c'est ce champ qui permet
+          de le déclarer, et donc au serveur de le vérifier. */}
+      <Pressable
+        onPress={() => setShowAddDatePicker(true)}
+        accessibilityRole="button"
+        style={styles.addDateTrigger}
+      >
+        <Text style={styles.addDateText}>
+          {addPurchaseDate
+            ? `Date d'achat de cet ajout : ${formatDate(addPurchaseDate)}`
+            : 'Cet ajout vient d\'un autre achat ? Préciser sa date'}
+        </Text>
+      </Pressable>
+      {addPurchaseDate ? (
+        <Pressable onPress={() => setAddPurchaseDate(null)} accessibilityRole="button">
+          <Text style={styles.clearText}>Retirer cette date</Text>
+        </Pressable>
+      ) : null}
+      {showAddDatePicker ? (
+        <DateTimePicker
+          value={addPurchaseDate ? new Date(addPurchaseDate) : new Date()}
+          mode="date"
+          onChange={(event, selected) => {
+            setShowAddDatePicker(false);
+            if (event.type === 'set' && selected) {
+              setAddPurchaseDate(toIsoDate(selected));
+            }
+          }}
+        />
+      ) : null}
 
       <SectionTitle>Corriger la quantité</SectionTitle>
       <Text style={styles.help}>
@@ -738,6 +801,31 @@ function packagingHint(item: StockItem): string {
     : `Un exemplaire est entamé, les ${item.sealedPackageCount} autres restent fermés. Les recettes puisent d'abord dans celui qui est ouvert.`;
 }
 
+/**
+ * L'échéance qui pilote réellement le stock : la plus proche de la date
+ * imprimée/estimée et de la durée de conservation après ouverture. Remplace
+ * la lecture directe de `expirationDate`, qui ignorait qu'un lot entamé peut
+ * se dégrader plus vite que sa date ne le dit.
+ */
+function effectiveUseByText(item: StockItem): string {
+  if (item.effectiveUseBy === null) {
+    return item.isOpened && item.afterOpeningDurationKnown === false
+      ? 'Entamé — durée de conservation après ouverture inconnue'
+      : 'Aucune date limite renseignée';
+  }
+
+  const date = formatDate(item.effectiveUseBy);
+
+  switch (item.effectiveUseByBasis) {
+    case 'after_opening':
+      return `Entamé : à utiliser avant le ${date}`;
+    case 'estimated':
+      return `Fraîcheur estimée jusqu'au ${date} — à vérifier`;
+    default:
+      return `À consommer avant le ${date}`;
+  }
+}
+
 function toIsoDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -812,6 +900,8 @@ const styles = StyleSheet.create({
   amountButton: { paddingHorizontal: spacing.lg },
   actionGrid: { marginTop: spacing.md, gap: spacing.sm },
   gridItem: {},
+  addDateTrigger: { marginTop: spacing.sm },
+  addDateText: { fontSize: 13, color: colors.inkMuted },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   spaced: { marginTop: spacing.sm },
   packages: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },

@@ -13,8 +13,11 @@ use App\Enum\MovementType;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Exception\StockException;
+use App\Service\Freshness\EffectiveUseByCalculator;
+use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\Product\VariantIdentity;
 use App\Service\Stock\StockService;
+use App\Service\TextNormalizer;
 use App\Service\UnitConverter;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\TestCase;
@@ -24,6 +27,7 @@ class StockServiceTest extends TestCase
     private StockService $service;
     private Household $household;
     private Member $member;
+    private EffectiveUseByCalculator $effectiveUseBy;
 
     protected function setUp(): void
     {
@@ -33,6 +37,7 @@ class StockServiceTest extends TestCase
             $this->createMock(EntityManagerInterface::class),
             new UnitConverter(),
         );
+        $this->effectiveUseBy = new EffectiveUseByCalculator(new ShelfLifeEstimator(new TextNormalizer()));
     }
 
     /** L'exemple du cahier des charges : 1 000 g de riz, 250 g consommés, 750 g restants. */
@@ -104,7 +109,7 @@ class StockServiceTest extends TestCase
         self::assertSame(250.0, $item->getOpenPackageQuantity());
         self::assertSame(2, $item->getSealedPackageCount());
         self::assertTrue($item->isOpened(), 'Prélever sur un produit fermé l\'entame.');
-        self::assertSame('opened', $item->getStatus());
+        self::assertSame('opened', $this->effectiveUseBy->status($item));
     }
 
     /**
@@ -171,6 +176,102 @@ class StockServiceTest extends TestCase
         self::assertSame(500.0, $item->getOpenPackageQuantity());
         self::assertSame(2, $item->getSealedPackageCount());
         self::assertSame(1500.0, $item->getRemainingQuantity(), 'Ouvrir ne consomme rien.');
+    }
+
+    /**
+     * Le bug corrigé : « refermer » n'efface plus l'exemplaire entamé.
+     *
+     * Avant ce correctif, `markOpened($item, false)` appelait `closeOpenPackage()`
+     * et perdait `openPackageQuantity`/`openedAt` — un exemplaire refermé
+     * redevenait indiscernable d'un exemplaire jamais ouvert.
+     */
+    public function testResealingKeepsTheOpenPackageQuantityAndOpenedAt(): void
+    {
+        $item = $this->packagedItem(500, 3, Unit::Gram);
+        $this->service->consume($item, 250, Unit::Gram, $this->member);
+        $openedAt = $item->getOpenedAt();
+
+        $this->service->markOpened($item, false);
+
+        self::assertTrue($item->isOpened(), 'Refermer ne fait pas disparaître l\'exemplaire entamé.');
+        self::assertTrue($item->isPackageResealed());
+        self::assertSame(250.0, $item->getOpenPackageQuantity());
+        self::assertSame($openedAt, $item->getOpenedAt());
+        self::assertSame('resealed', $this->effectiveUseBy->status($item));
+    }
+
+    /** Rouvrir un exemplaire refermé ne réinitialise pas sa date de première ouverture. */
+    public function testReopeningAResealedPackagePreservesTheOriginalOpenedAt(): void
+    {
+        $item = $this->packagedItem(500, 3, Unit::Gram);
+        $this->service->consume($item, 250, Unit::Gram, $this->member);
+        $openedAt = $item->getOpenedAt();
+        $this->service->markOpened($item, false);
+
+        $this->service->markOpened($item, true);
+
+        self::assertFalse($item->isPackageResealed());
+        self::assertSame($openedAt, $item->getOpenedAt());
+        self::assertSame(250.0, $item->getOpenPackageQuantity());
+    }
+
+    /**
+     * La seule voie qui revient à « jamais ouvert » : une correction explicite
+     * et journalisée, distincte du geste physique « refermer ».
+     */
+    public function testCancelOpeningClearsTheOpenPackageAndJournalsIt(): void
+    {
+        $item = $this->packagedItem(500, 3, Unit::Gram);
+        $this->service->consume($item, 250, Unit::Gram, $this->member);
+
+        $movement = $this->service->cancelOpening($item, $this->member);
+
+        self::assertFalse($item->isOpened());
+        self::assertFalse($item->isPackageResealed());
+        self::assertNull($item->getOpenedAt());
+        self::assertNull($item->getOpenPackageQuantity());
+        self::assertNotNull($movement);
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame('Ouverture annulée : erreur de saisie', $movement->getReason());
+    }
+
+    public function testCancelOpeningOnAnUnopenedLotDoesNothing(): void
+    {
+        $item = $this->item(1000, Unit::Gram);
+
+        $movement = $this->service->cancelOpening($item, $this->member);
+
+        self::assertNull($movement);
+        self::assertCount(0, $item->getMovements());
+    }
+
+    /** Un lot est homogène : un réapprovisionnement à une autre date doit créer un nouveau lot. */
+    public function testAddQuantityRejectsAMismatchedPurchaseDate(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $item->setPurchaseDate(new \DateTimeImmutable('2026-07-01'));
+
+        $this->expectException(StockException::class);
+        $this->expectExceptionMessage('nouvelle course');
+
+        $this->service->addQuantity(
+            $item,
+            500,
+            Unit::Gram,
+            $this->member,
+            purchaseDate: new \DateTimeImmutable('2026-07-15'),
+        );
+    }
+
+    /** Sans date fournie, l'appelant affirme implicitement le même achat : comportement inchangé. */
+    public function testAddQuantityWithoutADateStillMerges(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $item->setPurchaseDate(new \DateTimeImmutable('2026-07-01'));
+
+        $this->service->addQuantity($item, 500, Unit::Gram, $this->member);
+
+        self::assertSame(1000.0, $item->getRemainingQuantity());
     }
 
     /** Une correction ne peut pas laisser un sachet prétendant contenir plus que le lot. */
@@ -326,7 +427,7 @@ class StockServiceTest extends TestCase
 
         $this->service->consume($item, 850, Unit::Gram, $this->member);
         self::assertTrue($item->isRunningLow());
-        self::assertSame('running_low', $item->getStatus());
+        self::assertSame('running_low', $this->effectiveUseBy->status($item));
     }
 
     /**
@@ -344,7 +445,7 @@ class StockServiceTest extends TestCase
         $this->service->archive($item, $this->member, 'Rangement');
 
         self::assertTrue($item->isArchived());
-        self::assertSame('archived', $item->getStatus());
+        self::assertSame('archived', $this->effectiveUseBy->status($item));
         self::assertSame(800.0, $item->getRemainingQuantity(), 'Archiver ne consomme rien.');
         self::assertCount(1, $item->getMovements(), 'Le geste doit rester tracé, et son auteur avec.');
 

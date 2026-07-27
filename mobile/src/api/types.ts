@@ -22,6 +22,8 @@ export type ProductTraitValue =
 export type StockStatus =
   | 'sealed'
   | 'opened'
+  /** Entamé, refermé sans être fini : reste prioritaire, juste rangé différemment. */
+  | 'resealed'
   | 'running_low'
   | 'expiring_soon'
   | 'expired'
@@ -95,6 +97,9 @@ export interface StockPackage {
   opened: boolean;
 }
 
+/** D'où vient `effectiveUseBy` : ce qui a gagné entre la date et la durée après ouverture. */
+export type EffectiveUseByBasis = 'printed' | 'estimated' | 'after_opening' | 'unknown';
+
 /** Un autre lot du même aliment : même variante, autre date. */
 export interface SiblingLot {
   id: string;
@@ -136,10 +141,22 @@ export interface StockItem {
   daysUntilExpiration: number | null;
   openedAt: string | null;
   isOpened: boolean;
+  /** Entamé mais refermé sans être fini : reste prioritaire, juste rangé différemment. */
+  isPackageResealed: boolean;
   quantityIsEstimated: boolean;
   isArchived: boolean;
   archivedAt: string | null;
   status: StockStatus;
+  /**
+   * La plus proche de la date imprimée/estimée et de la durée de conservation
+   * après ouverture — ce qui pilote réellement le stock, Cuisiner et les
+   * notifications. `null` seulement quand aucune date n'est connue du tout.
+   */
+  effectiveUseBy: string | null;
+  effectiveUseByBasis: EffectiveUseByBasis;
+  /** `null` : lot non entamé, la question ne se pose pas. `false` : entamé mais durée inconnue. */
+  afterOpeningDurationKnown: boolean | null;
+  daysUntilEffectiveUseBy: number | null;
   note: string | null;
   /** Prénom de la personne qui a enregistré ce produit. */
   addedBy: string | null;
@@ -231,8 +248,9 @@ export interface InventoryIngredient {
   quantity: number;
   unit: Unit;
   unitLabel: string;
+  /** Dérivé de `deadlines` : vrai si au moins un groupe l'est. */
   expiresSoon: boolean;
-  /** Au moins un exemplaire est entamé : les recettes le privilégient. */
+  /** Dérivé de `deadlines` : au moins un exemplaire est entamé, les recettes le privilégient. */
   alreadyOpened: boolean;
   earliestExpiration: string | null;
   expirationIsEstimated: boolean;
@@ -241,6 +259,20 @@ export interface InventoryIngredient {
   traits: ProductTraitValue[];
   locations: StorageLocation[];
   lotCount: number;
+  /**
+   * La même quantité ventilée par échéance effective — « 250 g entamés à
+   * utiliser demain, 1 kg scellé plus tard » plutôt qu'un seul total marqué
+   * globalement urgent.
+   */
+  deadlines: InventoryDeadlineBucket[];
+}
+
+export interface InventoryDeadlineBucket {
+  quantity: number;
+  useBy: string | null;
+  useByIsEstimated: boolean;
+  opened: boolean;
+  expiresSoon: boolean;
 }
 
 export interface InventorySummary {
@@ -269,6 +301,8 @@ export interface Recipe {
   servings: number;
   preparationTime: number;
   summary: string;
+  /** Vrai seulement quand un accompagnement a été ajouté parce que le plat seul ne suffisait pas. */
+  includesSideDish: boolean;
   ingredientsFromInventory: RecipeIngredient[];
   missingIngredients: RecipeIngredient[];
   substitutions: Array<{ original: string; replacedBy: string; reason: string }>;
@@ -290,7 +324,13 @@ export interface SuggestionResponse {
   guaranteedExclusions: string[];
   /** L'aliment que l'utilisateur a imposé, quand il en a choisi un. */
   requiredIngredient: { key: string; label: string } | null;
-  inventory: Array<{ key: string; ingredient: string; quantity: number; unit: Unit; expiresSoon: boolean }>;
+  inventory: Array<{
+    key: string;
+    ingredient: string;
+    quantity: number;
+    unit: Unit;
+    deadlines: Array<{ quantity: number; useBy: string | null; opened?: true; expiresSoon?: true }>;
+  }>;
 }
 
 /**

@@ -168,6 +168,7 @@ export function RecipeDetailView({
       <Text style={styles.meta}>
         {recipe.preparationTime} min · {recipe.servings}{' '}
         {recipe.servings > 1 ? 'personnes' : 'personne'}
+        {recipe.includesSideDish ? ' · avec accompagnement' : ''}
       </Text>
 
       {/* L'état « enregistrée » était rendu en variante ghost — sans bordure ni

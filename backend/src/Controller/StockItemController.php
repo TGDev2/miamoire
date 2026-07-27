@@ -235,7 +235,12 @@ class StockItemController extends AbstractApiController
                 // « Je n'ai pas de date, mais estime-la » : recalculée depuis l'aliment,
                 // son état et l'endroit où il est rangé.
                 if ($payload->bool('estimateExpiration')) {
-                    $item->setEstimatedExpirationDate($this->estimateFor($shelfLife, $item->getVariant(), $item->getStorageLocation()));
+                    $item->setEstimatedExpirationDate($this->estimateFor(
+                        $shelfLife,
+                        $item->getVariant(),
+                        $item->getStorageLocation(),
+                        $item->getPurchaseDate(),
+                    ));
                 }
 
                 if ($payload->has('purchaseDate')) {
@@ -425,6 +430,8 @@ class StockItemController extends AbstractApiController
                     $member,
                     $payload->string('reason'),
                     $operation,
+                    $payload->date('purchaseDate'),
+                    $payload->date('expirationDate'),
                 );
 
                 return $presenter->stockItem($item);
@@ -592,6 +599,42 @@ class StockItemController extends AbstractApiController
         return $this->json($response);
     }
 
+    /**
+     * Corrige une erreur de saisie : annule l'ouverture comme si elle n'avait
+     * jamais eu lieu. Distinct de `/open` (« refermer »), qui garde la trace de
+     * l'exemplaire entamé — voir {@see StockService::cancelOpening()}.
+     */
+    #[Route('/{id}/cancel-opening', methods: ['POST'])]
+    public function cancelOpening(
+        string $id,
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        StockOperationGuard $guard,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->cancelOpening($item, $member, $operation);
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
+    }
+
     #[Route('/{id}/discard', methods: ['POST'])]
     public function discard(
         string $id,
@@ -658,13 +701,14 @@ class StockItemController extends AbstractApiController
         $line = JsonPayload::fromArray($batch);
 
         $location = $line->enum('storageLocation', StorageLocation::class) ?? $defaults['storageLocation'];
+        $purchaseDate = $line->date('purchaseDate');
         $expiration = $line->has('expirationDate') ? $line->date('expirationDate') : $defaults['expirationDate'];
         $estimate = $line->has('estimateExpiration') ? $line->bool('estimateExpiration') : $defaults['estimateExpiration'];
 
         // Une date lue sur l'emballage prime toujours : on n'estime que ce qui manque.
         $estimated = false;
         if (null === $expiration && $estimate) {
-            $expiration = $this->estimateFor($shelfLife, $variant, $location);
+            $expiration = $this->estimateFor($shelfLife, $variant, $location, $purchaseDate);
             $estimated = true;
         }
 
@@ -676,7 +720,7 @@ class StockItemController extends AbstractApiController
             quantityPerPackage: $line->float('quantityPerPackage') ?? $defaults['quantityPerPackage'],
             unit: $unit,
             location: $location,
-            purchaseDate: $line->date('purchaseDate'),
+            purchaseDate: $purchaseDate,
             expirationDate: $expiration,
             note: $line->string('note') ?? $defaults['note'],
             quantityIsEstimated: $line->has('quantityIsEstimated')
@@ -686,17 +730,24 @@ class StockItemController extends AbstractApiController
         );
     }
 
+    /**
+     * `$from` fait partir la durée estimée de la date d'achat quand elle est
+     * connue, plutôt que d'aujourd'hui : un aliment acheté il y a trois jours
+     * n'a pas trois jours de conservation en plus rien que parce qu'on l'a
+     * saisi aujourd'hui.
+     */
     private function estimateFor(
         ShelfLifeEstimator $shelfLife,
         HouseholdProductVariant $variant,
         StorageLocation $location,
+        ?\DateTimeImmutable $from = null,
     ): \DateTimeImmutable {
         return $shelfLife->estimate(
             $variant->getName(),
             $variant->getCategory(),
             $variant->getTraits(),
             $location,
-        )->until();
+        )->until($from);
     }
 
     /**

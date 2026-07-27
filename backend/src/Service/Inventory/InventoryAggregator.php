@@ -8,6 +8,8 @@ use App\Entity\Household;
 use App\Entity\StockItem;
 use App\Repository\StockItemRepository;
 use App\Service\Ai\Safety\DietaryGuard;
+use App\Service\Freshness\EffectiveUseBy;
+use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\UnitConverter;
 
 /**
@@ -26,12 +28,18 @@ use App\Service\UnitConverter;
  *   il forme sa propre ligne, puisque la famille fait partie de l'identité ;
  * - `quantityIsEstimated`, porté par les lots depuis le début, remonte enfin
  *   jusqu'au modèle.
+ *
+ * Au sein d'une variante, la quantité est aussi ventilée par échéance
+ * effective ({@see InventoryDeadlineBucket}) : deux lots aux échéances très
+ * différentes ne se noient plus dans un seul total assorti d'un booléen
+ * global.
  */
 class InventoryAggregator
 {
     public function __construct(
         private readonly StockItemRepository $stockItems,
         private readonly UnitConverter $converter,
+        private readonly EffectiveUseByCalculator $effectiveUseBy,
     ) {
     }
 
@@ -48,7 +56,19 @@ class InventoryAggregator
         int $expiringWithinDays = 3,
         ?DietaryGuard $guard = null,
     ): array {
-        /** @var array<string, array{item: StockItem, base: float, expiresSoon: bool, opened: bool, earliest: ?\DateTimeImmutable, estimatedExpiration: bool, estimatedQuantity: bool, locations: array<string, true>, lots: int, notes: array<string, true>}> $grouped */
+        /**
+         * @var array<string, array{
+         *     item: StockItem,
+         *     base: float,
+         *     expiresSoon: bool,
+         *     opened: bool,
+         *     estimatedQuantity: bool,
+         *     locations: array<string, true>,
+         *     lots: int,
+         *     notes: array<string, true>,
+         *     buckets: array<string, array{base: float, useBy: ?\DateTimeImmutable, useByIsEstimated: bool, opened: bool, expiresSoon: bool}>,
+         * }> $grouped
+         */
         $grouped = [];
 
         foreach ($this->stockItems->findAvailable($household) as $item) {
@@ -65,16 +85,17 @@ class InventoryAggregator
                     'base' => 0.0,
                     'expiresSoon' => false,
                     'opened' => false,
-                    'earliest' => null,
-                    'estimatedExpiration' => false,
                     'estimatedQuantity' => false,
                     'locations' => [],
                     'lots' => 0,
                     'notes' => [],
+                    'buckets' => [],
                 ];
             }
 
-            $grouped[$key]['base'] += $this->converter->toBase($item->getRemainingQuantity(), $item->getUnit());
+            $itemBase = $this->converter->toBase($item->getRemainingQuantity(), $item->getUnit());
+
+            $grouped[$key]['base'] += $itemBase;
             $grouped[$key]['lots']++;
             $grouped[$key]['locations'][$item->getStorageLocation()->value] = true;
             $grouped[$key]['estimatedQuantity'] = $grouped[$key]['estimatedQuantity'] || $item->isQuantityEstimated();
@@ -84,25 +105,63 @@ class InventoryAggregator
                 $grouped[$key]['notes'][trim($note)] = true;
             }
 
-            if ($item->isExpiringSoon($expiringWithinDays)) {
+            $effective = $this->effectiveUseBy->compute($item);
+            $expiresSoon = $effective->isExpiringSoon($expiringWithinDays);
+            $opened = $item->isOpened();
+
+            if ($expiresSoon) {
                 $grouped[$key]['expiresSoon'] = true;
             }
 
-            if ($item->isOpened()) {
+            if ($opened) {
                 $grouped[$key]['opened'] = true;
             }
 
-            $expiration = $item->getExpirationDate();
-            if (null !== $expiration && (null === $grouped[$key]['earliest'] || $expiration < $grouped[$key]['earliest'])) {
-                $grouped[$key]['earliest'] = $expiration;
-                $grouped[$key]['estimatedExpiration'] = $item->isExpirationEstimated();
+            $bucketKey = ($effective->date?->format('Y-m-d') ?? 'none').'|'.($opened ? '1' : '0');
+
+            if (!isset($grouped[$key]['buckets'][$bucketKey])) {
+                $grouped[$key]['buckets'][$bucketKey] = [
+                    'base' => 0.0,
+                    'useBy' => $effective->date,
+                    'useByIsEstimated' => EffectiveUseBy::BASIS_PRINTED !== $effective->basis,
+                    'opened' => $opened,
+                    'expiresSoon' => false,
+                ];
+            }
+
+            $grouped[$key]['buckets'][$bucketKey]['base'] += $itemBase;
+
+            if ($expiresSoon) {
+                $grouped[$key]['buckets'][$bucketKey]['expiresSoon'] = true;
             }
         }
 
         $lines = [];
         foreach ($grouped as $data) {
             $variant = $data['item']->getVariant();
-            $readable = $this->converter->humanize($data['base'], $data['item']->getUnit()->baseUnit());
+            $baseUnit = $data['item']->getUnit()->baseUnit();
+            $readable = $this->converter->humanize($data['base'], $baseUnit);
+
+            $buckets = array_map(
+                fn (array $bucket): InventoryDeadlineBucket => new InventoryDeadlineBucket(
+                    quantity: round($this->converter->convert($bucket['base'], $baseUnit, $readable['unit']), 3),
+                    useBy: $bucket['useBy'],
+                    useByIsEstimated: $bucket['useByIsEstimated'],
+                    opened: $bucket['opened'],
+                    expiresSoon: $bucket['expiresSoon'],
+                ),
+                array_values($data['buckets']),
+            );
+
+            usort($buckets, static function (InventoryDeadlineBucket $a, InventoryDeadlineBucket $b): int {
+                if ((null === $a->useBy) !== (null === $b->useBy)) {
+                    return null === $a->useBy ? 1 : -1;
+                }
+
+                return $a->useBy <=> $b->useBy;
+            });
+
+            $earliest = $buckets[0] ?? null;
 
             $lines[] = new InventoryLine(
                 key: $variant->getSlug(),
@@ -113,14 +172,15 @@ class InventoryAggregator
                 unit: $readable['unit'],
                 expiresSoon: $data['expiresSoon'],
                 alreadyOpened: $data['opened'],
-                earliestExpiration: $data['earliest'],
-                expirationIsEstimated: $data['estimatedExpiration'],
+                earliestExpiration: $earliest?->useBy,
+                expirationIsEstimated: $earliest?->useByIsEstimated ?? false,
                 quantityIsEstimated: $data['estimatedQuantity'],
                 category: $variant->getCategory(),
                 locations: array_keys($data['locations']),
                 lotCount: $data['lots'],
                 traits: $variant->getTraits(),
                 notes: array_keys($data['notes']),
+                buckets: $buckets,
             );
         }
 

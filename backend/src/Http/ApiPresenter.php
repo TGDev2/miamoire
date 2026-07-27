@@ -12,14 +12,17 @@ use App\Entity\SavedRecipe;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Enum\ProductTrait;
+use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimate;
 use App\Service\UnitConverter;
 
 /** Mise en forme des entités pour l'API. Une seule source de vérité pour le contrat JSON. */
 class ApiPresenter
 {
-    public function __construct(private readonly UnitConverter $converter)
-    {
+    public function __construct(
+        private readonly UnitConverter $converter,
+        private readonly EffectiveUseByCalculator $effectiveUseBy,
+    ) {
     }
 
     /** @return array<string, mixed> */
@@ -105,6 +108,7 @@ class ApiPresenter
     public function stockItem(StockItem $item, array $siblings = []): array
     {
         $readable = $this->converter->humanize($item->getRemainingQuantity(), $item->getUnit());
+        $effective = $this->effectiveUseBy->compute($item);
 
         $payload = [
             'id' => (string) $item->getId(),
@@ -143,10 +147,23 @@ class ApiPresenter
             'daysUntilExpiration' => $item->getDaysUntilExpiration(),
             'openedAt' => $item->getOpenedAt()?->format(\DATE_ATOM),
             'isOpened' => $item->isOpened(),
+            // Entamé mais refermé sans être fini : reste prioritaire au même
+            // titre qu'un exemplaire ouvert, juste rangé différemment.
+            'isPackageResealed' => $item->isPackageResealed(),
             'quantityIsEstimated' => $item->isQuantityEstimated(),
             'isArchived' => $item->isArchived(),
             'archivedAt' => $item->getArchivedAt()?->format(\DATE_ATOM),
-            'status' => $item->getStatus(),
+            'status' => $this->effectiveUseBy->status($item),
+            // La plus proche de la date imprimée/estimée et de la durée de
+            // conservation après ouverture : ce qui pilote réellement le stock,
+            // Cuisiner et les notifications. `basis` dit laquelle a gagné ;
+            // `afterOpeningDurationKnown` reste `null` quand la question ne se
+            // pose pas (lot non entamé), et `false` plutôt qu'une valeur
+            // inventée quand elle se pose mais qu'on ne la connaît pas.
+            'effectiveUseBy' => $effective->date?->format('Y-m-d'),
+            'effectiveUseByBasis' => $effective->basis,
+            'afterOpeningDurationKnown' => $effective->afterOpeningDurationKnown,
+            'daysUntilEffectiveUseBy' => $effective->daysFromToday(),
             'note' => $item->getNote(),
             'addedBy' => $item->getAddedBy()?->getFirstName(),
             'updatedAt' => $item->getUpdatedAt()->format(\DATE_ATOM),
@@ -164,7 +181,7 @@ class ApiPresenter
                     'expirationIsEstimated' => $sibling->isExpirationEstimated(),
                     'daysUntilExpiration' => $sibling->getDaysUntilExpiration(),
                     'storageLocationLabel' => $sibling->getStorageLocation()->label(),
-                    'status' => $sibling->getStatus(),
+                    'status' => $this->effectiveUseBy->status($sibling),
                 ],
                 $siblings,
             );

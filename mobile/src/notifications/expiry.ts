@@ -78,9 +78,7 @@ export async function syncExpiryNotifications(items: StockItem[]): Promise<void>
       await Notifications.scheduleNotificationAsync({
         identifier: `${PREFIX}${item.id}`,
         content: {
-          title: item.expirationIsEstimated
-            ? `${item.variant.name} est à vérifier`
-            : `${item.variant.name} périme bientôt`,
+          title: titleFor(item),
           body: bodyFor(item),
           data: { stockItemId: item.id },
         },
@@ -105,29 +103,54 @@ export async function clearExpiryNotifications(): Promise<void> {
   );
 }
 
-/** `null` quand le lot n'a pas de date limite ou qu'il est déjà épuisé. */
+/**
+ * `null` quand le lot n'a pas d'échéance effective ou qu'il est déjà épuisé.
+ *
+ * Fondée sur `effectiveUseBy` — la plus proche de la date imprimée/estimée et
+ * de la durée de conservation après ouverture — et non sur la seule
+ * `expirationDate` : un lot entamé peut se dégrader plus vite que sa date
+ * imprimée ne le dit, et l'alerte doit alors arriver plus tôt, pas plus tard.
+ */
 function alertDateFor(item: StockItem): Date | null {
-  if (item.expirationDate === null || item.remainingQuantity <= 0) return null;
+  if (item.effectiveUseBy === null || item.remainingQuantity <= 0) return null;
 
   // « 2026-07-29 » interprété localement : `new Date('2026-07-29')` serait en UTC
   // et décalerait l'alerte d'un jour selon le fuseau.
-  const [year, month, day] = item.expirationDate.split('-').map(Number);
+  const [year, month, day] = item.effectiveUseBy.split('-').map(Number);
   if (!year || !month || !day) return null;
 
   return new Date(year, month - 1, day - ALERT_DAYS_BEFORE, ALERT_HOUR, 0, 0, 0);
 }
 
+function titleFor(item: StockItem): string {
+  switch (item.effectiveUseByBasis) {
+    case 'estimated':
+      return `${item.variant.name} est à vérifier`;
+    case 'after_opening':
+      return `${item.variant.name}, entamé, périme bientôt`;
+    default:
+      return `${item.variant.name} périme bientôt`;
+  }
+}
+
 /**
  * Une date déduite d'une durée de conservation ne s'annonce pas comme une date
  * lue sur un emballage : « avant le 2 août » ferait jeter une salade encore bonne.
+ * Une date issue de la durée après ouverture le dit tout autant : ce n'est pas
+ * ce qui est imprimé sur l'emballage, mais ce que l'ouverture a changé.
  */
 function bodyFor(item: StockItem): string {
   const quantity = `${item.displayQuantity} ${item.displayUnit}`;
-  const date = item.expirationDate
-    ? new Date(item.expirationDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
+  const date = item.effectiveUseBy
+    ? new Date(item.effectiveUseBy).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
     : '';
 
-  return item.expirationIsEstimated
-    ? `Il reste ${quantity}. Fraîcheur estimée jusqu'au ${date} : vérifiez avant de consommer.`
-    : `Il reste ${quantity} à consommer avant le ${date}.`;
+  switch (item.effectiveUseByBasis) {
+    case 'after_opening':
+      return `Il reste ${quantity}, entamé : à utiliser avant le ${date}.`;
+    case 'estimated':
+      return `Il reste ${quantity}. Fraîcheur estimée jusqu'au ${date} : vérifiez avant de consommer.`;
+    default:
+      return `Il reste ${quantity} à consommer avant le ${date}.`;
+  }
 }

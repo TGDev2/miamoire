@@ -201,6 +201,40 @@ class ShelfLifeEstimator
         'freezer' => 180,
     ];
 
+    /**
+     * Combien de temps un aliment se garde-t-il UNE FOIS ENTAMÉ ? Toujours plus
+     * court que sa durée avant ouverture, et sans rapport avec elle : un lait
+     * UHT se garde des mois fermé, quelques jours ouvert.
+     *
+     * Sous-ensemble volontairement restreint de {@see FOODS} : seuls les
+     * aliments dont l'ouverture change réellement la donne y figurent. Les
+     * mêmes clés de terme sont réutilisées pour rester cohérent avec
+     * `estimate()`.
+     *
+     * @var array<string, int>
+     */
+    private const AFTER_OPENING_DAYS = [
+        'lait' => 4,
+        'creme' => 5,
+        'yaourt' => 7,
+        'fromage' => 10,
+        'beurre' => 21,
+        'jambon' => 4,
+        'saucisson' => 10,
+        'compote' => 4,
+        'reste' => 3,
+        'gratin' => 3,
+        'soupe' => 3,
+        'salade composee' => 2,
+    ];
+
+    /** @var array<value-of<ProductTrait>, int> */
+    private const AFTER_OPENING_TRAIT_DAYS = [
+        // Une conserve ouverte ne se conserve plus des années : son contenu
+        // rejoint alors un aliment frais ordinaire.
+        'canned' => 3,
+    ];
+
     public function __construct(private readonly TextNormalizer $normalizer)
     {
     }
@@ -252,6 +286,47 @@ class ShelfLifeEstimator
         }
 
         return ShelfLifeEstimate::fromLocation(self::LOCATION_DAYS[$location->value], $location);
+    }
+
+    /**
+     * Durée de conservation après ouverture — distincte de `estimate()` et sans
+     * son repli sur l'emplacement : ne pas savoir combien de temps un yaourt
+     * ouvert se garde n'autorise pas à inventer une réponse. `null` doit rester
+     * lisible comme « inconnu », jamais comme « illimité ».
+     *
+     * @param list<ProductTrait> $traits
+     */
+    public function estimateAfterOpening(
+        string $name,
+        ?string $category = null,
+        array $traits = [],
+        StorageLocation $location = StorageLocation::Fridge,
+    ): ?ShelfLifeEstimate {
+        $haystack = $this->normalizer->toWords($name);
+
+        $best = null;
+        foreach (self::AFTER_OPENING_DAYS as $term => $days) {
+            if (1 === preg_match($this->pluralTolerantPattern($term), $haystack)
+                && (null === $best || mb_strlen($term) > mb_strlen($best['term']))) {
+                $best = ['term' => $term, 'days' => $days];
+            }
+        }
+
+        if (null !== $best) {
+            return ShelfLifeEstimate::fromFood($best['days'], $best['term'], $location);
+        }
+
+        foreach ($traits as $trait) {
+            if (isset(self::AFTER_OPENING_TRAIT_DAYS[$trait->value])) {
+                return ShelfLifeEstimate::fromTrait(
+                    self::AFTER_OPENING_TRAIT_DAYS[$trait->value],
+                    mb_strtolower($trait->label()),
+                    $location,
+                );
+            }
+        }
+
+        return null;
     }
 
     /**
