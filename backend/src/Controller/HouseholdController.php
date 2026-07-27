@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Entity\Household;
 use App\Entity\Member;
+use App\Enum\ExclusionSeverity;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
@@ -146,7 +147,14 @@ class HouseholdController extends AbstractApiController
         }
 
         if ($payload->has('dietaryExclusions')) {
-            $household->setDietaryExclusions($payload->stringList('dietaryExclusions'));
+            $household->setDietaryExclusions(array_map(
+                static fn (array $entry): array => [
+                    'label' => JsonPayload::fromArray($entry)->requiredString('label'),
+                    'severity' => JsonPayload::fromArray($entry)
+                        ->requiredEnum('severity', ExclusionSeverity::class)->value,
+                ],
+                $payload->objectList('dietaryExclusions'),
+            ));
         }
 
         $entityManager->flush();

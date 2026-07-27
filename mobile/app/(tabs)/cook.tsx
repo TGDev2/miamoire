@@ -210,7 +210,7 @@ export default function CookScreen() {
       {household && household.dietaryExclusions.length > 0 ? (
         <View style={styles.guarantee}>
           <Text style={styles.guaranteeTitle}>
-            Exclusions vérifiées : {household.dietaryExclusions.join(', ')}
+            Exclusions appliquées : {household.dietaryExclusions.map((entry) => entry.label).join(', ')}
           </Text>
           <Text style={styles.guaranteeHint}>
             Ces aliments ne sont pas seulement demandés au modèle : ils sont retirés de
@@ -218,6 +218,13 @@ export default function CookScreen() {
             ses étapes — est écartée avant de vous être montrée. Leurs dérivés comptent :
             exclure l'arachide écarte aussi le beurre de cacahuète.
           </Text>
+          {household.dietaryExclusions.some((entry) => entry.severity === 'allergy') ? (
+            <Text style={styles.guaranteeHint}>
+              Pour vos allergies strictes, un produit dont la composition n'est pas connue
+              n'est jamais présenté comme sûr : la recette signale « sécurité non
+              vérifiable » plutôt qu'une garantie qu'elle ne peut pas tenir.
+            </Text>
+          ) : null}
         </View>
       ) : (
         <Text style={styles.exclusions}>

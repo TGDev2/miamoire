@@ -56,6 +56,16 @@ class SavedRecipe
     #[ORM\Column(type: 'json')]
     private array $recipe;
 
+    /**
+     * La forme de `RecipeNormalizer::normalize()` au moment de l'enregistrement.
+     *
+     * Le JSON n'est jamais migré rétroactivement (voir la classe) : ce numéro dit
+     * simplement à quelle forme il faut s'attendre en le relisant, pour qu'un futur
+     * changement de forme sache quelles recettes il concerne.
+     */
+    #[ORM\Column(type: 'smallint')]
+    private int $schemaVersion;
+
     /** Qui l'a enregistrée. Le membre peut partir, la recette reste au foyer. */
     #[ORM\ManyToOne(targetEntity: Member::class)]
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
@@ -70,6 +80,7 @@ class SavedRecipe
         string $name,
         array $recipe,
         string $fingerprint,
+        int $schemaVersion,
         ?Member $savedBy = null,
     ) {
         $this->id = Uuid::v7();
@@ -77,6 +88,7 @@ class SavedRecipe
         $this->name = mb_substr($name, 0, 200);
         $this->recipe = $recipe;
         $this->fingerprint = $fingerprint;
+        $this->schemaVersion = $schemaVersion;
         $this->savedBy = $savedBy;
         $this->createdAt = new \DateTimeImmutable();
     }
@@ -105,6 +117,11 @@ class SavedRecipe
     public function getRecipe(): array
     {
         return $this->recipe;
+    }
+
+    public function getSchemaVersion(): int
+    {
+        return $this->schemaVersion;
     }
 
     public function getSavedBy(): ?Member

@@ -40,6 +40,7 @@ class RecipeSuggestionService
         private readonly DietaryGuardFactory $guards,
         private readonly RecipeSafetyFilter $safetyFilter,
         private readonly RequiredIngredientFilter $requiredFilter,
+        private readonly RecipePlanService $planner,
     ) {
     }
 
@@ -110,8 +111,21 @@ class RecipeSuggestionService
             ));
         }
 
+        // Le plan de préparation est recalculé ici, sur ce qui va réellement être
+        // montré — pas seulement filtré par mots-clés : la confirmation, plus
+        // tard, revérifiera exactement le même document.
+        $strictLabels = array_values(array_unique(array_merge(
+            $household->getStrictExclusionLabels(),
+            array_diff($request->exclusions, $household->getDietaryExclusionLabels()),
+        )));
+
+        $recipes = array_map(
+            fn (array $recipe): array => $recipe + ['plan' => $this->planner->plan($guard, $strictLabels, $household, $recipe)],
+            $constrained['recipes'],
+        );
+
         return [
-            'recipes' => $constrained['recipes'],
+            'recipes' => $recipes,
             'rejected' => $rejected,
             'inventory' => $inventoryPayload,
             'guaranteedExclusions' => $guard->exclusions(),

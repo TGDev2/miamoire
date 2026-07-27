@@ -70,6 +70,27 @@ class Product
     #[ORM\Column(length: 500, nullable: true)]
     private ?string $imageUrl = null;
 
+    /**
+     * Identifiants de taxonomie Open Food Facts (`en:milk`, `en:gluten`…).
+     *
+     * Toujours écrasés au resynchronisation, comme `brand`/`category` : c'est la
+     * fiche partagée d'Open Food Facts, pas une correction locale. Un tableau
+     * vide veut dire « la fiche ne déclare aucun allergène », pas « inconnu » —
+     * c'est `HouseholdProductVariant::getAllergensOverride()` qui porte `null`
+     * pour l'inconnu, notamment pour les produits saisis à la main.
+     *
+     * @var list<string>
+     */
+    #[ORM\Column(type: 'json')]
+    private array $allergensTags = [];
+
+    /** @var list<string> */
+    #[ORM\Column(type: 'json')]
+    private array $tracesTags = [];
+
+    #[ORM\Column(type: 'text', nullable: true)]
+    private ?string $ingredientsText = null;
+
     #[ORM\Column(type: 'string', length: 32, enumType: ProductSource::class)]
     private ProductSource $source;
 
@@ -188,6 +209,40 @@ class Product
     public function setImageUrl(?string $imageUrl): void
     {
         $this->imageUrl = $imageUrl;
+    }
+
+    /** @return list<string> */
+    public function getAllergensTags(): array
+    {
+        return $this->allergensTags;
+    }
+
+    /** @param list<string> $allergensTags */
+    public function setAllergensTags(array $allergensTags): void
+    {
+        $this->allergensTags = array_values($allergensTags);
+    }
+
+    /** @return list<string> */
+    public function getTracesTags(): array
+    {
+        return $this->tracesTags;
+    }
+
+    /** @param list<string> $tracesTags */
+    public function setTracesTags(array $tracesTags): void
+    {
+        $this->tracesTags = array_values($tracesTags);
+    }
+
+    public function getIngredientsText(): ?string
+    {
+        return $this->ingredientsText;
+    }
+
+    public function setIngredientsText(?string $ingredientsText): void
+    {
+        $this->ingredientsText = $ingredientsText;
     }
 
     public function getSource(): ProductSource

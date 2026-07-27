@@ -55,4 +55,10 @@ export const feasibilityPresentation: Record<string, { label: string; color: str
   ready: { label: 'Réalisable immédiatement', color: colors.primary, background: colors.primarySoft },
   adapted: { label: 'Réalisable avec adaptations', color: colors.info, background: colors.infoSoft },
   needs_shopping: { label: 'Petit complément à acheter', color: colors.accent, background: colors.accentSoft },
+  // Ces trois-là viennent de la revérification serveur (`RecipePlan`), pas de
+  // l'auto-évaluation de l'IA : elles priment sur les trois ci-dessus quand
+  // les deux sont disponibles.
+  needs_reassociation: { label: 'Aliment à réassocier', color: colors.accent, background: colors.accentSoft },
+  safety_unknown: { label: 'Sécurité non vérifiable', color: colors.danger, background: colors.dangerSoft },
+  incompatible: { label: 'Ne respecte plus vos exclusions', color: colors.danger, background: colors.dangerSoft },
 };

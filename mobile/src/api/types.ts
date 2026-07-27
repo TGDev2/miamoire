@@ -32,6 +32,44 @@ export type StockStatus =
 export type Feasibility = 'ready' | 'adapted' | 'needs_shopping';
 export type UnitFamily = 'mass' | 'volume' | 'count' | 'serving';
 
+/** Ce que signifie une exclusion : une allergie stricte ne s'assouplit jamais faute de donnée. */
+export type ExclusionSeverity = 'allergy' | 'diet' | 'preference';
+
+export interface DietaryExclusion {
+  label: string;
+  severity: ExclusionSeverity;
+}
+
+/**
+ * L'état réel d'une recette, recalculé au moment où on la regarde.
+ *
+ * `incompatible` et `safety_unknown` s'ajoutent aux trois statuts que l'IA
+ * s'attribue elle-même (`Feasibility`) : ils viennent d'une revérification
+ * serveur, pas d'une auto-évaluation, et priment sur elle à l'affichage.
+ */
+export type RecipePlanStatus =
+  | 'ready'
+  | 'needs_shopping'
+  | 'needs_reassociation'
+  | 'safety_unknown'
+  | 'incompatible';
+
+export interface RecipePlanLine {
+  key: string;
+  label: string;
+  status: RecipePlanStatus;
+  detail: string | null;
+}
+
+export interface RecipePlan {
+  status: RecipePlanStatus;
+  reason: string | null;
+  lines: RecipePlanLine[];
+  /** Les exclusions strictes réellement confrontées à la composition des produits. */
+  checkedExclusions: string[];
+  evaluatedAt: string;
+}
+
 /** D'où vient une information : ce que quelqu'un a choisi prime sur ce qu'une machine a déduit. */
 export type DataOrigin = 'detected' | 'catalog' | 'user';
 
@@ -203,7 +241,7 @@ export interface Member {
 export interface Household {
   id: string;
   name: string;
-  dietaryExclusions: string[];
+  dietaryExclusions: DietaryExclusion[];
   createdAt: string;
   members: Member[];
 }
@@ -233,7 +271,7 @@ export interface Reference {
    * Exclusions proposées à la sélection : choisir « Arachides » couvre aussi
    * « beurre de cacahuète » et « satay », ce qu'un texte libre ne peut pas faire.
    */
-  allergens: ReferenceOption[];
+  allergens: Array<ReferenceOption & { defaultSeverity: ExclusionSeverity }>;
   categories: string[];
   mealTypes: ReferenceOption[];
   equipment: ReferenceOption[];
@@ -308,6 +346,8 @@ export interface Recipe {
   substitutions: Array<{ original: string; replacedBy: string; reason: string }>;
   steps: string[];
   stockConsumptionProposal: ConsumptionLine[];
+  /** Recalculé à la génération : source de vérité au-delà de `feasibility`, que l'IA s'attribue elle-même. */
+  plan: RecipePlan;
 }
 
 /** Une proposition écartée par le contrôle des exclusions, et la raison exacte. */
@@ -345,6 +385,7 @@ export interface SavedRecipe {
   recipeName: string;
   savedBy: string | null;
   savedAt: string;
+  schemaVersion: number;
   recipe: Recipe;
 }
 

@@ -3,12 +3,34 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
-import type { Reference } from '../../src/api/types';
+import type { ExclusionSeverity, Reference } from '../../src/api/types';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
 import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../../src/components/ui';
 import { clearExpiryNotifications, ensureExpiryAlerts } from '../../src/notifications/expiry';
 import { useSession } from '../../src/session/SessionContext';
 import { colors, radius, spacing } from '../../src/theme';
+
+function severityLabel(severity: ExclusionSeverity): string {
+  return severity === 'allergy' ? 'Allergie stricte' : severity === 'diet' ? 'Régime' : 'Préférence';
+}
+
+/**
+ * Demande la sévérité plutôt que la faire deviner par un tapotement répété :
+ * reclasser une allergie en simple préférence mérite un choix explicite, pas
+ * un cycle silencieux qu'un doigt maladroit pourrait déclencher.
+ */
+function pickSeverity(label: string, onPick: (severity: ExclusionSeverity) => void): void {
+  Alert.alert(
+    `Type d'exclusion pour « ${label} »`,
+    'Une allergie stricte signale « sécurité non vérifiable » quand un produit n\'a pas de fiche allergènes claire, plutôt que de le présenter comme sûr.',
+    [
+      { text: 'Allergie stricte', onPress: () => onPick('allergy') },
+      { text: 'Régime', onPress: () => onPick('diet') },
+      { text: 'Préférence', onPress: () => onPick('preference') },
+      { text: 'Annuler', style: 'cancel' },
+    ],
+  );
+}
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -177,13 +199,18 @@ export default function ProfileScreen() {
         qui les nomme — jusque dans ses étapes — est écartée avant de vous être montrée.
         Le contrôle est automatique : il ne dépend pas de la bonne volonté du modèle.
       </Text>
+      <Text style={styles.help}>
+        Pour une allergie stricte, un produit dont la fiche ne précise pas les allergènes
+        est en plus signalé « sécurité non vérifiable » plutôt que présenté comme sûr — un
+        régime ou une simple préférence ne déclenchent pas ce contrôle-là.
+      </Text>
 
       {/* Choisir « Arachides » dans cette liste couvre aussi « beurre de cacahuète »
           et « satay ». Un texte libre ne cherche que le mot écrit. */}
       <Text style={styles.help}>Allergènes reconnus, avec tous leurs dérivés :</Text>
       <View style={styles.chips}>
         {(reference?.allergens ?? []).map((allergen) => {
-          const active = household.dietaryExclusions.includes(allergen.label);
+          const active = household.dietaryExclusions.some((entry) => entry.label === allergen.label);
 
           return (
             <Chip
@@ -194,8 +221,11 @@ export default function ProfileScreen() {
                 run(() =>
                   api.updateHousehold(household.id, {
                     dietaryExclusions: active
-                      ? household.dietaryExclusions.filter((v) => v !== allergen.label)
-                      : [...household.dietaryExclusions, allergen.label],
+                      ? household.dietaryExclusions.filter((entry) => entry.label !== allergen.label)
+                      : [
+                          ...household.dietaryExclusions,
+                          { label: allergen.label, severity: allergen.defaultSeverity },
+                        ],
                   }),
                 )
               }
@@ -204,18 +234,24 @@ export default function ProfileScreen() {
         })}
       </View>
 
-      <Text style={styles.help}>Exclusions actives :</Text>
+      <Text style={styles.help}>
+        Exclusions actives — toucher une exclusion change son type :
+      </Text>
       <View style={styles.chips}>
         {household.dietaryExclusions.map((entry) => (
           <Chip
-            key={entry}
-            label={`${entry}  ✕`}
+            key={entry.label}
+            label={`${entry.label} · ${severityLabel(entry.severity)}`}
             selected
             onPress={() =>
-              run(() =>
-                api.updateHousehold(household.id, {
-                  dietaryExclusions: household.dietaryExclusions.filter((v) => v !== entry),
-                }),
+              pickSeverity(entry.label, (severity) =>
+                run(() =>
+                  api.updateHousehold(household.id, {
+                    dietaryExclusions: household.dietaryExclusions.map((e) =>
+                      e.label === entry.label ? { ...e, severity } : e,
+                    ),
+                  }),
+                ),
               )
             }
           />
@@ -225,18 +261,39 @@ export default function ProfileScreen() {
         ) : null}
       </View>
 
+      {household.dietaryExclusions.map((entry) => (
+        <Pressable
+          key={`remove-excl-${entry.label}`}
+          onPress={() =>
+            run(() =>
+              api.updateHousehold(household.id, {
+                dietaryExclusions: household.dietaryExclusions.filter((e) => e.label !== entry.label),
+              }),
+            )
+          }
+          accessibilityRole="button"
+          accessibilityLabel={`Retirer ${entry.label} de mes exclusions`}
+          style={styles.removeRow}
+        >
+          <Text style={styles.removeText}>Retirer {entry.label} de mes exclusions</Text>
+        </Pressable>
+      ))}
+
       <Field
         label="Ajouter une autre exclusion"
         value={exclusion}
         onChangeText={setExclusion}
         placeholder="brocoli, coriandre…"
-        hint="Un terme libre est cherché tel quel : aucun dérivé n'est deviné."
+        hint="Un terme libre est cherché tel quel, en allergie stricte par défaut : ajustez son type ensuite si besoin."
         returnKeyType="done"
         onSubmitEditing={() => {
           if (!exclusion.trim()) return;
           run(() =>
             api.updateHousehold(household.id, {
-              dietaryExclusions: [...household.dietaryExclusions, exclusion.trim()],
+              dietaryExclusions: [
+                ...household.dietaryExclusions,
+                { label: exclusion.trim(), severity: 'allergy' },
+              ],
             }),
           );
           setExclusion('');

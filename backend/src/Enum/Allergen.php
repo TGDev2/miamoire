@@ -231,6 +231,57 @@ enum Allergen: string
     }
 
     /**
+     * La sévérité par défaut quand cet allergène est ajouté aux exclusions.
+     *
+     * Les 14 familles réglementées engagent la responsabilité alimentaire au
+     * sens strict. `Meat` et `Pork` relèvent d'un régime (végétarien, religieux),
+     * pas d'un risque physiologique ; `Alcohol` n'est le plus souvent qu'une
+     * préférence. L'utilisateur reste libre de corriger ce défaut ensuite.
+     */
+    public function defaultSeverity(): ExclusionSeverity
+    {
+        return match ($this) {
+            self::Meat, self::Pork => ExclusionSeverity::Diet,
+            self::Alcohol => ExclusionSeverity::Preference,
+            default => ExclusionSeverity::Allergy,
+        };
+    }
+
+    /**
+     * L'identifiant de la taxonomie Open Food Facts qui correspond à cet allergène.
+     *
+     * Sert à confronter une exclusion déclarée aux `allergens_tags`/`traces_tags`
+     * qu'Open Food Facts attache à une fiche produit — un contrôle structuré,
+     * distinct du grep sur le texte de la recette fait par `DietaryGuard`.
+     *
+     * `Meat`, `Pork` et `Alcohol` n'ont pas d'équivalent dans cette taxonomie
+     * (ce ne sont pas des allergènes au sens d'OFF) : liste vide, le contrôle
+     * structuré ne s'applique pas et seul le contrôle lexical protège.
+     *
+     * @return list<string>
+     */
+    public function offTags(): array
+    {
+        return match ($this) {
+            self::Gluten => ['en:gluten'],
+            self::Crustacean => ['en:crustaceans'],
+            self::Egg => ['en:eggs'],
+            self::Fish => ['en:fish'],
+            self::Peanut => ['en:peanuts'],
+            self::Soy => ['en:soybeans'],
+            self::Milk => ['en:milk'],
+            self::TreeNut => ['en:nuts'],
+            self::Celery => ['en:celery'],
+            self::Mustard => ['en:mustard'],
+            self::Sesame => ['en:sesame-seeds'],
+            self::Sulphite => ['en:sulphur-dioxide-and-sulphites'],
+            self::Lupin => ['en:lupin'],
+            self::Mollusc => ['en:molluscs'],
+            self::Pork, self::Meat, self::Alcohol => [],
+        };
+    }
+
+    /**
      * L'allergène désigné par un texte libre, s'il en désigne un.
      *
      * « allergie aux cacahuètes » comme « cacahuètes » activent la famille arachide.

@@ -8,6 +8,7 @@ import type {
   ConsumptionLine,
   Recipe,
   RecipeIngredient,
+  RecipePlan,
 } from '../api/types';
 import { Badge, Button, Card, ErrorBanner, SectionTitle } from '../components/ui';
 import { colors, feasibilityPresentation, radius, spacing } from '../theme';
@@ -22,6 +23,7 @@ import { colors, feasibilityPresentation, radius, spacing } from '../theme';
  */
 export function RecipeDetailView({
   recipe,
+  plan,
   operationKey,
   confirmation,
   onConfirmed,
@@ -29,6 +31,13 @@ export function RecipeDetailView({
   onSavedChange,
 }: {
   recipe: Recipe;
+  /**
+   * L'état actuel, recalculé — pour une recette fraîche, celui attaché par la
+   * génération ; pour une recette enregistrée, celui tout juste refetché par
+   * l'écran appelant. Jamais celui figé dans le JSON enregistré : c'est la
+   * seule source de vérité pour le badge et pour bloquer la confirmation.
+   */
+  plan: RecipePlan;
   /** Rend la confirmation rejouable : la même clé ne déduit qu'une fois. */
   operationKey: string;
   confirmation?: ConfirmationResponse;
@@ -57,7 +66,11 @@ export function RecipeDetailView({
   );
 
   const confirmed = confirmation !== undefined;
-  const presentation = feasibilityPresentation[recipe.feasibility] ?? feasibilityPresentation.ready;
+  const presentation = feasibilityPresentation[plan.status] ?? feasibilityPresentation.ready;
+  // Ces trois états ne se lisent jamais comme sûrs : mieux vaut ne pas confirmer
+  // que de laisser croire qu'une composition inconnue ou un aliment introuvable
+  // ne change rien.
+  const blocked = ['incompatible', 'safety_unknown', 'needs_reassociation'].includes(plan.status);
 
   /** Les lignes telles qu'elles seront envoyées : une quantité à zéro n'en est plus une. */
   function editedLines(): ConsumptionLine[] {
@@ -113,7 +126,12 @@ export function RecipeDetailView({
     try {
       // La même clé à chaque tentative : réessayer après une réponse perdue ne
       // déduit rien de plus, le serveur reconnaît le geste et rejoue sa réponse.
-      const result = await api.confirmRecipe(operationKey, recipe.recipeName, lines);
+      const result = await api.confirmRecipe(
+        operationKey,
+        recipe.recipeName,
+        lines,
+        savedId !== null ? { savedId } : { recipe },
+      );
       onConfirmed(result);
 
       const detail = result.lines
@@ -226,6 +244,11 @@ export function RecipeDetailView({
       ))}
 
       <SectionTitle>Déduction du stock</SectionTitle>
+      {blocked ? (
+        <Text style={styles.warning}>
+          {plan.reason ?? 'Cette recette ne peut pas être confirmée en toute sécurité pour le moment.'}
+        </Text>
+      ) : null}
       {recipe.stockConsumptionProposal.length === 0 ? (
         <Text style={styles.help}>Cette recette ne consomme rien de votre inventaire.</Text>
       ) : (
@@ -285,7 +308,7 @@ export function RecipeDetailView({
             label={confirmed ? 'Déjà retiré du stock' : 'Retirer ces quantités du stock'}
             onPress={askConfirmation}
             loading={busy}
-            disabled={confirmed}
+            disabled={confirmed || blocked}
             style={styles.confirm}
           />
         </Card>

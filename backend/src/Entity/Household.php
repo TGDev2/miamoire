@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Enum\ExclusionSeverity;
 use App\Repository\HouseholdRepository;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
@@ -39,7 +40,11 @@ class Household
     #[ORM\Column(length: 64, unique: true, nullable: true)]
     private ?string $accessKeyHash = null;
 
-    /** @var list<string> Exclusions communes au foyer, appliquées aux recettes générées. */
+    /**
+     * Exclusions communes au foyer, appliquées aux recettes générées.
+     *
+     * @var list<array{label: string, severity: string}>
+     */
     #[ORM\Column(type: 'json')]
     private array $dietaryExclusions = [];
 
@@ -89,16 +94,64 @@ class Household
         return null !== $this->accessKeyHash && '' !== $this->accessKeyHash;
     }
 
-    /** @return list<string> */
+    /** @return list<array{label: string, severity: string}> */
     public function getDietaryExclusions(): array
     {
         return $this->dietaryExclusions;
     }
 
-    /** @param list<string> $exclusions */
+    /**
+     * Les labels seuls, pour le contrôle lexical qui ne distingue pas la sévérité.
+     *
+     * @return list<string>
+     */
+    public function getDietaryExclusionLabels(): array
+    {
+        return array_column($this->dietaryExclusions, 'label');
+    }
+
+    /**
+     * Les exclusions à traiter en allergie stricte — les seules pour lesquelles
+     * une composition produit inconnue doit empêcher de présenter une recette
+     * comme sûre.
+     *
+     * @return list<string>
+     */
+    public function getStrictExclusionLabels(): array
+    {
+        return array_values(array_map(
+            static fn (array $entry): string => $entry['label'],
+            array_filter(
+                $this->dietaryExclusions,
+                static fn (array $entry): bool => ExclusionSeverity::Allergy->value === $entry['severity'],
+            ),
+        ));
+    }
+
+    /**
+     * @param list<array{label: string, severity: string}> $exclusions
+     */
     public function setDietaryExclusions(array $exclusions): void
     {
-        $this->dietaryExclusions = array_values(array_unique(array_map('trim', $exclusions)));
+        $seen = [];
+        $entries = [];
+
+        foreach ($exclusions as $exclusion) {
+            $label = trim((string) ($exclusion['label'] ?? ''));
+            if ('' === $label || isset($seen[$label])) {
+                continue;
+            }
+
+            // Une sévérité absente ou invalide retombe sur le défaut le plus sûr :
+            // traiter une exclusion mal qualifiée en allergie stricte plutôt que
+            // de la traiter en simple préférence.
+            $severity = ExclusionSeverity::tryFrom((string) ($exclusion['severity'] ?? '')) ?? ExclusionSeverity::Allergy;
+
+            $seen[$label] = true;
+            $entries[] = ['label' => $label, 'severity' => $severity->value];
+        }
+
+        $this->dietaryExclusions = $entries;
     }
 
     public function getCreatedAt(): \DateTimeImmutable

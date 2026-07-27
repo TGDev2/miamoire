@@ -76,6 +76,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(200),
             'Salade de tomates',
             'operation-key-aaaa1111',
+            [],
         );
 
         $second = $this->service->confirm(
@@ -84,6 +85,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(200),
             'Salade de tomates',
             'operation-key-aaaa1111',
+            [],
         );
 
         self::assertFalse($first['replayed']);
@@ -103,6 +105,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(200),
             'Salade',
             'operation-key-bbbb2222',
+            [],
         );
 
         $this->expectException(StockException::class);
@@ -114,6 +117,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(50),
             'Autre recette',
             'operation-key-bbbb2222',
+            [],
         );
     }
 
@@ -129,6 +133,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(100),
             'Salade',
             'operation-key-cccc3333',
+            [],
         );
 
         $connection = $this->secondConnection();
@@ -168,6 +173,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
                 ],
                 'Recette impossible',
                 'operation-key-dddd4444',
+                [],
             );
             self::fail('Un plan incomplet doit être refusé.');
         } catch (StockConflictException $conflict) {
@@ -194,6 +200,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
                 $this->proposal(5000),
                 'Trop',
                 'operation-key-eeee5555',
+                [],
             );
         } catch (StockConflictException) {
             // attendu
@@ -205,6 +212,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(200),
             'Trop',
             'operation-key-eeee5555',
+            [],
         );
 
         self::assertFalse($result['replayed']);
@@ -264,6 +272,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             $this->proposal(50),
             'Nouvelle tentative',
             'operation-key-hhhh8888',
+            [],
         );
     }
 
@@ -282,6 +291,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
             ],
             'Deux usages',
             'operation-key-ffff6666',
+            [],
         );
 
         self::assertCount(1, $result['lines']);
@@ -323,6 +333,7 @@ class RecipeConfirmationConcurrencyTest extends DatabaseTestCase
                 $this->proposal(200),
                 'Concurrente',
                 'operation-key-gggg7777',
+                [],
             );
         } catch (StockConflictException) {
             $refused = true;

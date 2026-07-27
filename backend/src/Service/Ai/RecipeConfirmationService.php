@@ -8,6 +8,7 @@ use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
 use App\Entity\StockOperation;
+use App\Enum\RecipePlanStatus;
 use App\Enum\StockOperationType;
 use App\Exception\StockConflictException;
 use App\Exception\StockException;
@@ -46,11 +47,14 @@ class RecipeConfirmationService
         private readonly HouseholdProductVariantRepository $variants,
         private readonly StockOperationGuard $operationGuard,
         private readonly DietaryGuardFactory $guards,
+        private readonly RecipePlanService $planner,
     ) {
     }
 
     /**
      * @param list<array<string, mixed>> $proposal
+     * @param array<string, mixed>       $recipe    le document revérifié — celui enregistré,
+     *                                              ou celui tout juste normalisé
      *
      * @return array<string, mixed>
      */
@@ -60,13 +64,14 @@ class RecipeConfirmationService
         array $proposal,
         ?string $recipeName,
         string $operationKey,
+        array $recipe,
     ): array {
         $lines = $this->consolidator->consolidate($proposal);
         $requestHash = $this->consolidator->hash($lines, $recipeName);
 
         /** @var list<array{line: ConsumptionLine, variant: HouseholdProductVariant}> $targets */
         $targets = $this->resolveTargets($household, $lines);
-        $this->assertAllowed($household, $targets);
+        $this->assertAllowed($household, $recipe);
 
         return $this->operationGuard->run(
             $household,
@@ -238,28 +243,24 @@ class RecipeConfirmationService
      * Dernier rempart alimentaire, exécuté juste avant l'écriture.
      *
      * Le filtrage à la génération ne suffit pas : rien n'empêche une application
-     * de confirmer une proposition reçue avant qu'une allergie ne soit déclarée.
+     * de confirmer une proposition reçue avant qu'une allergie ne soit déclarée,
+     * ou une recette enregistrée des mois plus tôt dont un produit a changé de
+     * composition depuis. Le plan de préparation revérifie donc le document
+     * complet — exclusions lexicales ET composition structurée des produits —
+     * pas seulement le libellé des variantes visées par ce retrait.
      *
-     * @param list<array{line: ConsumptionLine, variant: HouseholdProductVariant}> $targets
+     * @param array<string, mixed> $recipe
      */
-    private function assertAllowed(Household $household, array $targets): void
+    private function assertAllowed(Household $household, array $recipe): void
     {
         $guard = $this->guards->for($household);
+        $plan = $this->planner->plan($guard, $household->getStrictExclusionLabels(), $household, $recipe);
 
-        if ($guard->isEmpty()) {
-            return;
-        }
-
-        foreach ($targets as $target) {
-            $violation = $guard->inspect($target['variant']->getCulinaryLabel(), 'la déduction de stock');
-
-            if (null !== $violation) {
-                throw new StockException(sprintf(
-                    'Retrait refusé : « %s » est exclu par votre foyer (%s).',
-                    $target['variant']->getCulinaryLabel(),
-                    $violation->exclusion,
-                ));
-            }
+        if (RecipePlanStatus::Incompatible === $plan->status || RecipePlanStatus::SafetyUnknown === $plan->status) {
+            throw new StockException(sprintf(
+                'Retrait refusé : %s',
+                $plan->reason ?? 'cette recette ne peut plus être confirmée en toute sécurité.',
+            ));
         }
     }
 }

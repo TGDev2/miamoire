@@ -25,7 +25,7 @@ class DietaryGuardFactory
     {
         return new DietaryGuard(
             $this->normalizer,
-            array_values(array_unique(array_merge($household->getDietaryExclusions(), $additional))),
+            array_values(array_unique(array_merge($household->getDietaryExclusionLabels(), $additional))),
         );
     }
 }

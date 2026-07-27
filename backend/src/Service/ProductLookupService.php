@@ -113,6 +113,9 @@ class ProductLookupService
         $product->setPackageQuantity($remote->packageQuantity);
         $product->setPackageUnit($remote->packageUnit);
         $product->setImageUrl($remote->imageUrl);
+        $product->setAllergensTags($remote->allergensTags);
+        $product->setTracesTags($remote->tracesTags);
+        $product->setIngredientsText($remote->ingredientsText);
         $product->setSource(ProductSource::OpenFoodFacts);
         $product->setRefreshedAt(new \DateTimeImmutable());
     }

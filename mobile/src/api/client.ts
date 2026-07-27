@@ -2,6 +2,7 @@ import { getApiBaseUrl } from './config';
 import type {
   ConfirmationResponse,
   ConsumptionLine,
+  DietaryExclusion,
   Household,
   HouseholdWithKey,
   InventorySummary,
@@ -9,6 +10,7 @@ import type {
   Product,
   ProductTraitValue,
   Recipe,
+  RecipePlan,
   Reference,
   SavedRecipe,
   ShelfLifeEstimate,
@@ -215,7 +217,7 @@ export const api = {
 
   household: (id: string) => request<Household>(`/households/${id}`),
 
-  updateHousehold: (id: string, body: { name?: string; dietaryExclusions?: string[] }) =>
+  updateHousehold: (id: string, body: { name?: string; dietaryExclusions?: DietaryExclusion[] }) =>
     request<Household>(`/households/${id}`, { method: 'PATCH', body }),
 
   deleteHousehold: (id: string, confirmDeleteStock = false) =>
@@ -369,6 +371,14 @@ export const api = {
   savedRecipe: (id: string) => request<SavedRecipe>(`/recipes/saved/${id}`),
 
   /**
+   * L'état actuel d'une recette enregistrée, recalculé à l'instant de l'appel.
+   *
+   * Ne jamais se fier au `plan` figé dans le JSON enregistré : stock, exclusions
+   * et réassociation d'un aliment renommé peuvent avoir changé depuis.
+   */
+  recipePlan: (id: string) => request<RecipePlan>(`/recipes/saved/${id}/plan`),
+
+  /**
    * Conserve une recette. Enregistrer deux fois la même n'en crée qu'une : le
    * serveur reconnaît le contenu à son empreinte.
    */
@@ -385,10 +395,26 @@ export const api = {
    * une réponse réseau perdue suivie d'une nouvelle tentative déduisait deux fois.
    * La clé reste la même pour une proposition donnée, y compris après un retour
    * en arrière ou une erreur.
+   *
+   * `recipeSource` désigne le document que le serveur revérifie avant d'écrire
+   * quoi que ce soit : la recette enregistrée (`savedId`), ou celle tout juste
+   * générée (`recipe`) si elle ne l'est pas encore. Ce n'est plus la seule
+   * proposition de quantités qui fait foi.
    */
-  confirmRecipe: (operationKey: string, recipeName: string, proposal: ConsumptionLine[]) =>
+  confirmRecipe: (
+    operationKey: string,
+    recipeName: string,
+    proposal: ConsumptionLine[],
+    recipeSource: { savedId: string } | { recipe: Recipe },
+  ) =>
     request<ConfirmationResponse>('/recipes/confirm', {
       method: 'POST',
-      body: { operationKey, recipeName, stockConsumptionProposal: proposal },
+      body: {
+        operationKey,
+        recipeName,
+        stockConsumptionProposal: proposal,
+        savedRecipeId: 'savedId' in recipeSource ? recipeSource.savedId : undefined,
+        recipe: 'recipe' in recipeSource ? recipeSource.recipe : undefined,
+      },
     }),
 };

@@ -104,6 +104,21 @@ class HouseholdProductVariant
     #[ORM\Column(type: 'string', length: 16, enumType: DataOrigin::class)]
     private DataOrigin $traitsOrigin;
 
+    /**
+     * Correction ou validation par CE foyer des allergènes de cette variante.
+     *
+     * `null` : rien n'a été déclaré, on se fie à `Product::getAllergensTags()` —
+     * inconnu si le produit n'en a pas non plus (saisie manuelle jamais
+     * synchronisée avec Open Food Facts, notamment). Un tableau vide, y compris
+     * `[]`, est une déclaration à part entière : « vérifié, aucun des allergènes
+     * suivis n'est présent ». Les deux ne doivent jamais être confondus, d'où
+     * l'absence de valeur par défaut sur cette colonne.
+     *
+     * @var list<string>|null identifiants de taxonomie OFF, ex. `en:milk`
+     */
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $allergensOverride = null;
+
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
@@ -250,6 +265,18 @@ class HouseholdProductVariant
     public function setTraitsOrigin(DataOrigin $origin): void
     {
         $this->traitsOrigin = $origin;
+    }
+
+    /** @return list<string>|null */
+    public function getAllergensOverride(): ?array
+    {
+        return $this->allergensOverride;
+    }
+
+    /** @param list<string>|null $allergensOverride */
+    public function setAllergensOverride(?array $allergensOverride): void
+    {
+        $this->allergensOverride = null !== $allergensOverride ? array_values($allergensOverride) : null;
     }
 
     public function getCreatedAt(): \DateTimeImmutable

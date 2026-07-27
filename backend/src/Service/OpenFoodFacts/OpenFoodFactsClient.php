@@ -19,7 +19,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  */
 class OpenFoodFactsClient
 {
-    private const FIELDS = 'code,product_name,product_name_fr,brands,categories,image_front_url,image_url,quantity,product_quantity,product_quantity_unit';
+    private const FIELDS = 'code,product_name,product_name_fr,brands,categories,image_front_url,image_url,quantity,product_quantity,product_quantity_unit,allergens_tags,traces_tags,ingredients_text_fr,ingredients_text';
 
     public function __construct(
         private readonly HttpClientInterface $httpClient,
@@ -84,7 +84,29 @@ class OpenFoodFactsClient
             packageQuantity: $quantity,
             packageUnit: $unit,
             imageUrl: $this->firstNonEmptyString($data, ['image_front_url', 'image_url']),
+            allergensTags: $this->stringList($data, 'allergens_tags'),
+            tracesTags: $this->stringList($data, 'traces_tags'),
+            ingredientsText: $this->firstNonEmptyString($data, ['ingredients_text_fr', 'ingredients_text']),
         );
+    }
+
+    /**
+     * Les champs `_tags` d'Open Food Facts sont déjà des listes — pas de virgule
+     * à couper comme pour `brands`/`categories`, juste une lecture défensive.
+     *
+     * @param array<string, mixed> $data
+     *
+     * @return list<string>
+     */
+    private function stringList(array $data, string $key): array
+    {
+        $value = $data[$key] ?? [];
+
+        if (!is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_filter($value, 'is_string'));
     }
 
     /**

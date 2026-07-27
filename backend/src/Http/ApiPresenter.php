@@ -12,6 +12,7 @@ use App\Entity\SavedRecipe;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Enum\ProductTrait;
+use App\Service\Ai\RecipePlan;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimate;
 use App\Service\UnitConverter;
@@ -66,6 +67,9 @@ class ApiPresenter
             'packageQuantity' => $product->getPackageQuantity(),
             'packageUnit' => $product->getPackageUnit()?->value,
             'imageUrl' => $product->getImageUrl(),
+            'allergensTags' => $product->getAllergensTags(),
+            'tracesTags' => $product->getTracesTags(),
+            'ingredientsText' => $product->getIngredientsText(),
             'source' => $product->getSource()->value,
         ];
     }
@@ -92,6 +96,8 @@ class ApiPresenter
             'unitFamily' => $variant->getUnitFamily()->value,
             'nameOrigin' => $variant->getNameOrigin()->value,
             'traitsOrigin' => $variant->getTraitsOrigin()->value,
+            // `null` : rien déclaré par ce foyer, on se fie au produit canonique.
+            'allergensOverride' => $variant->getAllergensOverride(),
             // Ce qui vient du catalogue partagé et n'est pas corrigeable localement.
             'productId' => null !== $product ? (string) $product->getId() : null,
             'barcode' => $product?->getBarcode(),
@@ -206,7 +212,32 @@ class ApiPresenter
             'recipeName' => $saved->getName(),
             'savedBy' => $saved->getSavedBy()?->getFirstName(),
             'savedAt' => $saved->getCreatedAt()->format(\DATE_ATOM),
+            'schemaVersion' => $saved->getSchemaVersion(),
             'recipe' => $saved->getRecipe(),
+        ];
+    }
+
+    /**
+     * L'état actuel d'une recette, recalculé à l'instant de l'appel.
+     *
+     * @return array<string, mixed>
+     */
+    public function recipePlan(RecipePlan $plan): array
+    {
+        return [
+            'status' => $plan->status->value,
+            'reason' => $plan->reason,
+            'lines' => array_map(
+                static fn ($line): array => [
+                    'key' => $line->key,
+                    'label' => $line->label,
+                    'status' => $line->status->value,
+                    'detail' => $line->detail,
+                ],
+                $plan->lines,
+            ),
+            'checkedExclusions' => $plan->checkedExclusions,
+            'evaluatedAt' => $plan->evaluatedAt->format(\DATE_ATOM),
         ];
     }
 

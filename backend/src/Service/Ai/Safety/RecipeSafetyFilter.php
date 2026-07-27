@@ -52,12 +52,19 @@ class RecipeSafetyFilter
     }
 
     /**
+     * Les champs d'une recette où un aliment exclu peut se cacher.
+     *
+     * Rendue publique pour `RecipePlanService`, qui rejoue exactement le même
+     * contrôle lexical au moment d'ouvrir ou de confirmer une recette — la
+     * première ligne de défense ne doit pas diverger entre génération et
+     * réévaluation.
+     *
      * @param array<string, mixed>  $recipe
      * @param array<string, string> $inventoryLabels
      *
      * @return array<string, string|list<string>>
      */
-    private function inspectableFields(array $recipe, array $inventoryLabels): array
+    public function inspectableFields(array $recipe, array $inventoryLabels): array
     {
         return [
             'le titre' => is_string($recipe['recipeName'] ?? null) ? $recipe['recipeName'] : '',

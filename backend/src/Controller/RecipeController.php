@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Entity\Household;
 use App\Entity\SavedRecipe;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
@@ -11,13 +12,16 @@ use App\Http\RequestContext;
 use App\Repository\SavedRecipeRepository;
 use App\Service\Ai\RecipeConfirmationService;
 use App\Service\Ai\RecipeNormalizer;
+use App\Service\Ai\RecipePlanService;
 use App\Service\Ai\RecipeRequest;
 use App\Service\Ai\RecipeSuggestionService;
+use App\Service\Ai\Safety\DietaryGuardFactory;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 
@@ -30,13 +34,14 @@ class RecipeController extends AbstractApiController
         Request $request,
         RequestContext $context,
         RecipeSuggestionService $service,
+        ApiPresenter $presenter,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
         $household = $context->household();
 
         // Les exclusions du foyer s'appliquent par défaut, la requête peut les compléter.
         $exclusions = array_values(array_unique(array_merge(
-            $household->getDietaryExclusions(),
+            $household->getDietaryExclusionLabels(),
             $payload->stringList('exclusions'),
         )));
 
@@ -50,6 +55,13 @@ class RecipeController extends AbstractApiController
             // Facultatif : demander des recettes sans rien imposer reste le cas courant.
             priorityKey: $payload->string('priorityKey'),
         ));
+
+        // Le plan de chaque recette est un objet de service, pas encore une forme
+        // JSON : `ApiPresenter` reste la seule source de vérité du contrat API.
+        $result['recipes'] = array_map(
+            static fn (array $recipe): array => [...$recipe, 'plan' => $presenter->recipePlan($recipe['plan'])],
+            $result['recipes'],
+        );
 
         return $this->json($result);
     }
@@ -66,18 +78,86 @@ class RecipeController extends AbstractApiController
         Request $request,
         RequestContext $context,
         RecipeConfirmationService $service,
+        RecipeNormalizer $normalizer,
+        SavedRecipeRepository $savedRecipes,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
+        $household = $context->household();
+        $recipe = $this->confirmedRecipeDocument($payload, $household, $normalizer, $savedRecipes);
 
         $result = $service->confirm(
-            $context->household(),
+            $household,
             $context->requireMember(),
             $payload->objectList('stockConsumptionProposal'),
             $payload->string('recipeName'),
             $payload->requiredString('operationKey'),
+            $recipe,
         );
 
         return $this->json($result);
+    }
+
+    /**
+     * Le plan de préparation actuel d'une recette enregistrée.
+     *
+     * Recalculé à chaque appel — stock, exclusions et réassociation des aliments
+     * renommés — plutôt que de rejouer le statut figé dans le JSON enregistré.
+     */
+    #[Route('/saved/{id}/plan', methods: ['GET'])]
+    public function savedRecipePlan(
+        string $id,
+        RequestContext $context,
+        SavedRecipeRepository $savedRecipes,
+        RecipePlanService $planner,
+        DietaryGuardFactory $guards,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $household = $context->household();
+        $saved = $this->ownedRecipe($savedRecipes, $context, $id);
+
+        $plan = $planner->plan(
+            $guards->for($household),
+            $household->getStrictExclusionLabels(),
+            $household,
+            $saved->getRecipe(),
+        );
+
+        return $this->json($presenter->recipePlan($plan));
+    }
+
+    /**
+     * La recette à revérifier avant confirmation : celle enregistrée sous
+     * `savedRecipeId`, ou celle tout juste normalisée sous `recipe` si elle n'a
+     * pas encore été enregistrée.
+     *
+     * On ne se fie plus à la seule proposition de retrait renvoyée par le
+     * client : c'est ce document que `RecipeConfirmationService` revérifie
+     * (exclusions, réassociation, stock) juste avant d'écrire quoi que ce soit.
+     *
+     * @return array<string, mixed>
+     */
+    private function confirmedRecipeDocument(
+        JsonPayload $payload,
+        Household $household,
+        RecipeNormalizer $normalizer,
+        SavedRecipeRepository $savedRecipes,
+    ): array {
+        $savedRecipeId = $payload->string('savedRecipeId');
+
+        if (null !== $savedRecipeId) {
+            $saved = $savedRecipes->findOwned($household, $savedRecipeId)
+                ?? throw new NotFoundHttpException('Cette recette enregistrée n\'existe plus.');
+
+            return $saved->getRecipe();
+        }
+
+        $recipe = $payload->object('recipe');
+
+        if ([] === $recipe) {
+            throw new BadRequestHttpException('La recette à confirmer est requise (`recipe` ou `savedRecipeId`).');
+        }
+
+        return $normalizer->normalize($recipe);
     }
 
     /** Les recettes que le foyer a gardées, la plus récente en tête. */
@@ -129,6 +209,7 @@ class RecipeController extends AbstractApiController
             (string) $recipe['recipeName'],
             $recipe,
             $fingerprint,
+            RecipeNormalizer::CURRENT_SCHEMA_VERSION,
             $context->member(),
         );
 

@@ -60,6 +60,7 @@ class ReferenceController extends AbstractApiController
                 static fn (Allergen $allergen): array => [
                     'value' => $allergen->value,
                     'label' => $allergen->label(),
+                    'defaultSeverity' => $allergen->defaultSeverity()->value,
                 ],
                 Allergen::cases(),
             ),

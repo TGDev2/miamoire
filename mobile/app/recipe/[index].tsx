@@ -43,6 +43,7 @@ export default function RecipeDetailScreen() {
   return (
     <RecipeDetailView
       recipe={recipe}
+      plan={recipe.plan}
       operationKey={operationKeyFor(position)}
       confirmation={confirmationFor(position)}
       onConfirmed={(result) => rememberConfirmation(position, result)}

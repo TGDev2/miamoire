@@ -28,6 +28,15 @@ class RecipeNormalizer
     private const MAX_INGREDIENTS = 60;
 
     /**
+     * La forme produite par `normalize()` aujourd'hui.
+     *
+     * Sert de repère à `SavedRecipe::$schemaVersion` : le JSON reste tel quel,
+     * jamais migré rétroactivement, mais un futur changement de forme saura à
+     * quelles recettes il s'applique déjà et auxquelles il ne s'applique pas.
+     */
+    public const CURRENT_SCHEMA_VERSION = 1;
+
+    /**
      * @param array<string, mixed> $raw
      *
      * @return array<string, mixed>
