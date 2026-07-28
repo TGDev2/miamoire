@@ -21,16 +21,7 @@ class RecipeGeneratorFactory
 
     public function create(): RecipeGeneratorInterface
     {
-        $generator = match (strtolower(trim($this->provider))) {
-            self::PROVIDER_CLAUDE => $this->claude,
-            self::PROVIDER_GEMINI, '' => $this->gemini,
-            default => throw new StockException(sprintf(
-                'Fournisseur de recettes « %s » inconnu. Valeurs acceptées : %s, %s.',
-                $this->provider,
-                self::PROVIDER_GEMINI,
-                self::PROVIDER_CLAUDE,
-            )),
-        };
+        $generator = $this->selected();
 
         if (!$generator->isConfigured()) {
             // Le message nomme la variable sans présumer d'où elle vient : en
@@ -44,5 +35,26 @@ class RecipeGeneratorFactory
         }
 
         return $generator;
+    }
+
+    /**
+     * Le générateur désigné par RECIPE_PROVIDER, configuré ou non.
+     *
+     * Séparé de `create()` pour la sonde de santé : elle a besoin de savoir si
+     * la clé du fournisseur actif est présente, jamais de lever l'exception que
+     * `create()` réserve à un usage réel (génération de recettes).
+     */
+    public function selected(): RecipeGeneratorInterface
+    {
+        return match (strtolower(trim($this->provider))) {
+            self::PROVIDER_CLAUDE => $this->claude,
+            self::PROVIDER_GEMINI, '' => $this->gemini,
+            default => throw new StockException(sprintf(
+                'Fournisseur de recettes « %s » inconnu. Valeurs acceptées : %s, %s.',
+                $this->provider,
+                self::PROVIDER_GEMINI,
+                self::PROVIDER_CLAUDE,
+            )),
+        };
     }
 }

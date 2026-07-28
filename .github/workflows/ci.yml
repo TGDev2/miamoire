@@ -1,0 +1,83 @@
+# Intégration continue.
+#
+# La suite de tests est l'actif le plus coûteux du dépôt (idempotence, verrous
+# pessimistes, filtre d'allergènes) et, jusqu'ici, rien ne l'exécutait
+# automatiquement. `--fail-on-skipped` est la pièce qui compte : sans base
+# PostgreSQL joignable, les tests d'intégration s'ignorent au lieu d'échouer
+# (`tests/Integration/RequiresDatabase.php`) — un défaut de migration en CI se
+# manifesterait donc par un rapport vert plutôt que par une erreur, si rien ne
+# l'interdisait explicitement.
+name: Intégration continue
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      # Port 5433, comme docker-compose.yml : le DATABASE_URL déjà commité dans
+      # backend/.env fonctionne tel quel, sans variable dupliquée à maintenir ici.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: food
+          POSTGRES_USER: food
+          POSTGRES_PASSWORD: food
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U food -d food"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, intl, zip, opcache, ctype, iconv, mbstring
+          coverage: none
+
+      - name: Installer les dépendances
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Créer et migrer la base de test
+        # --env=test : symfony/runtime lit --env avant Dotenv::bootEnv(), donc
+        # .env.test est bien chargé (APP_SECRET de test, dbname suffixé _test).
+        run: |
+          php bin/console doctrine:database:create --env=test --if-not-exists
+          php bin/console doctrine:migrations:migrate --no-interaction --env=test
+
+      - name: Exécuter la suite PHP
+        # Seule cette invocation porte le drapeau : en local, sans base, les
+        # tests d'intégration doivent continuer à s'ignorer plutôt qu'échouer.
+        run: vendor/bin/phpunit --fail-on-skipped
+
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Vérifier les types
+        run: npm run typecheck

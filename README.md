@@ -502,9 +502,25 @@ Quelle que soit la plateforme, la marche à suivre est la même :
 | `GEMINI_API_KEY` | la clé du générateur de recettes — **sans elle, tout fonctionne sauf l'onglet Cuisiner** |
 | `PORT` | imposé par la plateforme, repli `8080` |
 
-Une variable oubliée ne se voit pas au déploiement : `GET /api/health` répond `200`
-même sans clé de recettes et même sans `TRUSTED_PROXIES`. Après chaque mise en ligne,
-vérifier les deux points que la sonde ne couvre pas :
+Une variable oubliée ne se voyait auparavant pas au déploiement : `GET /api/health`
+répondait `200` même sans clé de recettes et même sans `TRUSTED_PROXIES` (leçon nº 10,
+`tasks/lessons.md`). Deux filets la remplacent désormais :
+
+- **Au démarrage du conteneur**, `docker/entrypoint.sh` exécute `app:config:check`
+  avant toute migration. `APP_SECRET` identique à celui du dépôt ou `DATABASE_URL`
+  absente **empêchent le conteneur de démarrer**. `CORS_ALLOW_ORIGIN` permissif ou
+  `TRUSTED_PROXIES` vide se contentent d'un avertissement dans les journaux : ce sont
+  des configurations parfois légitimes selon l'hébergeur, pas des pannes.
+- **`GET /api/health`** exécute un `SELECT 1` réel et déclare, sans jamais l'afficher,
+  si la clé du générateur de recettes actif est présente :
+  `{"status":"ok|degraded|error","database":true,"recipeProvider":"Google Gemini","recipeProviderConfigured":false}`.
+  Base injoignable → `503` et `status: "error"` : plus aucun déploiement cassé ne
+  répond `200`. Clé de recettes absente → `200` et `status: "degraded"` — ce n'est pas
+  une panne du serveur, seul l'onglet Cuisiner est touché.
+
+Ce que la sonde ne couvre toujours pas : une clé **présente mais révoquée**, et les
+autres services tiers (Open Food Facts, Firebase). Pour vérifier une clé pour de bon,
+un appel réel reste nécessaire :
 
 ```bash
 # L'onglet Cuisiner : doit renvoyer des recettes, pas une erreur de configuration
@@ -513,11 +529,6 @@ curl -X POST https://<votre-api>/api/recipes/suggest \
   -H "Content-Type: application/json" \
   -d '{"people":2,"equipment":[],"exclusions":[],"allowExtraIngredients":true}'
 ```
-
-`TRUSTED_PROXIES` ne se teste pas de l'extérieur, mais son absence a une conséquence
-précise : derrière le répartiteur de l'hébergeur, toutes les requêtes semblent venir
-d'une seule adresse, et la limitation de débit — 5 créations de foyer par heure —
-s'appliquerait alors au monde entier au lieu de chaque visiteur.
 
 L'application mobile n'a **jamais** connaissance de ces valeurs : les clés restent
 côté serveur.
@@ -649,11 +660,18 @@ effacerait toute correction faite à la main :
 ## Tests
 
 ```bash
-cd backend && php vendor/bin/phpunit    # 163 tests
+cd backend && php vendor/bin/phpunit    # 230 tests
 cd mobile  && npm run typecheck
 ```
 
-Onze d'entre eux exigent une vraie base PostgreSQL — ni la concurrence ni un
+`.github/workflows/ci.yml` exécute les deux commandes ci-dessus sur chaque `push` et
+chaque *pull request*, contre une vraie base PostgreSQL de service — jamais nulle
+part auparavant. `vendor/bin/phpunit --fail-on-skipped` y remplace la commande
+locale : en local, sans base, les tests suivants doivent continuer à s'ignorer
+plutôt qu'échouer ; en intégration continue, un seul test ignoré fait échouer le
+job, pour qu'un défaut de migration ne se déguise plus en suite verte.
+
+Trente-deux d'entre eux exigent une vraie base PostgreSQL — ni la concurrence ni un
 `ORDER BY` ne se simulent avec des doublures. Ils sont **ignorés** si elle est
 absente, jamais rouges :
 

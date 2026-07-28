@@ -1,6 +1,12 @@
 #!/bin/sh
 set -e
 
+# Refuse de démarrer sur une configuration de production dangereuse (secret du
+# dépôt, base absente) plutôt que de laisser la panne se découvrir plus tard, en
+# silence (leçon nº 10, tasks/lessons.md).
+echo "→ Vérification de la configuration"
+php bin/console app:config:check
+
 # Les migrations tournent au démarrage du conteneur, pas via un mécanisme propre
 # à un hébergeur (release_command chez Fly, preDeploy ailleurs, rien du tout sur
 # certains). C'est ce qui rend la même image déployable partout sans adaptation.

@@ -47,3 +47,13 @@ services:
     App\Service\Ai\Generator\GeminiRecipeGenerator:
         arguments:
             $apiKey: '%env(GEMINI_API_KEY)%'
+
+    # `defined:` ne lève jamais d'exception : une absence se lit comme `false`,
+    # jamais comme un conteneur qui refuse de se construire.
+    App\Command\ConfigCheckCommand:
+        arguments:
+            $environment: '%kernel.environment%'
+            $hasDatabaseUrl: '%env(defined:DATABASE_URL)%'
+            $appSecret: '%env(APP_SECRET)%'
+            $corsAllowOrigin: '%env(CORS_ALLOW_ORIGIN)%'
+            $trustedProxies: '%env(TRUSTED_PROXIES)%'
