@@ -559,6 +559,57 @@ class StockServiceTest extends TestCase
         self::assertFalse($item->isExpirationEstimated());
     }
 
+    /**
+     * « Retour de courses » : un nouvel achat retient sa contenance (dans
+     * l'unité pivot de la famille) et son emplacement, pour préremplir le
+     * prochain scan du même produit.
+     */
+    public function testAddingALotRemembersItsPackageSizeAndLocation(): void
+    {
+        $variant = $this->variant(Unit::Kilogram);
+
+        $this->service->add(
+            household: $this->household,
+            author: $this->member,
+            variant: $variant,
+            numberOfPackages: 2,
+            quantityPerPackage: 0.5,
+            unit: Unit::Kilogram,
+            location: StorageLocation::Fridge,
+        );
+
+        self::assertSame(500.0, $variant->getUsualPackageSize(), 'Retenu en grammes, l\'unité pivot de la masse.');
+        self::assertSame(StorageLocation::Fridge, $variant->getUsualStorageLocation());
+    }
+
+    /** Le dernier achat écrase le précédent : ce n'est pas une moyenne à entretenir. */
+    public function testASecondPurchaseOverwritesThePreviouslyRememberedHabits(): void
+    {
+        $variant = $this->variant(Unit::Gram);
+
+        $this->service->add(
+            household: $this->household,
+            author: $this->member,
+            variant: $variant,
+            numberOfPackages: 1,
+            quantityPerPackage: 500,
+            unit: Unit::Gram,
+            location: StorageLocation::Pantry,
+        );
+        $this->service->add(
+            household: $this->household,
+            author: $this->member,
+            variant: $variant,
+            numberOfPackages: 1,
+            quantityPerPackage: 200,
+            unit: Unit::Gram,
+            location: StorageLocation::Fridge,
+        );
+
+        self::assertSame(200.0, $variant->getUsualPackageSize());
+        self::assertSame(StorageLocation::Fridge, $variant->getUsualStorageLocation());
+    }
+
     /** Un lot ne peut pas rejoindre une variante qui ne se compte pas dans la même famille. */
     public function testAddingInAnotherUnitFamilyThanTheVariantIsRejected(): void
     {

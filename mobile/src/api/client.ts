@@ -9,6 +9,7 @@ import type {
   Member,
   Product,
   ProductTraitValue,
+  ProductVariant,
   Recipe,
   RecipePlan,
   Reference,
@@ -238,8 +239,15 @@ export const api = {
 
   reference: () => request<Reference>('/reference'),
 
+  /**
+   * `householdVariant` — non `null` seulement si CE foyer a déjà acheté ce
+   * produit : c'est ce qui préremplit le « Retour de courses » depuis les
+   * habitudes d'achat plutôt que depuis les seuls défauts du catalogue.
+   */
   lookupBarcode: (barcode: string) =>
-    request<{ found: boolean; product: Product }>(`/products/barcode/${barcode}`),
+    request<{ found: boolean; product: Product; householdVariant: ProductVariant | null }>(
+      `/products/barcode/${barcode}`,
+    ),
 
   stockItems: (filters: StockFilters = {}) => {
     const query = new URLSearchParams();

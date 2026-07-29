@@ -121,6 +121,11 @@ export interface ProductVariant {
   barcode: string | null;
   imageUrl: string | null;
   catalogName: string | null;
+  /** Habitudes d'achat : `null` tant qu'aucun lot n'a jamais été créé pour cette variante. */
+  usualPackageSize: number | null;
+  usualPackageUnit: Unit | null;
+  usualStorageLocation: StorageLocation | null;
+  usualStorageLocationLabel: string | null;
 }
 
 /**

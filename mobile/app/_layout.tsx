@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useExpiryAlerts } from '../src/notifications/useExpiryAlerts';
 import { RecipeProvider } from '../src/recipes/RecipeContext';
 import { SessionProvider, useSession } from '../src/session/SessionContext';
+import { ShoppingSessionProvider } from '../src/shopping/ShoppingSessionContext';
 import { colors } from '../src/theme';
 
 // Une alerte de péremption doit s'afficher même si l'application est ouverte :
@@ -41,26 +42,29 @@ export default function RootLayout() {
       <SessionProvider>
         <ExpiryAlerts />
         <RecipeProvider>
-          <StatusBar style="dark" />
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: colors.background },
-              headerTitleStyle: { color: colors.ink, fontWeight: '700' },
-              headerTintColor: colors.primary,
-              contentStyle: { backgroundColor: colors.background },
-            }}
-          >
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="setup" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="add" options={{ title: 'Ajouter au stock' }} />
-            <Stack.Screen name="review" options={{ title: 'Vérifier mon stock' }} />
-            <Stack.Screen name="item/[id]" options={{ title: 'Fiche aliment' }} />
-            <Stack.Screen name="recipes" options={{ title: 'Propositions' }} />
-            <Stack.Screen name="recipe/[index]" options={{ title: 'Recette' }} />
-            <Stack.Screen name="saved/index" options={{ title: 'Mes recettes' }} />
-            <Stack.Screen name="saved/[id]" options={{ title: 'Recette enregistrée' }} />
-          </Stack>
+          <ShoppingSessionProvider>
+            <StatusBar style="dark" />
+            <Stack
+              screenOptions={{
+                headerStyle: { backgroundColor: colors.background },
+                headerTitleStyle: { color: colors.ink, fontWeight: '700' },
+                headerTintColor: colors.primary,
+                contentStyle: { backgroundColor: colors.background },
+              }}
+            >
+              <Stack.Screen name="index" options={{ headerShown: false }} />
+              <Stack.Screen name="setup" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="add" options={{ title: 'Ajouter au stock' }} />
+              <Stack.Screen name="review" options={{ title: 'Vérifier mon stock' }} />
+              <Stack.Screen name="shopping-review" options={{ title: 'Retour de courses' }} />
+              <Stack.Screen name="item/[id]" options={{ title: 'Fiche aliment' }} />
+              <Stack.Screen name="recipes" options={{ title: 'Propositions' }} />
+              <Stack.Screen name="recipe/[index]" options={{ title: 'Recette' }} />
+              <Stack.Screen name="saved/index" options={{ title: 'Mes recettes' }} />
+              <Stack.Screen name="saved/[id]" options={{ title: 'Recette enregistrée' }} />
+            </Stack>
+          </ShoppingSessionProvider>
         </RecipeProvider>
       </SessionProvider>
     </SafeAreaProvider>

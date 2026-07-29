@@ -84,6 +84,13 @@ class ApiPresenter
     {
         $product = $variant->getProduct();
 
+        // Humanisé à la lecture : la valeur est conservée dans l'unité pivot
+        // de la famille (grammes, millilitres...), jamais dans celle saisie
+        // au dernier achat.
+        $usualPackage = null !== $variant->getUsualPackageSize()
+            ? $this->converter->humanize($variant->getUsualPackageSize(), $variant->getUnitFamily()->baseUnit())
+            : null;
+
         return [
             'id' => (string) $variant->getId(),
             'key' => $variant->getSlug(),
@@ -104,6 +111,11 @@ class ApiPresenter
             'barcode' => $product?->getBarcode(),
             'imageUrl' => $product?->getImageUrl(),
             'catalogName' => $product?->getName(),
+            // Habitudes d'achat : `null` tant qu'aucun lot n'a jamais été créé.
+            'usualPackageSize' => $usualPackage['quantity'] ?? null,
+            'usualPackageUnit' => $usualPackage['unit']?->value ?? null,
+            'usualStorageLocation' => $variant->getUsualStorageLocation()?->value,
+            'usualStorageLocationLabel' => $variant->getUsualStorageLocation()?->label(),
         ];
     }
 

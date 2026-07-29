@@ -25,6 +25,17 @@ enum UnitFamily: string
         };
     }
 
+    /** L'unité pivot de la famille — inverse de `Unit::family()`. */
+    public function baseUnit(): Unit
+    {
+        return match ($this) {
+            self::Mass => Unit::Gram,
+            self::Volume => Unit::Milliliter,
+            self::Count => Unit::Piece,
+            self::Serving => Unit::Portion,
+        };
+    }
+
     /**
      * Fragment lisible distinguant deux variantes du même aliment comptées
      * différemment : `tomate` au poids et `tomate-piece` à l'unité.

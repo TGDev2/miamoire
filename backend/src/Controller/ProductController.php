@@ -10,6 +10,7 @@ use App\Enum\Unit;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
+use App\Repository\HouseholdProductVariantRepository;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\ProductLookupService;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -43,9 +44,10 @@ class ProductController extends AbstractApiController
         string $barcode,
         RequestContext $context,
         ProductLookupService $lookup,
+        HouseholdProductVariantRepository $variants,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $context->household();
+        $household = $context->household();
 
         $product = $lookup->findByBarcode($barcode);
 
@@ -57,7 +59,16 @@ class ProductController extends AbstractApiController
             ], Response::HTTP_NOT_FOUND);
         }
 
-        return $this->json(['found' => true, 'product' => $presenter->product($product)]);
+        // Ce foyer a-t-il déjà acheté ce produit ? Sert à préremplir le
+        // « Retour de courses » depuis les habitudes d'achat plutôt que
+        // depuis les seuls défauts du catalogue partagé.
+        $variant = $variants->findOneByProduct($household, $product);
+
+        return $this->json([
+            'found' => true,
+            'product' => $presenter->product($product),
+            'householdVariant' => null !== $variant ? $presenter->variant($variant) : null,
+        ]);
     }
 
     /**

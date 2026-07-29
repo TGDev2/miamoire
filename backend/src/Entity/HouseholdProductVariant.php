@@ -6,6 +6,7 @@ namespace App\Entity;
 
 use App\Enum\DataOrigin;
 use App\Enum\ProductTrait;
+use App\Enum\StorageLocation;
 use App\Enum\UnitFamily;
 use App\Repository\HouseholdProductVariantRepository;
 use App\Service\Product\VariantIdentity;
@@ -118,6 +119,18 @@ class HouseholdProductVariant
      */
     #[ORM\Column(type: 'json', nullable: true)]
     private ?array $allergensOverride = null;
+
+    /**
+     * Contenance du dernier exemplaire acheté — la meilleure prédiction du
+     * prochain achat, pas une moyenne à entretenir. Alimenté par
+     * {@see \App\Service\Stock\StockService::add()}, jamais par un
+     * réapprovisionnement d'un lot existant.
+     */
+    #[ORM\Column(type: 'float', nullable: true)]
+    private ?float $usualPackageSize = null;
+
+    #[ORM\Column(type: 'string', length: 32, enumType: StorageLocation::class, nullable: true)]
+    private ?StorageLocation $usualStorageLocation = null;
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
@@ -277,6 +290,28 @@ class HouseholdProductVariant
     public function setAllergensOverride(?array $allergensOverride): void
     {
         $this->allergensOverride = null !== $allergensOverride ? array_values($allergensOverride) : null;
+    }
+
+    public function getUsualPackageSize(): ?float
+    {
+        return $this->usualPackageSize;
+    }
+
+    public function getUsualStorageLocation(): ?StorageLocation
+    {
+        return $this->usualStorageLocation;
+    }
+
+    /**
+     * Retient un achat — contenance d'un exemplaire et emplacement — pour
+     * préremplir la prochaine ligne d'un même produit au « Retour de
+     * courses ». Écrase la valeur précédente : le dernier achat est la
+     * meilleure prédiction du suivant.
+     */
+    public function rememberPurchase(float $packageSize, StorageLocation $location): void
+    {
+        $this->usualPackageSize = round($packageSize, 3);
+        $this->usualStorageLocation = $location;
     }
 
     public function getCreatedAt(): \DateTimeImmutable

@@ -109,6 +109,11 @@ class StockService
         $item->setQuantityIsEstimated($quantityIsEstimated);
         $item->setAddedBy($author);
 
+        // Un nouveau lot est un nouvel achat : c'est ce qui doit préremplir le
+        // prochain scan du même produit, pas un simple réapprovisionnement
+        // (voir addQuantity()), qui n'en est pas un.
+        $variant->rememberPurchase($this->converter->toBase($quantityPerPackage, $unit), $location);
+
         // Une date lue sur l'emballage n'est jamais marquée comme estimée.
         if ($expirationIsEstimated) {
             $item->setEstimatedExpirationDate($expirationDate);

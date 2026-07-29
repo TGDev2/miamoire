@@ -6,6 +6,7 @@ namespace App\Repository;
 
 use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
+use App\Entity\Product;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -20,6 +21,20 @@ class HouseholdProductVariantRepository extends ServiceEntityRepository
     public function findOneByIdentity(Household $household, string $identityHash): ?HouseholdProductVariant
     {
         return $this->findOneBy(['household' => $household, 'identityHash' => $identityHash]);
+    }
+
+    /**
+     * La variante que ce foyer a déjà associée à ce produit du catalogue, si
+     * elle existe — utilisé pour reconnaître un code-barres déjà scanné.
+     *
+     * Fondé sur le lien `product`, pas sur un recalcul de l'empreinte
+     * d'identité à partir du nom catalogue : un foyer qui a renommé sa
+     * variante localement casserait ce recalcul (l'empreinte est justement
+     * régénérée au renommage), alors que le lien au produit y survit.
+     */
+    public function findOneByProduct(Household $household, Product $product): ?HouseholdProductVariant
+    {
+        return $this->findOneBy(['household' => $household, 'product' => $product]);
     }
 
     /** Le slug est la clé que le générateur de recettes recopie : elle doit résoudre en une lecture. */
