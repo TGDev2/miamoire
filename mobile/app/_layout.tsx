@@ -58,6 +58,7 @@ export default function RootLayout() {
               <Stack.Screen name="add" options={{ title: 'Ajouter au stock' }} />
               <Stack.Screen name="review" options={{ title: 'Vérifier mon stock' }} />
               <Stack.Screen name="shopping-review" options={{ title: 'Retour de courses' }} />
+              <Stack.Screen name="shopping-list" options={{ title: 'Liste de courses' }} />
               <Stack.Screen name="item/[id]" options={{ title: 'Fiche aliment' }} />
               <Stack.Screen name="recipes" options={{ title: 'Propositions' }} />
               <Stack.Screen name="recipe/[index]" options={{ title: 'Recette' }} />

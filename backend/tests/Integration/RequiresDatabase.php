@@ -22,6 +22,7 @@ trait RequiresDatabase
         'stock_operation',
         'saved_recipe',
         'stock_item',
+        'shopping_list_item',
         'household_product_variant',
         'household_member',
         'household',

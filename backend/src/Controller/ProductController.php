@@ -11,6 +11,7 @@ use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
 use App\Repository\HouseholdProductVariantRepository;
+use App\Repository\ShoppingListItemRepository;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\ProductLookupService;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -45,6 +46,7 @@ class ProductController extends AbstractApiController
         RequestContext $context,
         ProductLookupService $lookup,
         HouseholdProductVariantRepository $variants,
+        ShoppingListItemRepository $shoppingList,
         ApiPresenter $presenter,
     ): JsonResponse {
         $household = $context->household();
@@ -64,10 +66,16 @@ class ProductController extends AbstractApiController
         // depuis les seuls défauts du catalogue partagé.
         $variant = $variants->findOneByProduct($household, $product);
 
+        // Ce produit était-il attendu ? Rapproche toute ligne active, cochée
+        // ou non — plus indulgent que d'exiger d'avoir pensé à cocher en
+        // magasin.
+        $shoppingListItem = null !== $variant ? $shoppingList->findOneActiveByVariant($household, $variant) : null;
+
         return $this->json([
             'found' => true,
             'product' => $presenter->product($product),
             'householdVariant' => null !== $variant ? $presenter->variant($variant) : null,
+            'shoppingListItem' => null !== $shoppingListItem ? $presenter->shoppingListItem($shoppingListItem) : null,
         ]);
     }
 

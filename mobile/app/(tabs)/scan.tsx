@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
 import { Button } from '../../src/components/ui';
@@ -21,9 +21,11 @@ const REAPPEAR_GAP_MS = 1200;
 
 export default function ScanScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const [permission, requestPermission] = useCameraPermissions();
   const [active, setActive] = useState(true);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [listCount, setListCount] = useState(0);
   const { lines, addScannedLine, addManualLine } = useShoppingSession();
 
   const lastSeenAt = useRef(new Map<string, number>());
@@ -33,10 +35,30 @@ export default function ScanScreen() {
   useFocusEffect(
     useCallback(() => {
       setActive(true);
+      api
+        .shoppingList()
+        .then((response) => setListCount(response.items.length))
+        .catch(() => undefined);
 
       return () => setActive(false);
     }, []),
   );
+
+  // C'est là que la liste reprend son sens : juste avant ou après le scan.
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <Pressable
+          onPress={() => router.push('/shopping-list')}
+          accessibilityRole="button"
+          accessibilityLabel={`Liste de courses, ${listCount} article${listCount > 1 ? 's' : ''}`}
+          style={styles.listButton}
+        >
+          <Text style={styles.listButtonText}>Liste{listCount > 0 ? ` (${listCount})` : ''}</Text>
+        </Pressable>
+      ),
+    });
+  }, [navigation, router, listCount]);
 
   function showFeedback(message: string) {
     setFeedback(message);
@@ -63,8 +85,16 @@ export default function ScanScreen() {
 
     try {
       const result = await api.lookupBarcode(data);
-      addScannedLine(data, { product: result.product, householdVariant: result.householdVariant });
-      showFeedback(result.householdVariant?.name ?? result.product.name);
+      addScannedLine(data, {
+        product: result.product,
+        householdVariant: result.householdVariant,
+        shoppingListItem: result.shoppingListItem,
+      });
+      showFeedback(
+        result.shoppingListItem
+          ? `Sur votre liste : ${result.shoppingListItem.label}`
+          : (result.householdVariant?.name ?? result.product.name),
+      );
     } catch {
       // Inconnu du catalogue (404) ou réseau indisponible : la ligne est
       // ajoutée quand même, à compléter manuellement à la validation.
@@ -204,4 +234,6 @@ const styles = StyleSheet.create({
   },
   footerRow: { flexDirection: 'row', gap: spacing.md },
   footerButton: { flex: 1 },
+  listButton: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
+  listButtonText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
 });

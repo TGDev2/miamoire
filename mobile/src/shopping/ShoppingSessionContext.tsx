@@ -1,7 +1,14 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 
 import { generateOperationKey } from '../api/client';
-import type { Product, ProductTraitValue, ProductVariant, StorageLocation, Unit } from '../api/types';
+import type {
+  Product,
+  ProductTraitValue,
+  ProductVariant,
+  ShoppingListItem,
+  StorageLocation,
+  Unit,
+} from '../api/types';
 
 /**
  * Une ligne du panier de « Retour de courses » — un produit distinct, pas
@@ -29,11 +36,14 @@ export interface ShoppingSessionLine {
   usualPackageSize: number | null;
   expirationDate: string | null;
   estimateExpiration: boolean;
+  /** Ce produit était attendu sur la liste de courses : retiré de la liste à la validation. */
+  shoppingListItemId: string | null;
 }
 
 interface ShoppingLookup {
   product: Product | null;
   householdVariant: ProductVariant | null;
+  shoppingListItem?: ShoppingListItem | null;
 }
 
 let nextLineId = 1;
@@ -65,7 +75,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         );
       }
 
-      const { product, householdVariant } = lookup;
+      const { product, householdVariant, shoppingListItem } = lookup;
 
       if (householdVariant) {
         return [
@@ -76,8 +86,12 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             productId: product?.id ?? null,
             name: householdVariant.name,
             brand: householdVariant.brand,
-            unit: householdVariant.usualPackageUnit ?? product?.packageUnit ?? 'g',
-            quantityPerPackage: String(householdVariant.usualPackageSize ?? product?.packageQuantity ?? ''),
+            // Une quantité explicitement demandée sur la liste l'emporte sur
+            // une simple habitude d'achat.
+            unit: shoppingListItem?.unit ?? householdVariant.usualPackageUnit ?? product?.packageUnit ?? 'g',
+            quantityPerPackage: String(
+              shoppingListItem?.quantity ?? householdVariant.usualPackageSize ?? product?.packageQuantity ?? '',
+            ),
             numberOfPackages: 1,
             storageLocation: householdVariant.usualStorageLocation ?? 'pantry',
             traits: householdVariant.traits,
@@ -86,6 +100,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             usualPackageSize: householdVariant.usualPackageSize,
             expirationDate: null,
             estimateExpiration: false,
+            shoppingListItemId: shoppingListItem?.id ?? null,
           },
         ];
       }
@@ -109,6 +124,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             usualPackageSize: null,
             expirationDate: null,
             estimateExpiration: false,
+            shoppingListItemId: null,
           },
         ];
       }
@@ -132,6 +148,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
           usualPackageSize: null,
           expirationDate: null,
           estimateExpiration: false,
+          shoppingListItemId: null,
         },
       ];
     });
@@ -156,6 +173,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         usualPackageSize: null,
         expirationDate: null,
         estimateExpiration: false,
+        shoppingListItemId: null,
       },
     ]);
   }, []);

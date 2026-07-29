@@ -431,6 +431,27 @@ export interface SavedRecipe {
   recipe: Recipe;
 }
 
+/**
+ * Une ligne de la liste de courses du foyer.
+ *
+ * `quantity` est facultative — un simple rappel (« acheter du pain ») reste
+ * valide sans quantité précise — mais l'unité, elle, ne l'est jamais : c'est
+ * elle qui permet de reconnaître le même produit au scan (voir
+ * `shoppingListItem` sur la réponse de `lookupBarcode`).
+ */
+export interface ShoppingListItem {
+  id: string;
+  label: string;
+  quantity: number | null;
+  unit: Unit;
+  unitLabel: string;
+  checked: boolean;
+  checkedAt: string | null;
+  variantId: string | null;
+  addedBy: string | null;
+  createdAt: string;
+}
+
 export interface ConfirmationResponse {
   recipeName: string | null;
   /** La clé d'idempotence : rejouée, elle renvoie cette même réponse sans rien déduire. */

@@ -51,6 +51,11 @@ export function RecipeDetailView({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Session seulement : un double ajout est sans risque (le serveur
+  // dédoublonne par variante), donc rien n'oblige à retenir cet état au-delà
+  // de cet écran.
+  const [addedToList, setAddedToList] = useState(false);
+  const [addingToList, setAddingToList] = useState(false);
 
   /**
    * Les quantités réellement utilisées, saisies par l'utilisateur.
@@ -154,6 +159,26 @@ export function RecipeDetailView({
     }
   }
 
+  /** Tout ou rien : pas de sélection ligne par ligne, un retrait se fait depuis l'écran liste. */
+  async function addMissingToList() {
+    setError(null);
+    setAddingToList(true);
+    try {
+      await api.addShoppingListItems(
+        recipe.missingIngredients.map((ingredient) => ({
+          label: ingredient.label,
+          quantity: ingredient.quantity,
+          unit: ingredient.unit,
+        })),
+      );
+      setAddedToList(true);
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Ajout à la liste de courses impossible.');
+    } finally {
+      setAddingToList(false);
+    }
+  }
+
   async function toggleSaved() {
     setError(null);
     setSaving(true);
@@ -216,6 +241,14 @@ export function RecipeDetailView({
           {recipe.missingIngredients.map((ingredient, position) => (
             <IngredientRow key={`missing-${position}`} ingredient={ingredient} missing />
           ))}
+          <Button
+            label={addedToList ? '✓ Ajoutés à la liste de courses' : 'Ajouter à la liste de courses'}
+            variant="secondary"
+            onPress={addMissingToList}
+            loading={addingToList}
+            disabled={addedToList}
+            style={styles.addToList}
+          />
         </>
       ) : null}
 
@@ -367,6 +400,7 @@ const styles = StyleSheet.create({
   ingredientLabel: { fontSize: 15, color: colors.ink, flex: 1 },
   ingredientMissing: { color: colors.accent },
   ingredientQuantity: { fontSize: 15, color: colors.inkMuted, fontWeight: '600' },
+  addToList: { marginTop: spacing.md },
   substitutionCard: { marginBottom: spacing.sm },
   substitutionTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
   substitutionReason: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 19 },

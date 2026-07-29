@@ -17,6 +17,7 @@ import type {
   SavedRecipe,
   SaveTodayCandidate,
   ShelfLifeEstimate,
+  ShoppingListItem,
   StockItem,
   StockMovement,
   SuggestionResponse,
@@ -243,11 +244,17 @@ export const api = {
    * `householdVariant` — non `null` seulement si CE foyer a déjà acheté ce
    * produit : c'est ce qui préremplit le « Retour de courses » depuis les
    * habitudes d'achat plutôt que depuis les seuls défauts du catalogue.
+   *
+   * `shoppingListItem` — non `null` si ce produit était attendu sur la liste
+   * de courses, cochée ou non.
    */
   lookupBarcode: (barcode: string) =>
-    request<{ found: boolean; product: Product; householdVariant: ProductVariant | null }>(
-      `/products/barcode/${barcode}`,
-    ),
+    request<{
+      found: boolean;
+      product: Product;
+      householdVariant: ProductVariant | null;
+      shoppingListItem: ShoppingListItem | null;
+    }>(`/products/barcode/${barcode}`),
 
   stockItems: (filters: StockFilters = {}) => {
     const query = new URLSearchParams();
@@ -463,4 +470,21 @@ export const api = {
         recipe: 'recipe' in recipeSource ? recipeSource.recipe : undefined,
       },
     }),
+
+  shoppingList: () => request<{ items: ShoppingListItem[] }>('/shopping-list'),
+
+  /**
+   * Ajout groupé — un seul élément pour une saisie manuelle, ou tous les
+   * ingrédients manquants d'une recette en un geste. Ajouter deux fois le
+   * même ingrédient ne le duplique pas : la ligne déjà active est renvoyée
+   * telle quelle.
+   */
+  addShoppingListItems: (items: Array<{ label: string; quantity?: number | null; unit: Unit }>) =>
+    request<{ items: ShoppingListItem[] }>('/shopping-list/items', { method: 'POST', body: { items } }),
+
+  toggleShoppingListItem: (id: string, checked: boolean) =>
+    request<ShoppingListItem>(`/shopping-list/${id}`, { method: 'PATCH', body: { checked } }),
+
+  deleteShoppingListItem: (id: string) =>
+    request<{ removed: boolean }>(`/shopping-list/${id}`, { method: 'DELETE' }),
 };

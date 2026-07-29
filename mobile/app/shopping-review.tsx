@@ -89,6 +89,12 @@ export default function ShoppingReviewScreen() {
           operationKeyFor(line.id),
         );
         removeLine(line.id);
+
+        // Nettoyage seulement : un échec ici ne remet pas en cause l'achat
+        // qui, lui, vient de réussir.
+        if (line.shoppingListItemId) {
+          api.deleteShoppingListItem(line.shoppingListItemId).catch(() => undefined);
+        }
       } catch (exception) {
         anyFailed = true;
         setStatuses((current) => ({ ...current, [line.id]: 'error' }));
@@ -181,11 +187,16 @@ function ShoppingLineCard({
   return (
     <Card style={styles.card}>
       <View style={styles.headerRow}>
-        {line.isNew ? (
-          <Badge label="Nouveau produit" color={colors.info} background={colors.infoSoft} />
-        ) : (
-          <Badge label="Déjà connu" color={colors.primary} background={colors.primarySoft} />
-        )}
+        <View style={styles.badges}>
+          {line.isNew ? (
+            <Badge label="Nouveau produit" color={colors.info} background={colors.infoSoft} />
+          ) : (
+            <Badge label="Déjà connu" color={colors.primary} background={colors.primarySoft} />
+          )}
+          {line.shoppingListItemId ? (
+            <Badge label="Sur la liste de courses" color={colors.primary} background={colors.primarySoft} />
+          ) : null}
+        </View>
         <Pressable onPress={onRemove} accessibilityRole="button" accessibilityLabel="Retirer cette ligne">
           <Text style={styles.removeText}>Retirer</Text>
         </Pressable>
@@ -324,6 +335,7 @@ const styles = StyleSheet.create({
   spaced: { marginTop: spacing.lg },
   card: { marginBottom: spacing.lg },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   removeText: { color: colors.danger, fontSize: 14, fontWeight: '600' },
   fieldLabel: { fontSize: 13, fontWeight: '600', color: colors.inkMuted, marginBottom: spacing.sm },
   pair: { flexDirection: 'row', gap: spacing.md },

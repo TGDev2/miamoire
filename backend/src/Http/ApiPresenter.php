@@ -9,6 +9,7 @@ use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
 use App\Entity\Product;
 use App\Entity\SavedRecipe;
+use App\Entity\ShoppingListItem;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Enum\ProductTrait;
@@ -272,6 +273,23 @@ class ApiPresenter
                 ? (string) $movement->getOperation()->getId()
                 : null,
             'createdAt' => $movement->getCreatedAt()->format(\DATE_ATOM),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function shoppingListItem(ShoppingListItem $item): array
+    {
+        return [
+            'id' => (string) $item->getId(),
+            'label' => $item->getLabel(),
+            'quantity' => $item->getQuantity(),
+            'unit' => $item->getUnit()->value,
+            'unitLabel' => $item->getUnit()->label(),
+            'checked' => $item->isChecked(),
+            'checkedAt' => $item->getCheckedAt()?->format(\DATE_ATOM),
+            'variantId' => null !== $item->getVariant() ? (string) $item->getVariant()->getId() : null,
+            'addedBy' => $item->getAddedBy()?->getFirstName(),
+            'createdAt' => $item->getCreatedAt()->format(\DATE_ATOM),
         ];
     }
 
