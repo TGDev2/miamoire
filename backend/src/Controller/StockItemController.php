@@ -635,6 +635,41 @@ class StockItemController extends AbstractApiController
     }
 
     /**
+     * Reporte un lot signalé par « Aujourd'hui » : toujours bon, à reproposer
+     * plus tard. Voir {@see StockService::snooze()}.
+     */
+    #[Route('/{id}/snooze', methods: ['POST'])]
+    public function snooze(
+        string $id,
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        StockOperationGuard $guard,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->snooze($item, $member, $operation);
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
+    }
+
+    /**
      * Corrige une erreur de saisie : annule l'ouverture comme si elle n'avait
      * jamais eu lieu. Distinct de `/open` (« refermer »), qui garde la trace de
      * l'exemplaire entamé — voir {@see StockService::cancelOpening()}.

@@ -154,6 +154,13 @@ class StockItem
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $archivedAt = null;
 
+    /**
+     * Reporté depuis « Aujourd'hui » : ce lot ne doit pas réapparaître dans la
+     * sélection avant cette date. `null` tant que personne ne l'a reporté.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $remindAfter = null;
+
     /** @var Collection<int, StockMovement> */
     #[ORM\OneToMany(targetEntity: StockMovement::class, mappedBy: 'stockItem', cascade: ['persist', 'remove'])]
     #[ORM\OrderBy(['createdAt' => 'DESC'])]
@@ -627,6 +634,16 @@ class StockItem
     public function restore(): void
     {
         $this->archivedAt = null;
+    }
+
+    public function getRemindAfter(): ?\DateTimeImmutable
+    {
+        return $this->remindAfter;
+    }
+
+    public function setRemindAfter(?\DateTimeImmutable $remindAfter): void
+    {
+        $this->remindAfter = $remindAfter;
     }
 
     /** @return Collection<int, StockMovement> */

@@ -19,13 +19,17 @@ final readonly class RecipeRequest
         public array $exclusions = [],
         public bool $allowExtraIngredients = false,
         /**
-         * Clé d'inventaire d'un aliment à utiliser impérativement — `tomate-conserve`.
+         * Clés d'inventaire d'aliments à privilégier, dans l'ordre — jusqu'à 3.
          *
          * Facultatif : demander des recettes sans rien imposer reste le cas
-         * courant. Renseigné, ce n'est pas une préférence mais une contrainte,
-         * vérifiée sur chaque recette renvoyée.
+         * courant. Renseignées, la PREMIÈRE est une contrainte — vérifiée sur
+         * chaque recette renvoyée, comme l'ancien `priorityKey` — les suivantes
+         * (au plus 2) ne sont que des préférences : une recette qui les ignore
+         * n'est jamais écartée pour cette seule raison.
+         *
+         * @var list<string>
          */
-        public ?string $priorityKey = null,
+        public array $priorityKeys = [],
     ) {
     }
 }

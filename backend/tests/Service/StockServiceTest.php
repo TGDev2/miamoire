@@ -266,6 +266,25 @@ class StockServiceTest extends TestCase
         self::assertGreaterThan($updatedBefore, $item->getUpdatedAt());
     }
 
+    /**
+     * « Aujourd'hui » : reporter un lot ne change aucune quantité, mais fixe
+     * bien `remindAfter` dans le futur — c'est ce qui l'écarte de la
+     * prochaine sélection (voir `SaveTodaySelector`).
+     */
+    public function testSnoozeSetsRemindAfterInTheFutureAndJournalsIt(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        self::assertNull($item->getRemindAfter());
+
+        $movement = $this->service->snooze($item, $this->member);
+
+        self::assertSame(500.0, $item->getRemainingQuantity());
+        self::assertNotNull($item->getRemindAfter());
+        self::assertGreaterThan(new \DateTimeImmutable('+1 day'), $item->getRemindAfter());
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame(0.0, $movement->getQuantity());
+    }
+
     /** Un lot est homogène : un réapprovisionnement à une autre date doit créer un nouveau lot. */
     public function testAddQuantityRejectsAMismatchedPurchaseDate(): void
     {

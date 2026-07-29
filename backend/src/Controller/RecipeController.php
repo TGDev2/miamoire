@@ -52,8 +52,10 @@ class RecipeController extends AbstractApiController
             equipment: $payload->stringList('equipment'),
             exclusions: $exclusions,
             allowExtraIngredients: $payload->bool('allowExtraIngredients'),
-            // Facultatif : demander des recettes sans rien imposer reste le cas courant.
-            priorityKey: $payload->string('priorityKey'),
+            // Facultatif : demander des recettes sans rien imposer reste le cas
+            // courant. Au plus 3 — la première est une contrainte, les autres
+            // de simples préférences (voir RecipeRequest).
+            priorityKeys: array_slice($payload->stringList('priorityKeys'), 0, 3),
         ));
 
         // Le plan de chaque recette est un objet de service, pas encore une forme

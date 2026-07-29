@@ -70,7 +70,7 @@ export default function CookScreen() {
         equipment,
         exclusions: [],
         allowExtraIngredients: allowExtra,
-        priorityKey,
+        priorityKeys: priorityKey ? [priorityKey] : [],
       });
       setSuggestion(result);
       router.push('/recipes');

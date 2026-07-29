@@ -13,6 +13,8 @@ use App\Service\Inventory\InventoryDeadlineBucket;
 use App\Service\Inventory\InventoryAggregator;
 use App\Service\Inventory\InventoryLine;
 use App\Service\Inventory\ReviewCandidate;
+use App\Service\Inventory\SaveTodayCandidate;
+use App\Service\Inventory\SaveTodaySelector;
 use App\Service\Inventory\StockReviewSelector;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -99,6 +101,34 @@ class InventoryController extends AbstractApiController
         return $this->json([
             'items' => array_map(
                 static fn (ReviewCandidate $candidate): array => [
+                    'stockItem' => $presenter->stockItem($candidate->item),
+                    'reasons' => array_map(
+                        static fn ($reason): array => ['code' => $reason->value, 'label' => $reason->label()],
+                        $candidate->reasons,
+                    ),
+                ],
+                $candidates,
+            ),
+        ]);
+    }
+
+    /**
+     * La sélection courte de « Aujourd'hui » : quelques lots à traiter
+     * maintenant, classés par échéance effective puis exemplaire entamé.
+     */
+    #[Route('/save-today', methods: ['GET'])]
+    public function saveToday(
+        Request $request,
+        RequestContext $context,
+        SaveTodaySelector $selector,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $limit = $request->query->getInt('limit', 3);
+        $candidates = $selector->selectForToday($context->household(), $limit);
+
+        return $this->json([
+            'items' => array_map(
+                static fn (SaveTodayCandidate $candidate): array => [
                     'stockItem' => $presenter->stockItem($candidate->item),
                     'reasons' => array_map(
                         static fn ($reason): array => ['code' => $reason->value, 'label' => $reason->label()],

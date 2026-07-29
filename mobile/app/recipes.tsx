@@ -70,6 +70,7 @@ export default function RecipeListScreen() {
           <RecipeCard
             key={`${recipe.recipeName}-${originalIndex}`}
             recipe={recipe}
+            desiredIngredients={suggestion.desiredIngredients}
             onPress={() => router.push(`/recipe/${originalIndex}`)}
           />
         );
@@ -78,9 +79,37 @@ export default function RecipeListScreen() {
   );
 }
 
-function RecipeCard({ recipe, onPress }: { recipe: Recipe; onPress: () => void }) {
+/**
+ * Les aliments souhaités que CETTE recette utilise réellement — recoupés
+ * côté client plutôt que renvoyés par le serveur, l'information existe déjà
+ * dans `ingredientsFromInventory`/`stockConsumptionProposal`.
+ */
+function usedDesiredLabels(
+  recipe: Recipe,
+  desiredIngredients: Array<{ key: string; label: string }>,
+): string[] {
+  const usedKeys = new Set([
+    ...recipe.ingredientsFromInventory.map((entry) => entry.key),
+    ...recipe.stockConsumptionProposal.map((entry) => entry.key),
+  ]);
+
+  return desiredIngredients
+    .filter((entry) => usedKeys.has(entry.key))
+    .map((entry) => entry.label);
+}
+
+function RecipeCard({
+  recipe,
+  desiredIngredients,
+  onPress,
+}: {
+  recipe: Recipe;
+  desiredIngredients: Array<{ key: string; label: string }>;
+  onPress: () => void;
+}) {
   const presentation = feasibilityPresentation[recipe.feasibility] ?? feasibilityPresentation.ready;
   const missingEssential = recipe.missingIngredients.filter((entry) => entry.essential);
+  const usedDesired = usedDesiredLabels(recipe, desiredIngredients);
 
   return (
     <Pressable
@@ -128,6 +157,10 @@ function RecipeCard({ recipe, onPress }: { recipe: Recipe; onPress: () => void }
             .join(' · ')}
         </Text>
       ) : null}
+
+      {usedDesired.length > 0 ? (
+        <Text style={styles.desired}>Utilise aussi : {usedDesired.join(', ')}</Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -150,6 +183,7 @@ const styles = StyleSheet.create({
   metaSeparator: { fontSize: 13, color: colors.inkMuted, marginHorizontal: spacing.sm },
   missing: { fontSize: 13, color: colors.accent, marginTop: spacing.md, fontWeight: '600' },
   substitution: { fontSize: 13, color: colors.info, marginTop: spacing.xs },
+  desired: { fontSize: 13, color: colors.primary, marginTop: spacing.xs, fontWeight: '600' },
   rejected: {
     backgroundColor: colors.accentSoft,
     borderRadius: radius.md,

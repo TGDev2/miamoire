@@ -14,6 +14,7 @@ import type {
   Reference,
   ReviewCandidate,
   SavedRecipe,
+  SaveTodayCandidate,
   ShelfLifeEstimate,
   StockItem,
   StockMovement,
@@ -371,11 +372,27 @@ export const api = {
     request<StockItem>(`/stock-items/${id}/confirm`, { method: 'POST', body: { operationKey } }),
 
   /**
-   * `priorityKey` impose un aliment de l'inventaire aux trois propositions.
+   * Reporte un lot signalé par « Aujourd'hui » : toujours bon, à reproposer
+   * plus tard plutôt que maintenant.
+   */
+  snoozeStockItem: (id: string, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/snooze`, { method: 'POST', body: { operationKey } }),
+
+  /**
+   * La sélection courte de « Aujourd'hui » : quelques lots à traiter
+   * maintenant, jamais plus de 5 quel que soit `limit`.
+   */
+  saveToday: (limit?: number) =>
+    request<{ items: SaveTodayCandidate[] }>(
+      `/inventory/save-today${limit !== undefined ? `?limit=${limit}` : ''}`,
+    ),
+
+  /**
+   * `priorityKeys` privilégie jusqu'à 3 aliments de l'inventaire, dans l'ordre.
    *
-   * Facultatif : sans lui, la génération reste celle d'avant. Renseigné, ce
-   * n'est pas une préférence — le serveur écarte les recettes qui ne l'utilisent
-   * pas plutôt que de se fier à la consigne donnée au modèle.
+   * Facultatif : sans lui, la génération reste celle d'avant. Le PREMIER est
+   * une contrainte — le serveur écarte les recettes qui ne l'utilisent pas —
+   * les suivants (au plus 2) ne sont que des préférences.
    */
   suggestRecipes: (body: {
     people: number;
@@ -384,7 +401,7 @@ export const api = {
     equipment: string[];
     exclusions: string[];
     allowExtraIngredients: boolean;
-    priorityKey?: string | null;
+    priorityKeys?: string[];
   }) => request<SuggestionResponse>('/recipes/suggest', { method: 'POST', body }),
 
   savedRecipes: () => request<{ recipes: SavedRecipe[] }>('/recipes/saved'),

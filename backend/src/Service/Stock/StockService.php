@@ -417,6 +417,32 @@ class StockService
         return $movement;
     }
 
+    /** Combien de temps un report écarte un lot de la sélection « Aujourd'hui ». */
+    private const SNOOZE_DAYS = 2;
+
+    /**
+     * Reporte un lot signalé par « Aujourd'hui » : il ne doit pas réapparaître
+     * avant {@see SNOOZE_DAYS} jours. Contrairement à `confirm()`, le champ
+     * change réellement : `touch()` se déclenche donc tout seul via le cycle
+     * de vie Doctrine, sans appel explicite.
+     */
+    public function snooze(StockItem $item, Member $author, ?StockOperation $operation = null): StockMovement
+    {
+        $item->setRemindAfter(new \DateTimeImmutable(sprintf('+%d days', self::SNOOZE_DAYS)));
+
+        $movement = $this->record(
+            $item,
+            MovementType::Correction,
+            0.0,
+            $author,
+            sprintf('Rappel reporté de %d jours', self::SNOOZE_DAYS),
+            $operation,
+        );
+        $this->flush();
+
+        return $movement;
+    }
+
     /**
      * Confirme qu'un lot proposé par « Vérifier mon stock » est toujours
      * conforme : aucune quantité ne change.

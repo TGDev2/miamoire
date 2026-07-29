@@ -222,6 +222,20 @@ export interface ReviewCandidate {
   reasons: ReviewReasonEntry[];
 }
 
+/** Pourquoi un lot est proposé par « Aujourd'hui ». Distinct de `ReviewReasonCode`. */
+export type UrgencyReasonCode = 'expired' | 'expiring_soon' | 'opened';
+
+export interface UrgencyReasonEntry {
+  code: UrgencyReasonCode;
+  label: string;
+}
+
+/** Un lot à traiter maintenant, et pourquoi il y figure. */
+export interface SaveTodayCandidate {
+  stockItem: StockItem;
+  reasons: UrgencyReasonEntry[];
+}
+
 export interface StockMovement {
   id: string;
   type: 'addition' | 'consumption' | 'correction' | 'deletion';
@@ -385,6 +399,8 @@ export interface SuggestionResponse {
   guaranteedExclusions: string[];
   /** L'aliment que l'utilisateur a imposé, quand il en a choisi un. */
   requiredIngredient: { key: string; label: string } | null;
+  /** Aliments souhaités mais non imposés : une recette qui les ignore n'est pas écartée. */
+  desiredIngredients: Array<{ key: string; label: string }>;
   inventory: Array<{
     key: string;
     ingredient: string;

@@ -59,7 +59,7 @@ class RecipeSuggestionService
                 : 'Aucun aliment de votre inventaire ne respecte les exclusions du foyer.');
         }
 
-        $required = $this->resolveRequired($inventory, $request->priorityKey);
+        ['required' => $required, 'desired' => $desired] = $this->resolvePriorities($inventory, $request->priorityKeys);
         $inventoryPayload = array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory);
 
         $payload = [
@@ -72,11 +72,15 @@ class RecipeSuggestionService
             'mustUseIngredient' => null !== $required
                 ? ['key' => $required->key, 'ingredient' => $required->label]
                 : null,
+            'desiredIngredients' => array_map(
+                static fn (InventoryLine $line): array => ['key' => $line->key, 'ingredient' => $line->label],
+                $desired,
+            ),
             'inventory' => $inventoryPayload,
         ];
 
         $raw = $generator->generate(
-            $this->systemPrompt($guard->exclusions(), $required),
+            $this->systemPrompt($guard->exclusions(), $required, $desired),
             json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
             RecipeSchema::definition(),
         );
@@ -132,38 +136,61 @@ class RecipeSuggestionService
             'requiredIngredient' => null !== $required
                 ? ['key' => $required->key, 'label' => $required->label]
                 : null,
+            'desiredIngredients' => array_map(
+                static fn (InventoryLine $line): array => ['key' => $line->key, 'label' => $line->label],
+                $desired,
+            ),
             'provider' => $generator->label(),
         ];
     }
 
     /**
-     * L'aliment que les recettes devront utiliser, s'il en a été désigné un.
+     * Les aliments à privilégier, résolus depuis les clés reçues, dans l'ordre.
      *
-     * Une clé inconnue est une erreur explicite et non un silence : elle vient
-     * d'un inventaire que l'application affichait encore alors que le lot venait
-     * d'être épuisé ou écarté par une exclusion. Générer trois recettes en
-     * ignorant la contrainte serait la pire des réponses.
+     * La PREMIÈRE clé est une contrainte, exactement comme l'ancien
+     * `priorityKey` : une clé inconnue est une erreur explicite et non un
+     * silence, parce qu'elle vient d'un inventaire que l'application
+     * affichait encore alors que le lot venait d'être épuisé ou écarté par
+     * une exclusion — générer trois recettes en ignorant la contrainte serait
+     * la pire des réponses.
+     *
+     * Les clés suivantes (au plus 2) ne sont que des préférences : une clé
+     * devenue invalide y est silencieusement ignorée plutôt que de faire
+     * échouer toute la génération pour un aliment facultatif par nature.
      *
      * @param list<InventoryLine> $inventory
+     * @param list<string>        $priorityKeys
+     *
+     * @return array{required: ?InventoryLine, desired: list<InventoryLine>}
      */
-    private function resolveRequired(array $inventory, ?string $priorityKey): ?InventoryLine
+    private function resolvePriorities(array $inventory, array $priorityKeys): array
     {
-        $key = null !== $priorityKey ? trim($priorityKey) : '';
+        $keys = array_values(array_unique(array_filter(
+            array_map(static fn (string $key): string => trim($key), $priorityKeys),
+            static fn (string $key): bool => '' !== $key,
+        )));
 
-        if ('' === $key) {
-            return null;
+        if ([] === $keys) {
+            return ['required' => null, 'desired' => []];
         }
 
+        $byKey = [];
         foreach ($inventory as $line) {
-            if ($line->key === $key) {
-                return $line;
-            }
+            $byKey[$line->key] = $line;
         }
 
-        throw new StockException(
+        $requiredKey = array_shift($keys);
+        $required = $byKey[$requiredKey] ?? throw new StockException(
             'L\'aliment à utiliser en priorité n\'est plus disponible dans votre inventaire. '
             .'Rafraîchissez l\'écran et choisissez-en un autre.',
         );
+
+        $desired = array_values(array_filter(array_map(
+            static fn (string $key): ?InventoryLine => $byKey[$key] ?? null,
+            array_slice($keys, 0, 2),
+        )));
+
+        return ['required' => $required, 'desired' => $desired];
     }
 
     /**
@@ -206,8 +233,11 @@ class RecipeSuggestionService
         return trim($trimmed);
     }
 
-    /** @param list<string> $exclusions */
-    private function systemPrompt(array $exclusions, ?InventoryLine $required): string
+    /**
+     * @param list<string>        $exclusions
+     * @param list<InventoryLine> $desired
+     */
+    private function systemPrompt(array $exclusions, ?InventoryLine $required, array $desired = []): string
     {
         $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
         $traits = $this->traitGlossary();
@@ -221,6 +251,20 @@ class RecipeSuggestionService
                 ."            pas : une proposition sans cet aliment est une proposition perdue.\n",
                 $required->label,
                 $required->key,
+            );
+
+        $wished = [] === $desired
+            ? ''
+            : sprintf(
+                "\n            ALIMENTS SOUHAITÉS (non obligatoires) : %s. Utilise-les quand c'est\n"
+                ."            culinairement cohérent, sans jamais forcer un plat qui n'aurait pas de sens.\n"
+                ."            Contrairement à l'aliment imposé, une recette qui les ignore n'est PAS\n"
+                ."            rejetée : indique simplement leur clé dans `stockConsumptionProposal` ou\n"
+                ."            `ingredientsFromInventory` quand tu les utilises réellement.\n",
+                implode(', ', array_map(
+                    static fn (InventoryLine $line): string => sprintf('« %s » (clé `%s`)', $line->label, $line->key),
+                    $desired,
+                )),
             );
 
         $safety = [] === $exclusions
@@ -299,7 +343,7 @@ class RecipeSuggestionService
                 aucun pour un plat déjà complet (une quiche, un curry déjà servi avec son
                 riz, une salade composée). `includesSideDish` doit refléter honnêtement ce
                 choix : true seulement si tu as effectivement ajouté un accompagnement.
-            {$imposed}{$safety}
+            {$imposed}{$wished}{$safety}
             À propos de `stockConsumptionProposal` :
 
             - C'est une PROPOSITION de retrait de stock, soumise ensuite à validation humaine.
