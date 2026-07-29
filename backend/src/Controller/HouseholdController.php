@@ -157,6 +157,10 @@ class HouseholdController extends AbstractApiController
             ));
         }
 
+        if ($payload->has('mutedReviewCategories')) {
+            $household->setMutedReviewCategories($payload->stringList('mutedReviewCategories'));
+        }
+
         $entityManager->flush();
 
         return $this->json($presenter->household($household));

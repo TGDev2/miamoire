@@ -33,6 +33,7 @@ class ApiPresenter
             'id' => (string) $household->getId(),
             'name' => $household->getName(),
             'dietaryExclusions' => $household->getDietaryExclusions(),
+            'mutedReviewCategories' => $household->getMutedReviewCategories(),
             'createdAt' => $household->getCreatedAt()->format(\DATE_ATOM),
             'members' => array_map(
                 fn (Member $member) => $this->member($member),

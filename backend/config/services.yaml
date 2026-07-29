@@ -30,6 +30,7 @@ services:
             - '../src/Service/Ai/RecipeRequest.php'
             - '../src/Service/Freshness/ShelfLifeEstimate.php'
             - '../src/Service/Inventory/InventoryLine.php'
+            - '../src/Service/Inventory/ReviewCandidate.php'
             - '../src/Service/Product/VariantIdentity.php'
             - '../src/Service/Stock/ConsumptionLine.php'
             - '../src/Service/Stock/FefoAllocation.php'

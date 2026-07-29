@@ -600,6 +600,41 @@ class StockItemController extends AbstractApiController
     }
 
     /**
+     * Confirme, depuis « Vérifier mon stock », qu'un lot signalé est toujours
+     * conforme — sans rien changer à sa quantité. Voir {@see StockService::confirm()}.
+     */
+    #[Route('/{id}/confirm', methods: ['POST'])]
+    public function confirm(
+        string $id,
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        StockOperationGuard $guard,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $stockService->confirm($item, $member, $operation);
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
+    }
+
+    /**
      * Corrige une erreur de saisie : annule l'ouverture comme si elle n'avait
      * jamais eu lieu. Distinct de `/open` (« refermer »), qui garde la trace de
      * l'exemplaire entamé — voir {@see StockService::cancelOpening()}.

@@ -48,6 +48,18 @@ class Household
     #[ORM\Column(type: 'json')]
     private array $dietaryExclusions = [];
 
+    /**
+     * Catégories définitivement écartées de « Vérifier mon stock ».
+     *
+     * Le foyer peut juger qu'une catégorie ne mérite jamais cette vérification
+     * rapide (le vrac, les surgelés qu'on ne regarde jamais…) : la file ne doit
+     * plus jamais y piocher, pas seulement pour la session en cours.
+     *
+     * @var list<string>
+     */
+    #[ORM\Column(type: 'json')]
+    private array $mutedReviewCategories = [];
+
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
@@ -152,6 +164,31 @@ class Household
         }
 
         $this->dietaryExclusions = $entries;
+    }
+
+    /** @return list<string> */
+    public function getMutedReviewCategories(): array
+    {
+        return $this->mutedReviewCategories;
+    }
+
+    /** @param list<string> $categories */
+    public function setMutedReviewCategories(array $categories): void
+    {
+        $seen = [];
+        $entries = [];
+
+        foreach ($categories as $category) {
+            $trimmed = trim((string) $category);
+            if ('' === $trimmed || isset($seen[$trimmed])) {
+                continue;
+            }
+
+            $seen[$trimmed] = true;
+            $entries[] = $trimmed;
+        }
+
+        $this->mutedReviewCategories = $entries;
     }
 
     public function getCreatedAt(): \DateTimeImmutable

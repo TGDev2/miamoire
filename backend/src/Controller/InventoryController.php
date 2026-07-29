@@ -5,12 +5,16 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Enum\ProductTrait;
+use App\Http\ApiPresenter;
 use App\Http\RequestContext;
 use App\Repository\StockItemRepository;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Inventory\InventoryDeadlineBucket;
 use App\Service\Inventory\InventoryAggregator;
 use App\Service\Inventory\InventoryLine;
+use App\Service\Inventory\ReviewCandidate;
+use App\Service\Inventory\StockReviewSelector;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Attribute\Route;
 
@@ -75,6 +79,34 @@ class InventoryController extends AbstractApiController
                 'expiringSoon' => count($expiringSoon),
                 'expired' => count($expired),
             ],
+        ]);
+    }
+
+    /**
+     * La file courte de « Vérifier mon stock » : quelques lots dont la
+     * fiabilité est probablement faible, jamais une accusation d'erreur.
+     */
+    #[Route('/review-queue', methods: ['GET'])]
+    public function reviewQueue(
+        Request $request,
+        RequestContext $context,
+        StockReviewSelector $selector,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $limit = $request->query->getInt('limit', 8);
+        $candidates = $selector->selectForReview($context->household(), $limit);
+
+        return $this->json([
+            'items' => array_map(
+                static fn (ReviewCandidate $candidate): array => [
+                    'stockItem' => $presenter->stockItem($candidate->item),
+                    'reasons' => array_map(
+                        static fn ($reason): array => ['code' => $reason->value, 'label' => $reason->label()],
+                        $candidate->reasons,
+                    ),
+                ],
+                $candidates,
+            ),
         ]);
     }
 }

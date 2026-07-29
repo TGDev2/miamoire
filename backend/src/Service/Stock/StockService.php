@@ -417,6 +417,26 @@ class StockService
         return $movement;
     }
 
+    /**
+     * Confirme qu'un lot proposé par « Vérifier mon stock » est toujours
+     * conforme : aucune quantité ne change.
+     *
+     * Seul appel explicite à `touch()` en dehors du cycle de vie Doctrine :
+     * rien d'autre ne varie ici, donc sans cet appel `updatedAt` n'avancerait
+     * jamais et le lot réapparaîtrait aussitôt dans la prochaine sélection
+     * (voir {@see \App\Service\Inventory\StockReviewSelector}, qui écarte tout
+     * lot retouché récemment).
+     */
+    public function confirm(StockItem $item, Member $author, ?StockOperation $operation = null): StockMovement
+    {
+        $item->touch();
+
+        $movement = $this->record($item, MovementType::Correction, 0.0, $author, 'Confirmé lors de la vérification du stock', $operation);
+        $this->flush();
+
+        return $movement;
+    }
+
     /** Produit jeté : le stock tombe à zéro mais la ligne et son historique subsistent. */
     public function discard(StockItem $item, Member $author, ?string $reason = null, ?StockOperation $operation = null): StockMovement
     {

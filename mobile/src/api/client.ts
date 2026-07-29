@@ -12,6 +12,7 @@ import type {
   Recipe,
   RecipePlan,
   Reference,
+  ReviewCandidate,
   SavedRecipe,
   ShelfLifeEstimate,
   StockItem,
@@ -217,8 +218,10 @@ export const api = {
 
   household: (id: string) => request<Household>(`/households/${id}`),
 
-  updateHousehold: (id: string, body: { name?: string; dietaryExclusions?: DietaryExclusion[] }) =>
-    request<Household>(`/households/${id}`, { method: 'PATCH', body }),
+  updateHousehold: (
+    id: string,
+    body: { name?: string; dietaryExclusions?: DietaryExclusion[]; mutedReviewCategories?: string[] },
+  ) => request<Household>(`/households/${id}`, { method: 'PATCH', body }),
 
   deleteHousehold: (id: string, confirmDeleteStock = false) =>
     request<void>(`/households/${id}`, { method: 'DELETE', body: { confirmDeleteStock } }),
@@ -348,6 +351,24 @@ export const api = {
     request<{ movements: StockMovement[] }>(`/stock-items/${id}/movements`),
 
   inventory: () => request<InventorySummary>('/inventory/summary'),
+
+  /**
+   * La file courte de « Vérifier mon stock » — quelques lots dont la
+   * fiabilité est probablement faible, jamais une accusation d'erreur.
+   * Le serveur plafonne de toute façon à 10 quel que soit `limit`.
+   */
+  reviewQueue: (limit?: number) =>
+    request<{ items: ReviewCandidate[] }>(
+      `/inventory/review-queue${limit !== undefined ? `?limit=${limit}` : ''}`,
+    ),
+
+  /**
+   * Confirme, depuis « Vérifier mon stock », qu'un lot signalé est toujours
+   * conforme : aucune quantité ne change, seule la date de dernière
+   * vérification avance.
+   */
+  confirmStockItem: (id: string, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/confirm`, { method: 'POST', body: { operationKey } }),
 
   /**
    * `priorityKey` impose un aliment de l'inventaire aux trois propositions.

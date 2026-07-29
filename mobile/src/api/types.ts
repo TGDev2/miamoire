@@ -203,6 +203,25 @@ export interface StockItem {
   siblings?: SiblingLot[];
 }
 
+/** Pourquoi un lot est proposé à « Vérifier mon stock ». */
+export type ReviewReasonCode =
+  | 'opened'
+  | 'quantity_estimated'
+  | 'expired'
+  | 'expiring_soon'
+  | 'stale';
+
+export interface ReviewReasonEntry {
+  code: ReviewReasonCode;
+  label: string;
+}
+
+/** Un lot de la file de vérification, et pourquoi il y figure. */
+export interface ReviewCandidate {
+  stockItem: StockItem;
+  reasons: ReviewReasonEntry[];
+}
+
 export interface StockMovement {
   id: string;
   type: 'addition' | 'consumption' | 'correction' | 'deletion';
@@ -242,6 +261,8 @@ export interface Household {
   id: string;
   name: string;
   dietaryExclusions: DietaryExclusion[];
+  /** Catégories définitivement écartées de « Vérifier mon stock ». */
+  mutedReviewCategories: string[];
   createdAt: string;
   members: Member[];
 }

@@ -245,6 +245,27 @@ class StockServiceTest extends TestCase
         self::assertCount(0, $item->getMovements());
     }
 
+    /**
+     * « Vérifier mon stock » : confirmer ne change aucune quantité, mais doit
+     * faire avancer `updatedAt` — c'est ce qui retire le lot de la prochaine
+     * file (voir `StockReviewSelector`), alors que rien d'autre sur le lot n'a
+     * changé pour que Doctrine le détecte tout seul.
+     */
+    public function testConfirmLeavesTheQuantityUntouchedButAdvancesUpdatedAt(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $updatedBefore = $item->getUpdatedAt();
+        usleep(1000);
+
+        $movement = $this->service->confirm($item, $this->member);
+
+        self::assertSame(500.0, $item->getRemainingQuantity());
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame(0.0, $movement->getQuantity());
+        self::assertSame('Confirmé lors de la vérification du stock', $movement->getReason());
+        self::assertGreaterThan($updatedBefore, $item->getUpdatedAt());
+    }
+
     /** Un lot est homogène : un réapprovisionnement à une autre date doit créer un nouveau lot. */
     public function testAddQuantityRejectsAMismatchedPurchaseDate(): void
     {
