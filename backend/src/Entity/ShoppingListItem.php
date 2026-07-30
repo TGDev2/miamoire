@@ -112,9 +112,19 @@ class ShoppingListItem
         return $this->quantity;
     }
 
+    public function setQuantity(?float $quantity): void
+    {
+        $this->quantity = $quantity;
+    }
+
     public function getUnit(): Unit
     {
         return $this->unit;
+    }
+
+    public function setUnit(Unit $unit): void
+    {
+        $this->unit = $unit;
     }
 
     public function isChecked(): bool

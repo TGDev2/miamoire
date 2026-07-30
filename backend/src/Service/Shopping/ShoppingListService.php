@@ -22,8 +22,12 @@ use Doctrine\ORM\EntityManagerInterface;
  * et {@see ShoppingListItemRepository::findOneActiveByVariant}).
  *
  * Ajouter deux fois le même ingrédient ne cumule pas les quantités : la ligne
- * déjà active est renvoyée telle quelle. Une liste de courses dit quoi
- * acheter, rarement une quantité au gramme près entre deux recettes.
+ * déjà active et non cochée est renvoyée telle quelle. Une liste de courses
+ * dit quoi acheter, rarement une quantité au gramme près entre deux recettes.
+ *
+ * Une ligne déjà cochée (mais pas encore supprimée après les courses) est en
+ * revanche réactivée : sans ça, un besoin redevenu réel après un achat
+ * disparaîtrait silencieusement de tout futur ajout.
  */
 class ShoppingListService
 {
@@ -53,6 +57,11 @@ class ShoppingListService
 
             $existing = $this->items->findOneActiveByVariant($household, $variant);
             if (null !== $existing) {
+                if ($existing->isChecked()) {
+                    $existing->setChecked(false);
+                    $existing->setQuantity($entry['quantity']);
+                    $existing->setUnit($entry['unit']);
+                }
                 $results[] = $existing;
                 continue;
             }

@@ -134,6 +134,36 @@ class ShoppingListTest extends WebTestCase
     }
 
     /**
+     * Une ligne cochée mais pas encore supprimée (par exemple restée après un
+     * retour de courses partiel) doit être réactivée par un nouvel ajout,
+     * pas silencieusement ignorée.
+     */
+    public function testCheckedItemIsReactivatedWhenRequestedAgain(): void
+    {
+        $this->postItems([['label' => 'Beurre', 'quantity' => 250, 'unit' => 'g']]);
+        $created = json_decode((string) $this->client->getResponse()->getContent(), true);
+        $id = $created['items'][0]['id'];
+
+        $this->client->request(
+            'PATCH',
+            "/api/shopping-list/{$id}",
+            server: $this->authenticated,
+            content: json_encode(['checked' => true]),
+        );
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+
+        $this->postItems([['label' => 'Beurre', 'quantity' => 500, 'unit' => 'g']]);
+        self::assertSame(Response::HTTP_CREATED, $this->client->getResponse()->getStatusCode());
+
+        $this->client->request('GET', '/api/shopping-list', server: $this->authenticated);
+        $payload = json_decode((string) $this->client->getResponse()->getContent(), true);
+
+        self::assertCount(1, $payload['items']);
+        self::assertFalse($payload['items'][0]['checked']);
+        self::assertEqualsWithDelta(500.0, $payload['items'][0]['quantity'], 0.001);
+    }
+
+    /**
      * Le cœur du rapprochement : un ingrédient ajouté à la liste — sans
      * qu'aucun achat n'ait jamais eu lieu — doit être retrouvé quand le
      * produit correspondant est scanné.
