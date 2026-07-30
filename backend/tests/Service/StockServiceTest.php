@@ -401,6 +401,50 @@ class StockServiceTest extends TestCase
         self::assertTrue($item->isQuantityEstimated());
     }
 
+    /**
+     * Le défaut corrigé : un lot déjà bien consommé (1 000 g restant 400 g)
+     * ne doit pas voir « moitié » recalculer 50 % de la quantité initiale.
+     */
+    public function testApproximateFillLevelIsRelativeToWhatRemainsNotInitial(): void
+    {
+        $item = $this->item(1000, Unit::Gram);
+        $this->service->consume($item, 600, Unit::Gram, $this->member);
+
+        $this->service->applyFillLevel($item, FillLevel::Half, $this->member);
+
+        self::assertSame(200.0, $item->getRemainingQuantity());
+    }
+
+    /** Un exemplaire entamé identifié : les scellés ne bougent pas. */
+    public function testApproximateFillLevelOnlyReducesTheOpenedPackage(): void
+    {
+        $item = $this->packagedItem(500, 3, Unit::Gram);
+        $this->service->consume($item, 250, Unit::Gram, $this->member);
+
+        $this->service->applyFillLevel($item, FillLevel::Half, $this->member);
+
+        $packages = $item->getPackages();
+        $opened = array_values(array_filter($packages, static fn (array $package) => $package['opened']));
+        $sealed = array_values(array_filter($packages, static fn (array $package) => !$package['opened']));
+
+        self::assertCount(1, $opened);
+        self::assertEqualsWithDelta(125.0, $opened[0]['remaining'], 0.001);
+        self::assertCount(2, $sealed);
+        self::assertSame(500.0, $sealed[0]['remaining']);
+        self::assertSame(500.0, $sealed[1]['remaining']);
+    }
+
+    /** Plusieurs exemplaires, aucun entamé : ambigu, on ne devine pas lequel. */
+    public function testApproximateFillLevelWithNoPackageOpenedFallsBackToTotal(): void
+    {
+        $item = $this->packagedItem(500, 3, Unit::Gram);
+
+        $this->service->applyFillLevel($item, FillLevel::Half, $this->member);
+
+        self::assertSame(750.0, $item->getRemainingQuantity());
+        self::assertFalse($item->isOpened());
+    }
+
     public function testDiscardEmptiesTheLotAndJournalsIt(): void
     {
         $item = $this->item(800, Unit::Gram);

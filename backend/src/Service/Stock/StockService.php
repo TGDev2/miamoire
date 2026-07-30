@@ -351,7 +351,16 @@ class StockService
         return $movement;
     }
 
-    /** Correction approximative : « plein », « environ la moitié », « presque vide ». */
+    /**
+     * Correction approximative : « plein », « environ la moitié », « presque vide ».
+     *
+     * Le ratio porte sur ce qu'il reste réellement, jamais sur la quantité
+     * initiale du lot — sans quoi « moitié » sur un lot déjà bien consommé
+     * réinventerait du stock. Quand un exemplaire précis est entamé, les
+     * exemplaires scellés restent intouchés et seul l'entamé absorbe le ratio ;
+     * sinon (exemplaire unique, ou plusieurs mais aucun identifié) le ratio
+     * s'applique au total restant.
+     */
     public function applyFillLevel(StockItem $item, FillLevel $level, Member $author, ?StockOperation $operation = null): ?StockMovement
     {
         $ratio = $level->ratio();
@@ -363,16 +372,18 @@ class StockService
             return null;
         }
 
-        $movement = $this->correct(
-            $item,
-            round($item->getInitialQuantity() * $ratio, 3),
-            $item->getUnit(),
-            $author,
-            sprintf('Estimation : %s', $level->label()),
-            $operation,
-        );
+        $before = $item->getRemainingQuantity();
+
+        if ($item->isOpened() && $item->getNumberOfPackages() > 1) {
+            $item->withdraw(round(($item->getOpenPackageQuantity() ?? 0.0) * (1 - $ratio), 3));
+        } else {
+            $item->setRemainingQuantity(round($before * $ratio, 3));
+        }
 
         $item->setQuantityIsEstimated(true);
+
+        $delta = round($item->getRemainingQuantity() - $before, 3);
+        $movement = $this->record($item, MovementType::Correction, $delta, $author, sprintf('Estimation : %s', $level->label()), $operation);
         $this->flush();
 
         return $movement;
