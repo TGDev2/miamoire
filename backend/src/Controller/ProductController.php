@@ -12,6 +12,7 @@ use App\Http\JsonPayload;
 use App\Http\RequestContext;
 use App\Repository\HouseholdProductVariantRepository;
 use App\Repository\ShoppingListItemRepository;
+use App\Repository\StockItemRepository;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\ProductLookupService;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -47,6 +48,7 @@ class ProductController extends AbstractApiController
         ProductLookupService $lookup,
         HouseholdProductVariantRepository $variants,
         ShoppingListItemRepository $shoppingList,
+        StockItemRepository $stockItems,
         ApiPresenter $presenter,
     ): JsonResponse {
         $household = $context->household();
@@ -76,6 +78,11 @@ class ProductController extends AbstractApiController
             'product' => $presenter->product($product),
             'householdVariant' => null !== $variant ? $presenter->variant($variant) : null,
             'shoppingListItem' => null !== $shoppingListItem ? $presenter->shoppingListItem($shoppingListItem) : null,
+            // Le mode « vérifier avant d'acheter » (Évolution 3) : ce qu'il y a
+            // déjà chez soi pour ce produit, sans devoir ouvrir la fiche détaillée.
+            'currentStock' => null !== $variant
+                ? $presenter->currentStockSummary($stockItems->findAvailableByVariant($variant))
+                : null,
         ]);
     }
 

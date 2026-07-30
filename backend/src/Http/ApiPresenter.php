@@ -14,12 +14,14 @@ use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Enum\ProductTrait;
 use App\Service\Ai\RecipePlan;
+use App\Service\Freshness\EffectiveUseBy;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimate;
 use App\Service\MealPlan\MealPlanCrossReference;
 use App\Service\MealPlan\MealPlanEntryView;
 use App\Service\MealPlan\MealPlanLine;
 use App\Service\MealPlan\MealPlanShortfallLine;
+use App\Service\Shopping\ShoppingAdvisorCandidate;
 use App\Service\UnitConverter;
 
 /** Mise en forme des entités pour l'API. Une seule source de vérité pour le contrat JSON. */
@@ -350,6 +352,66 @@ class ApiPresenter
             'variantId' => null !== $item->getVariant() ? (string) $item->getVariant()->getId() : null,
             'addedBy' => $item->getAddedBy()?->getFirstName(),
             'createdAt' => $item->getCreatedAt()->format(\DATE_ATOM),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function shoppingAdvice(ShoppingAdvisorCandidate $candidate, ?ShoppingListItem $existingShoppingListItem): array
+    {
+        return [
+            'variant' => $this->variant($candidate->variant),
+            'kind' => $candidate->kind->value,
+            'kindLabel' => $candidate->kind->label(),
+            'confidence' => $candidate->confidence->value,
+            'confidenceLabel' => $candidate->confidence->label(),
+            'headline' => $candidate->headline,
+            'reasoning' => $candidate->reasoning,
+            // Permet à l'écran de proposer directement « Retirer de ma liste » /
+            // « Ajouter à la liste » sans recalculer ce rapprochement côté mobile.
+            'existingShoppingListItemId' => null !== $existingShoppingListItem
+                ? (string) $existingShoppingListItem->getId()
+                : null,
+        ];
+    }
+
+    /**
+     * Ce qu'il y a déjà chez soi pour une variante — la partie « scan pendant
+     * les courses » de l'Évolution 3 : quantité totale et prochaine échéance,
+     * tous lots confondus.
+     *
+     * @param list<StockItem> $items lots disponibles de cette variante
+     *
+     * @return array<string, mixed>|null `null` : rien en stock actuellement
+     */
+    public function currentStockSummary(array $items): ?array
+    {
+        if ([] === $items) {
+            return null;
+        }
+
+        $baseUnit = $items[0]->getUnit()->baseUnit();
+        $base = 0.0;
+        $nextUseBy = null;
+        $nextUseByIsEstimated = false;
+
+        foreach ($items as $item) {
+            $base += $this->converter->toBase($item->getRemainingQuantity(), $item->getUnit());
+
+            $effective = $this->effectiveUseBy->compute($item);
+            if (null !== $effective->date && (null === $nextUseBy || $effective->date < $nextUseBy)) {
+                $nextUseBy = $effective->date;
+                $nextUseByIsEstimated = EffectiveUseBy::BASIS_PRINTED !== $effective->basis;
+            }
+        }
+
+        $readable = $this->converter->humanize($base, $baseUnit);
+
+        return [
+            'quantity' => $readable['quantity'],
+            'unit' => $readable['unit']->value,
+            'unitLabel' => $readable['unit']->label(),
+            'nextUseBy' => $nextUseBy?->format('Y-m-d'),
+            'nextUseByIsEstimated' => $nextUseByIsEstimated,
         ];
     }
 

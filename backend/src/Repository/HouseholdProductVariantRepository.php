@@ -65,6 +65,23 @@ class HouseholdProductVariantRepository extends ServiceEntityRepository
         return array_column($rows, 'slug');
     }
 
+    /**
+     * Les variantes dont le foyer a désactivé les suggestions du conseiller avant
+     * les courses — pour l'écran qui permet de les réactiver.
+     *
+     * @return list<HouseholdProductVariant>
+     */
+    public function findMuted(Household $household): array
+    {
+        return $this->createQueryBuilder('v')
+            ->andWhere('v.household = :household')
+            ->andWhere('v.shoppingAdvisorMutedAt IS NOT NULL')
+            ->setParameter('household', $household->getId(), 'uuid')
+            ->orderBy('v.shoppingAdvisorMutedAt', 'DESC')
+            ->getQuery()
+            ->getResult();
+    }
+
     /** @return list<HouseholdProductVariant> */
     public function findByIngredientKey(Household $household, string $ingredientKey): array
     {

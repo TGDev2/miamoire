@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Entity\HouseholdProductVariant;
 use App\Entity\StockItem;
 use App\Http\RequestContext;
+use App\Repository\HouseholdProductVariantRepository;
 use App\Repository\StockItemRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -67,5 +69,27 @@ abstract class AbstractApiController extends AbstractController
         }
 
         return $item;
+    }
+
+    /**
+     * Récupère une variante en garantissant qu'elle appartient bien au foyer
+     * courant. Même forme que {@see ownedStockItem()}.
+     */
+    protected function ownedVariant(
+        HouseholdProductVariantRepository $repository,
+        RequestContext $context,
+        string $id,
+    ): HouseholdProductVariant {
+        if (!Uuid::isValid($id)) {
+            throw new NotFoundHttpException('Aliment introuvable.');
+        }
+
+        $variant = $repository->find(Uuid::fromString($id));
+
+        if (null === $variant || !$variant->getHousehold()->getId()->equals($context->household()->getId())) {
+            throw new NotFoundHttpException('Aliment introuvable.');
+        }
+
+        return $variant;
     }
 }

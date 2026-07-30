@@ -534,6 +534,42 @@ export interface ShoppingListItem {
   createdAt: string;
 }
 
+/** Pourquoi le conseiller avant les courses retient une variante — un seul motif à la fois. */
+export type ShoppingAdviceKind =
+  | 'use_soon_dont_add'
+  | 'sufficient_for_planned_meals'
+  | 'dont_rebuy'
+  | 'running_out';
+
+/** `certaine` : constatée, pas prédite. `elevee`/`moyenne` : dérivée d'un rythme de consommation estimé. */
+export type ShoppingAdviceConfidence = 'certaine' | 'elevee' | 'moyenne';
+
+/**
+ * Une suggestion avant les courses, avec son raisonnement et sa confiance déjà
+ * composés côté serveur — l'utilisateur reste seul décisionnaire, jamais une
+ * décision automatique.
+ */
+export interface ShoppingAdvisorCandidate {
+  variant: ProductVariant;
+  kind: ShoppingAdviceKind;
+  kindLabel: string;
+  confidence: ShoppingAdviceConfidence;
+  confidenceLabel: string;
+  headline: string;
+  reasoning: string;
+  /** Non `null` si une ligne de la liste de courses existe déjà pour cette variante. */
+  existingShoppingListItemId: string | null;
+}
+
+/** Ce qu'il y a déjà chez soi pour une variante scannée — le mode « vérifier avant d'acheter ». */
+export interface CurrentStockSummary {
+  quantity: number;
+  unit: Unit;
+  unitLabel: string;
+  nextUseBy: string | null;
+  nextUseByIsEstimated: boolean;
+}
+
 export interface ConfirmationResponse {
   recipeName: string | null;
   /** La clé d'idempotence : rejouée, elle renvoie cette même réponse sans rien déduire. */

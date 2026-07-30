@@ -63,6 +63,14 @@ export const statusPresentation: Record<string, { label: string; color: string; 
   empty: { label: 'Épuisé', color: colors.inkMuted, background: colors.surfaceMuted },
 };
 
+/** Le conseiller avant les courses : une couleur par nature de conseil, jamais par confiance. */
+export const shoppingAdviceKindPresentation: Record<string, { color: string; background: string }> = {
+  use_soon_dont_add: { color: colors.accent, background: colors.accentSoft },
+  running_out: { color: colors.danger, background: colors.dangerSoft },
+  dont_rebuy: { color: colors.primary, background: colors.primarySoft },
+  sufficient_for_planned_meals: { color: colors.primary, background: colors.primarySoft },
+};
+
 export const feasibilityPresentation: Record<string, { label: string; color: string; background: string }> = {
   ready: { label: 'Réalisable immédiatement', color: colors.primary, background: colors.primarySoft },
   adapted: { label: 'Réalisable avec adaptations', color: colors.info, background: colors.infoSoft },

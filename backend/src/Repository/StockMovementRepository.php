@@ -9,6 +9,7 @@ use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Enum\MovementType;
 use App\Enum\StockOperationType;
+use App\Enum\Unit;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -51,6 +52,34 @@ class StockMovementRepository extends ServiceEntityRepository
     public function findVariantIdsRecentlyUsedInRecipe(Household $household, \DateTimeImmutable $since): array
     {
         return $this->recentConsumptionVariantIds($household, $since, viaRecipe: true);
+    }
+
+    /**
+     * Les mouvements de consommation réelle depuis `$since`, par variante — la matière
+     * première de {@see \App\Service\Shopping\ConsumptionRateEstimator}.
+     *
+     * `MovementType::Consumption` uniquement : les jets (`Deletion`) et les
+     * congélations (`Correction`, delta nul) sont déjà exclus par construction,
+     * sans qu'il soit nécessaire de filtrer sur `reason` (voir `StockService`).
+     *
+     * @return list<array{variantId: string, quantity: float, unit: Unit, createdAt: \DateTimeImmutable}>
+     */
+    public function findConsumptionSince(Household $household, \DateTimeImmutable $since): array
+    {
+        /** @var list<array{variantId: string, quantity: float, unit: Unit, createdAt: \DateTimeImmutable}> $rows */
+        $rows = $this->createQueryBuilder('m')
+            ->select('IDENTITY(s.variant) AS variantId', 'm.quantity AS quantity', 'm.unit AS unit', 'm.createdAt AS createdAt')
+            ->join('m.stockItem', 's')
+            ->andWhere('s.household = :household')
+            ->andWhere('m.type = :type')
+            ->andWhere('m.createdAt >= :since')
+            ->setParameter('household', $household->getId(), 'uuid')
+            ->setParameter('type', MovementType::Consumption)
+            ->setParameter('since', $since)
+            ->getQuery()
+            ->getArrayResult();
+
+        return $rows;
     }
 
     /** @return list<string> */

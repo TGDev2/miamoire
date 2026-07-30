@@ -135,8 +135,9 @@ abstract class DatabaseTestCase extends KernelTestCase
         StockItem $item,
         MovementType $type = MovementType::Consumption,
         ?StockOperation $operation = null,
+        float $quantity = -1.0,
     ): StockMovement {
-        $movement = new StockMovement($item, $type, -1.0, $item->getUnit(), $item->getRemainingQuantity(), 'Test', null, $operation);
+        $movement = new StockMovement($item, $type, $quantity, $item->getUnit(), $item->getRemainingQuantity(), 'Test', null, $operation);
         $this->entityManager->persist($movement);
 
         return $movement;

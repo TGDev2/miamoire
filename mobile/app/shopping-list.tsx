@@ -1,4 +1,4 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -13,6 +13,7 @@ import { colors, spacing } from '../src/theme';
  * recette (voir `RecipeDetailView`) ou saisie ici à la main.
  */
 export default function ShoppingListScreen() {
+  const router = useRouter();
   const [reference, setReference] = useState<Reference | null>(null);
   const [items, setItems] = useState<ShoppingListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,6 +106,14 @@ export default function ShoppingListScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
+
+      <Button
+        label="Vérifier avant d'acheter"
+        variant="secondary"
+        onPress={() => router.push('/shopping-advisor')}
+        hint="Ce que le stock actuel, l'historique et les repas prévus suggèrent de ne pas racheter"
+        style={styles.advisorButton}
+      />
 
       <SectionTitle>Ajouter</SectionTitle>
       <Field label="Aliment" value={label} onChangeText={setLabel} placeholder="Pain, œufs, farine…" />
@@ -203,6 +212,7 @@ function Row({
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   flex: { flex: 1 },
+  advisorButton: { marginBottom: spacing.lg },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   addButton: { marginTop: spacing.sm, marginBottom: spacing.lg },
   help: { fontSize: 14, color: colors.inkMuted },

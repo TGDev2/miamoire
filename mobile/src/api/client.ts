@@ -17,10 +17,12 @@ import type {
   Recipe,
   RecipePlan,
   Reference,
+  CurrentStockSummary,
   ReviewCandidate,
   SavedRecipe,
   SaveTodayCandidate,
   ShelfLifeEstimate,
+  ShoppingAdvisorCandidate,
   ShoppingListItem,
   StockItem,
   StockMovement,
@@ -258,6 +260,8 @@ export const api = {
       product: Product;
       householdVariant: ProductVariant | null;
       shoppingListItem: ShoppingListItem | null;
+      /** Ce qu'il y a déjà chez soi pour ce produit — `null` sans stock actuel. */
+      currentStock: CurrentStockSummary | null;
     }>(`/products/barcode/${barcode}`),
 
   stockItems: (filters: StockFilters = {}) => {
@@ -545,4 +549,23 @@ export const api = {
 
   deleteShoppingListItem: (id: string) =>
     request<{ removed: boolean }>(`/shopping-list/${id}`, { method: 'DELETE' }),
+
+  /**
+   * « Qu'est-ce que je ne dois surtout pas racheter ? » — un petit nombre de
+   * suggestions, chacune avec son raisonnement et sa confiance. Jamais plus
+   * de 10 quel que soit `limit`.
+   */
+  shoppingAdvisor: (limit?: number) =>
+    request<{ items: ShoppingAdvisorCandidate[] }>(
+      `/shopping-advisor${limit !== undefined ? `?limit=${limit}` : ''}`,
+    ),
+
+  /** Les variantes que le foyer a choisi de ne plus voir suggérées. */
+  mutedShoppingAdvice: () => request<{ items: ProductVariant[] }>('/shopping-advisor/muted'),
+
+  muteShoppingAdvice: (variantId: string) =>
+    request<ProductVariant>(`/shopping-advisor/${variantId}/mute`, { method: 'POST' }),
+
+  unmuteShoppingAdvice: (variantId: string) =>
+    request<ProductVariant>(`/shopping-advisor/${variantId}/unmute`, { method: 'POST' }),
 };

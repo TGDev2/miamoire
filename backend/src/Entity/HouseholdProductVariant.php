@@ -132,6 +132,14 @@ class HouseholdProductVariant
     #[ORM\Column(type: 'string', length: 32, enumType: StorageLocation::class, nullable: true)]
     private ?StorageLocation $usualStorageLocation = null;
 
+    /**
+     * `null` : le conseiller avant les courses ({@see \App\Service\Shopping\ShoppingAdvisorSelector})
+     * peut proposer cette variante. Non `null` : le foyer a demandé à ne plus la
+     * voir suggérée — ses suggestions ne réapparaissent qu'après `unmuteShoppingAdvice()`.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $shoppingAdvisorMutedAt = null;
+
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
@@ -312,6 +320,26 @@ class HouseholdProductVariant
     {
         $this->usualPackageSize = round($packageSize, 3);
         $this->usualStorageLocation = $location;
+    }
+
+    public function getShoppingAdvisorMutedAt(): ?\DateTimeImmutable
+    {
+        return $this->shoppingAdvisorMutedAt;
+    }
+
+    public function isShoppingAdviceMuted(): bool
+    {
+        return null !== $this->shoppingAdvisorMutedAt;
+    }
+
+    public function muteShoppingAdvice(\DateTimeImmutable $at): void
+    {
+        $this->shoppingAdvisorMutedAt = $at;
+    }
+
+    public function unmuteShoppingAdvice(): void
+    {
+        $this->shoppingAdvisorMutedAt = null;
     }
 
     public function getCreatedAt(): \DateTimeImmutable
