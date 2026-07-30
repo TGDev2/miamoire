@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { generateOperationKey } from '../api/client';
 import type {
@@ -9,6 +10,37 @@ import type {
   StorageLocation,
   Unit,
 } from '../api/types';
+import { useSession } from '../session/SessionContext';
+
+/**
+ * Un rechargement, un plantage ou la fermeture de l'application par Android
+ * pendant les courses ne doit pas effacer ce qui a déjà été scanné : c'est
+ * précisément le geste que ce panier existe pour éviter de ressaisir.
+ */
+const SCHEMA_VERSION = 1;
+
+function storageKey(householdId: string): string {
+  return `food.shoppingSession.v${SCHEMA_VERSION}.${householdId}`;
+}
+
+interface PersistedSession {
+  schemaVersion: number;
+  lines: ShoppingSessionLine[];
+  /** `Map` ne se sérialise pas telle quelle : conservée comme objet simple. */
+  operationKeys: Record<string, string>;
+}
+
+/**
+ * Un exemplaire scanné plusieurs fois n'a pas forcément une seule date : trois
+ * yaourts pour le 27 et deux pour le 3 août restent deux lots. Absent
+ * (`null`), la ligne reste sur son unique `expirationDate` — le cas courant.
+ */
+export interface ShoppingSessionBatch {
+  id: number;
+  numberOfPackages: string;
+  expirationDate: string | null;
+  estimateExpiration: boolean;
+}
 
 /**
  * Une ligne du panier de « Retour de courses » — un produit distinct, pas
@@ -34,8 +66,17 @@ export interface ShoppingSessionLine {
   isUnknown: boolean;
   /** Pour signaler un conditionnement différent de d'habitude — jamais bloquant. */
   usualPackageSize: number | null;
+  /**
+   * Ce que la liste de courses demandait (un besoin, ex. « 500 g de farine »)
+   * — jamais réutilisé comme contenance du produit acheté, qui vient toujours
+   * de l'habitude d'achat ou du catalogue. Purement informatif.
+   */
+  requestedQuantity: number | null;
+  requestedUnit: Unit | null;
   expirationDate: string | null;
   estimateExpiration: boolean;
+  /** Renseigné pour répartir les exemplaires entre plusieurs dates ; sinon la ligne garde une seule date. */
+  batches: ShoppingSessionBatch[] | null;
   /** Ce produit était attendu sur la liste de courses : retiré de la liste à la validation. */
   shoppingListItemId: string | null;
 }
@@ -63,8 +104,68 @@ interface ShoppingSessionState {
 const ShoppingSessionContext = createContext<ShoppingSessionState | null>(null);
 
 export function ShoppingSessionProvider({ children }: { children: React.ReactNode }) {
+  const { household } = useSession();
+  const householdId = household?.id ?? null;
+
   const [lines, setLines] = useState<ShoppingSessionLine[]>([]);
   const operationKeys = useRef(new Map<string, string>());
+  /**
+   * Faux tant que la restauration asynchrone n'a pas résolu : sans ce garde,
+   * l'effet de sauvegarde écrirait un panier vide par-dessus celui déjà
+   * persisté avant même d'avoir eu le temps de le relire.
+   */
+  const hydrated = useRef(false);
+
+  const persist = useCallback(
+    (currentLines: ShoppingSessionLine[]) => {
+      if (!householdId || !hydrated.current) return;
+      const payload: PersistedSession = {
+        schemaVersion: SCHEMA_VERSION,
+        lines: currentLines,
+        operationKeys: Object.fromEntries(operationKeys.current),
+      };
+      AsyncStorage.setItem(storageKey(householdId), JSON.stringify(payload)).catch(() => undefined);
+    },
+    [householdId],
+  );
+
+  // Restaure le panier du foyer courant au montage / changement de foyer.
+  useEffect(() => {
+    hydrated.current = false;
+
+    if (!householdId) {
+      setLines([]);
+      operationKeys.current.clear();
+      return;
+    }
+
+    let cancelled = false;
+
+    AsyncStorage.getItem(storageKey(householdId))
+      .then((raw) => {
+        if (cancelled || !raw) return;
+
+        const parsed = JSON.parse(raw) as PersistedSession;
+        if (parsed.schemaVersion !== SCHEMA_VERSION) return;
+
+        setLines(parsed.lines);
+        operationKeys.current = new Map(Object.entries(parsed.operationKeys ?? {}));
+        nextLineId = Math.max(nextLineId, ...parsed.lines.map((line) => Number(line.id) + 1), 1);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) hydrated.current = true;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [householdId]);
+
+  // Sauvegarde après chaque modification — une fois la restauration terminée.
+  useEffect(() => {
+    persist(lines);
+  }, [lines, persist]);
 
   const addScannedLine = useCallback((barcode: string, lookup: ShoppingLookup) => {
     setLines((current) => {
@@ -86,11 +187,12 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             productId: product?.id ?? null,
             name: householdVariant.name,
             brand: householdVariant.brand,
-            // Une quantité explicitement demandée sur la liste l'emporte sur
-            // une simple habitude d'achat.
-            unit: shoppingListItem?.unit ?? householdVariant.usualPackageUnit ?? product?.packageUnit ?? 'g',
+            // La contenance vient toujours d'une habitude d'achat réelle ou du
+            // catalogue — jamais d'une quantité demandée par la liste, qui est
+            // un besoin (« 500 g de farine »), pas la taille du paquet acheté.
+            unit: householdVariant.usualPackageUnit ?? product?.packageUnit ?? 'g',
             quantityPerPackage: String(
-              shoppingListItem?.quantity ?? householdVariant.usualPackageSize ?? product?.packageQuantity ?? '',
+              householdVariant.usualPackageSize ?? product?.packageQuantity ?? '',
             ),
             numberOfPackages: 1,
             storageLocation: householdVariant.usualStorageLocation ?? 'pantry',
@@ -98,8 +200,11 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             isNew: false,
             isUnknown: false,
             usualPackageSize: householdVariant.usualPackageSize,
+            requestedQuantity: shoppingListItem?.quantity ?? null,
+            requestedUnit: shoppingListItem?.unit ?? null,
             expirationDate: null,
             estimateExpiration: false,
+            batches: null,
             shoppingListItemId: shoppingListItem?.id ?? null,
           },
         ];
@@ -122,9 +227,12 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             isNew: true,
             isUnknown: false,
             usualPackageSize: null,
+            requestedQuantity: shoppingListItem?.quantity ?? null,
+            requestedUnit: shoppingListItem?.unit ?? null,
             expirationDate: null,
             estimateExpiration: false,
-            shoppingListItemId: null,
+            batches: null,
+            shoppingListItemId: shoppingListItem?.id ?? null,
           },
         ];
       }
@@ -146,9 +254,12 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
           isNew: true,
           isUnknown: true,
           usualPackageSize: null,
+          requestedQuantity: shoppingListItem?.quantity ?? null,
+          requestedUnit: shoppingListItem?.unit ?? null,
           expirationDate: null,
           estimateExpiration: false,
-          shoppingListItemId: null,
+          batches: null,
+          shoppingListItemId: shoppingListItem?.id ?? null,
         },
       ];
     });
@@ -171,8 +282,11 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         isNew: true,
         isUnknown: true,
         usualPackageSize: null,
+        requestedQuantity: null,
+        requestedUnit: null,
         expirationDate: null,
         estimateExpiration: false,
+        batches: null,
         shoppingListItemId: null,
       },
     ]);
@@ -190,16 +304,24 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   const clear = useCallback(() => {
     setLines([]);
     operationKeys.current.clear();
-  }, []);
+    // Abandon explicite : rien à restaurer au prochain lancement.
+    if (householdId) AsyncStorage.removeItem(storageKey(householdId)).catch(() => undefined);
+  }, [householdId]);
 
-  const operationKeyFor = useCallback((lineId: string) => {
-    const existing = operationKeys.current.get(lineId);
-    if (existing) return existing;
+  const operationKeyFor = useCallback(
+    (lineId: string) => {
+      const existing = operationKeys.current.get(lineId);
+      if (existing) return existing;
 
-    const key = generateOperationKey();
-    operationKeys.current.set(lineId, key);
-    return key;
-  }, []);
+      const key = generateOperationKey();
+      operationKeys.current.set(lineId, key);
+      // Ne modifie pas `lines` : sans cet appel explicite, la clé fraîchement
+      // créée ne serait jamais persistée avant la prochaine modification du panier.
+      persist(lines);
+      return key;
+    },
+    [lines, persist],
+  );
 
   const value = useMemo(
     () => ({ lines, addScannedLine, addManualLine, updateLine, removeLine, clear, operationKeyFor }),

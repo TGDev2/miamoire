@@ -6,11 +6,19 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ApiError, api } from '../src/api/client';
 import type { Reference } from '../src/api/types';
 import { Badge, Button, Card, Chip, EmptyState, ErrorBanner, Field, Loader } from '../src/components/ui';
-import type { ShoppingSessionLine } from '../src/shopping/ShoppingSessionContext';
+import type { ShoppingSessionBatch, ShoppingSessionLine } from '../src/shopping/ShoppingSessionContext';
 import { useShoppingSession } from '../src/shopping/ShoppingSessionContext';
 import { colors, radius, spacing } from '../src/theme';
 
 type LineStatus = 'idle' | 'busy' | 'error';
+
+/** La date en cours d'édition : celle d'une ligne entière, ou celle d'un lot précis. */
+interface PickerTarget {
+  lineId: string;
+  batchId: number | null;
+}
+
+let nextBatchId = 1;
 
 /**
  * Validation groupée du panier de « Retour de courses ».
@@ -27,7 +35,7 @@ export default function ShoppingReviewScreen() {
   const [statuses, setStatuses] = useState<Record<string, LineStatus>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const [pickerFor, setPickerFor] = useState<string | null>(null);
+  const [picker, setPicker] = useState<PickerTarget | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -85,6 +93,16 @@ export default function ShoppingReviewScreen() {
             traits: line.traits.length > 0 ? line.traits : undefined,
             expirationDate: line.estimateExpiration || !line.expirationDate ? undefined : line.expirationDate,
             estimateExpiration: line.estimateExpiration || undefined,
+            // Une entrée par date : plusieurs exemplaires identiques scannés
+            // pour des dates différentes deviennent bien des lots distincts.
+            batches:
+              line.batches && line.batches.length > 0
+                ? line.batches.map((batch) => ({
+                    numberOfPackages: Math.max(1, Math.round(Number(batch.numberOfPackages.replace(',', '.')) || 1)),
+                    expirationDate: batch.estimateExpiration || !batch.expirationDate ? null : batch.expirationDate,
+                    estimateExpiration: batch.estimateExpiration,
+                  }))
+                : undefined,
           },
           operationKeyFor(line.id),
         );
@@ -115,7 +133,10 @@ export default function ShoppingReviewScreen() {
     }
   }
 
-  const pickerLine = lines.find((line) => line.id === pickerFor);
+  const pickerLine = lines.find((line) => line.id === picker?.lineId);
+  const pickerBatch =
+    null !== picker?.batchId ? pickerLine?.batches?.find((batch) => batch.id === picker?.batchId) : null;
+  const pickerValue = picker?.batchId !== null ? pickerBatch?.expirationDate : pickerLine?.expirationDate;
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
@@ -131,20 +152,31 @@ export default function ShoppingReviewScreen() {
           busy={busy}
           onChange={(patch) => updateLine(line.id, patch)}
           onRemove={() => removeLine(line.id)}
-          onOpenDatePicker={() => setPickerFor(line.id)}
+          onOpenDatePicker={(batchId) => setPicker({ lineId: line.id, batchId })}
         />
       ))}
 
       {pickerLine ? (
         <DateTimePicker
-          value={pickerLine.expirationDate ? fromIsoDate(pickerLine.expirationDate) : addDays(7)}
+          value={pickerValue ? fromIsoDate(pickerValue) : addDays(7)}
           mode="date"
           onChange={(event, selected) => {
-            const targetId = pickerFor;
-            setPickerFor(null);
-            if ('set' === event.type && selected && targetId) {
-              updateLine(targetId, { expirationDate: toIsoDate(selected), estimateExpiration: false });
+            const target = picker;
+            setPicker(null);
+            if ('set' !== event.type || !selected || !target) return;
+
+            if (null === target.batchId) {
+              updateLine(target.lineId, { expirationDate: toIsoDate(selected), estimateExpiration: false });
+              return;
             }
+
+            updateLine(target.lineId, {
+              batches: (pickerLine?.batches ?? []).map((batch) =>
+                batch.id === target.batchId
+                  ? { ...batch, expirationDate: toIsoDate(selected), estimateExpiration: false }
+                  : batch,
+              ),
+            });
           }}
         />
       ) : null}
@@ -176,13 +208,54 @@ function ShoppingLineCard({
   busy: boolean;
   onChange: (patch: Partial<ShoppingSessionLine>) => void;
   onRemove: () => void;
-  onOpenDatePicker: () => void;
+  onOpenDatePicker: (batchId: number | null) => void;
 }) {
   const perPackage = Number(line.quantityPerPackage.replace(',', '.'));
   const differsFromUsual =
     null !== line.usualPackageSize &&
     Number.isFinite(perPackage) &&
     Math.abs(perPackage - line.usualPackageSize) > 0.001;
+
+  const batches = line.batches;
+
+  function startBatches() {
+    onChange({
+      batches: [
+        {
+          id: nextBatchId++,
+          numberOfPackages: String(line.numberOfPackages),
+          expirationDate: line.expirationDate,
+          estimateExpiration: line.estimateExpiration,
+        },
+      ],
+    });
+  }
+
+  function stopBatches() {
+    const first = batches?.[0] ?? null;
+    onChange({
+      batches: null,
+      numberOfPackages: first
+        ? Math.max(1, Math.round(Number(first.numberOfPackages.replace(',', '.')) || 1))
+        : line.numberOfPackages,
+      expirationDate: first?.expirationDate ?? null,
+      estimateExpiration: first?.estimateExpiration ?? false,
+    });
+  }
+
+  function updateBatch(batchId: number, patch: Partial<ShoppingSessionBatch>) {
+    onChange({ batches: (batches ?? []).map((batch) => (batch.id === batchId ? { ...batch, ...patch } : batch)) });
+  }
+
+  function addBatch() {
+    onChange({
+      batches: [...(batches ?? []), { id: nextBatchId++, numberOfPackages: '1', expirationDate: null, estimateExpiration: false }],
+    });
+  }
+
+  function removeBatch(batchId: number) {
+    onChange({ batches: (batches ?? []).filter((batch) => batch.id !== batchId) });
+  }
 
   return (
     <Card style={styles.card}>
@@ -219,33 +292,41 @@ function ShoppingLineCard({
           keyboardType="decimal-pad"
           containerStyle={styles.pairInput}
         />
-        <View style={styles.pairInput}>
-          <Text style={styles.fieldLabel}>Exemplaires</Text>
-          <View style={styles.stepper}>
-            <Pressable
-              style={styles.stepperButton}
-              onPress={() => onChange({ numberOfPackages: Math.max(1, line.numberOfPackages - 1) })}
-              accessibilityRole="button"
-              accessibilityLabel="Un exemplaire de moins"
-            >
-              <Text style={styles.stepperGlyph}>−1</Text>
-            </Pressable>
-            <Text style={styles.stepperValue}>{line.numberOfPackages}</Text>
-            <Pressable
-              style={styles.stepperButton}
-              onPress={() => onChange({ numberOfPackages: line.numberOfPackages + 1 })}
-              accessibilityRole="button"
-              accessibilityLabel="Un exemplaire de plus"
-            >
-              <Text style={styles.stepperGlyph}>+1</Text>
-            </Pressable>
+        {null === batches ? (
+          <View style={styles.pairInput}>
+            <Text style={styles.fieldLabel}>Exemplaires</Text>
+            <View style={styles.stepper}>
+              <Pressable
+                style={styles.stepperButton}
+                onPress={() => onChange({ numberOfPackages: Math.max(1, line.numberOfPackages - 1) })}
+                accessibilityRole="button"
+                accessibilityLabel="Un exemplaire de moins"
+              >
+                <Text style={styles.stepperGlyph}>−1</Text>
+              </Pressable>
+              <Text style={styles.stepperValue}>{line.numberOfPackages}</Text>
+              <Pressable
+                style={styles.stepperButton}
+                onPress={() => onChange({ numberOfPackages: line.numberOfPackages + 1 })}
+                accessibilityRole="button"
+                accessibilityLabel="Un exemplaire de plus"
+              >
+                <Text style={styles.stepperGlyph}>+1</Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
+        ) : null}
       </View>
 
       {differsFromUsual ? (
         <Text style={styles.hint}>
           Différent de d'habitude ({formatNumber(line.usualPackageSize as number)} {line.unit})
+        </Text>
+      ) : null}
+
+      {null !== line.requestedQuantity ? (
+        <Text style={styles.hint}>
+          Demandé : {formatNumber(line.requestedQuantity)} {line.requestedUnit ?? line.unit}
         </Text>
       ) : null}
 
@@ -273,30 +354,100 @@ function ShoppingLineCard({
         ))}
       </View>
 
-      <Text style={styles.fieldLabel}>À consommer avant</Text>
-      <Pressable style={styles.dateButton} onPress={onOpenDatePicker} accessibilityRole="button">
-        <Text style={styles.dateText}>
-          {line.expirationDate
-            ? formatDate(line.expirationDate)
-            : line.estimateExpiration
-              ? 'Estimée automatiquement'
-              : 'Aucune date'}
-        </Text>
-      </Pressable>
-      <View style={styles.chips}>
-        <Chip
-          label="Pas de date : estimer"
-          selected={line.estimateExpiration}
-          onPress={() => onChange({ estimateExpiration: true, expirationDate: null })}
-        />
-        {line.expirationDate || line.estimateExpiration ? (
-          <Chip
-            label="Effacer"
-            selected={false}
-            onPress={() => onChange({ expirationDate: null, estimateExpiration: false })}
-          />
-        ) : null}
-      </View>
+      {null === batches ? (
+        <>
+          <Text style={styles.fieldLabel}>À consommer avant</Text>
+          <Pressable style={styles.dateButton} onPress={() => onOpenDatePicker(null)} accessibilityRole="button">
+            <Text style={styles.dateText}>
+              {line.expirationDate
+                ? formatDate(line.expirationDate)
+                : line.estimateExpiration
+                  ? 'Estimée automatiquement'
+                  : 'Aucune date'}
+            </Text>
+          </Pressable>
+          <View style={styles.chips}>
+            <Chip
+              label="Pas de date : estimer"
+              selected={line.estimateExpiration}
+              onPress={() => onChange({ estimateExpiration: true, expirationDate: null })}
+            />
+            {line.expirationDate || line.estimateExpiration ? (
+              <Chip
+                label="Effacer"
+                selected={false}
+                onPress={() => onChange({ expirationDate: null, estimateExpiration: false })}
+              />
+            ) : null}
+            {/* Deux yaourts pour le 27, trois pour le 3 août : un seul scan
+                répété, mais deux lots — sinon la date la plus proche ment. */}
+            <Chip label="Dates différentes" selected={false} onPress={startBatches} />
+          </View>
+        </>
+      ) : (
+        <>
+          <Text style={styles.fieldLabel}>Dates de péremption</Text>
+          {batches.map((batch, position) => (
+            <View key={batch.id} style={styles.batchRow}>
+              <View style={styles.batchHeader}>
+                <Text style={styles.batchTitle}>Lot {position + 1}</Text>
+                {batches.length > 1 ? (
+                  <Pressable
+                    onPress={() => removeBatch(batch.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Retirer le lot ${position + 1}`}
+                  >
+                    <Text style={styles.removeText}>Retirer</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              <View style={styles.pair}>
+                <Field
+                  label="Exemplaires"
+                  value={batch.numberOfPackages}
+                  onChangeText={(value) => updateBatch(batch.id, { numberOfPackages: value })}
+                  keyboardType="number-pad"
+                  containerStyle={styles.pairInput}
+                />
+                <View style={styles.pairInput}>
+                  <Text style={styles.fieldLabel}>À consommer avant</Text>
+                  <Pressable
+                    style={styles.dateButton}
+                    onPress={() => onOpenDatePicker(batch.id)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.dateText}>
+                      {batch.expirationDate
+                        ? formatDate(batch.expirationDate)
+                        : batch.estimateExpiration
+                          ? 'Estimée automatiquement'
+                          : 'Aucune date'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+              <View style={styles.chips}>
+                <Chip
+                  label="Pas de date : estimer"
+                  selected={batch.estimateExpiration}
+                  onPress={() => updateBatch(batch.id, { estimateExpiration: true, expirationDate: null })}
+                />
+                {batch.expirationDate || batch.estimateExpiration ? (
+                  <Chip
+                    label="Effacer"
+                    selected={false}
+                    onPress={() => updateBatch(batch.id, { expirationDate: null, estimateExpiration: false })}
+                  />
+                ) : null}
+              </View>
+            </View>
+          ))}
+          <View style={styles.chips}>
+            <Chip label="Ajouter une autre date" selected={false} onPress={addBatch} />
+            <Chip label="Revenir à une seule date" selected={false} onPress={stopBatches} />
+          </View>
+        </>
+      )}
 
       {'busy' === status ? <Text style={styles.statusBusy}>Ajout en cours…</Text> : null}
       {'error' === status ? <Text style={styles.statusError}>Échec — corrigez puis validez à nouveau.</Text> : null}
@@ -342,6 +493,19 @@ const styles = StyleSheet.create({
   pairInput: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   hint: { fontSize: 13, color: colors.accent, marginTop: -spacing.sm, marginBottom: spacing.md },
+  batchRow: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.md,
+    marginTop: spacing.md,
+  },
+  batchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  batchTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',
