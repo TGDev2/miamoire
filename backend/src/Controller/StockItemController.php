@@ -826,6 +826,10 @@ class StockItemController extends AbstractApiController
      * Une saisie libre — fruits et légumes, vrac, restes, préparations maison —
      * n'en crée plus : elle crée une variante du foyer et rien d'autre. Le
      * catalogue partagé mondialement ne se remplit que par code-barres.
+     *
+     * Un code-barres scanné mais inconnu d'Open Food Facts, complété par un nom
+     * saisi à la main, contribue tout de même une fiche minimale : sans ça, le
+     * même code-barres redeviendrait « inconnu » à chaque scan suivant.
      */
     private function resolveCatalogProduct(
         JsonPayload $payload,
@@ -841,11 +845,21 @@ class StockItemController extends AbstractApiController
         }
 
         $barcode = $payload->string('barcode');
-        if (null !== $barcode) {
-            return $lookup->findByBarcode($barcode);
+        if (null === $barcode) {
+            return null;
         }
 
-        return null;
+        $product = $lookup->findByBarcode($barcode);
+        if (null !== $product) {
+            return $product;
+        }
+
+        $name = trim((string) $payload->string('name'));
+        if ('' === $name || 1 !== preg_match('/^\d{6,20}$/', $barcode)) {
+            return null;
+        }
+
+        return $lookup->createManual(name: $name, barcode: $barcode);
     }
 
     /**
