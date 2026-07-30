@@ -145,7 +145,7 @@ export default function TodayScreen() {
           }
           onFrozen={() =>
             run(candidate.stockItem.id, 'frozen', (operationKey) =>
-              api.updateStockItem(candidate.stockItem.id, { storageLocation: 'freezer' }, operationKey),
+              api.freezeStockItem(candidate.stockItem.id, operationKey),
             )
           }
           onCheckDetail={() => router.push(`/item/${candidate.stockItem.id}`)}

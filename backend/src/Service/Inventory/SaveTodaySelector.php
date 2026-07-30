@@ -6,6 +6,7 @@ namespace App\Service\Inventory;
 
 use App\Entity\Household;
 use App\Entity\StockItem;
+use App\Enum\StorageLocation;
 use App\Enum\UrgencyReason;
 use App\Repository\StockItemRepository;
 use App\Service\Freshness\EffectiveUseByCalculator;
@@ -84,7 +85,9 @@ class SaveTodaySelector
             $reasons[] = UrgencyReason::ExpiringSoon;
         }
 
-        if ($item->isOpened()) {
+        // Congelé, un exemplaire entamé n'est plus une urgence : la congélation
+        // suspend justement le mûrissement que ce motif signale.
+        if ($item->isOpened() && StorageLocation::Freezer !== $item->getStorageLocation()) {
             $reasons[] = UrgencyReason::Opened;
         }
 

@@ -285,6 +285,23 @@ class StockServiceTest extends TestCase
         self::assertSame(0.0, $movement->getQuantity());
     }
 
+    public function testFreezeRecalculatesExpirationAndJournalsTheGesture(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $item->setExpirationDate(new \DateTimeImmutable('+1 day'));
+        $frozenAt = new \DateTimeImmutable();
+        $newExpiration = new \DateTimeImmutable('+180 days');
+
+        $movement = $this->service->freeze($item, $this->member, $frozenAt, $newExpiration);
+
+        self::assertSame(StorageLocation::Freezer, $item->getStorageLocation());
+        self::assertSame($frozenAt, $item->getFrozenAt());
+        self::assertSame($newExpiration, $item->getExpirationDate());
+        self::assertTrue($item->isExpirationEstimated());
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame(0.0, $movement->getQuantity());
+    }
+
     /** Un lot est homogène : un réapprovisionnement à une autre date doit créer un nouveau lot. */
     public function testAddQuantityRejectsAMismatchedPurchaseDate(): void
     {

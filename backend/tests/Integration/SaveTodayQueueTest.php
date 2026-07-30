@@ -67,6 +67,40 @@ class SaveTodayQueueTest extends DatabaseTestCase
         self::assertContains(UrgencyReason::Opened, $reasons);
     }
 
+    /**
+     * Congelé, un exemplaire entamé n'est plus une urgence : la congélation
+     * suspend justement ça. Sans autre motif, le lot ne doit même plus
+     * apparaître dans la sélection.
+     */
+    public function testOpenedItemInTheFreezerIsNotFlagged(): void
+    {
+        $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram);
+        $item->openNextPackage();
+        $item->setStorageLocation(\App\Enum\StorageLocation::Freezer);
+        $this->entityManager->flush();
+
+        $candidates = $this->selector->selectForToday($this->household);
+
+        self::assertNotContains(
+            (string) $item->getId(),
+            array_map(static fn (SaveTodayCandidate $candidate): string => (string) $candidate->item->getId(), $candidates),
+        );
+    }
+
+    /** Le même geste, mais avec une échéance proche encore active : le lot reste visible, sans le motif « Entamé ». */
+    public function testOpenedItemInTheFreezerKeepsOtherReasons(): void
+    {
+        $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram, '+2 days');
+        $item->openNextPackage();
+        $item->setStorageLocation(\App\Enum\StorageLocation::Freezer);
+        $this->entityManager->flush();
+
+        $reasons = $this->reasonsFor($item->getId());
+
+        self::assertContains(UrgencyReason::ExpiringSoon, $reasons);
+        self::assertNotContains(UrgencyReason::Opened, $reasons);
+    }
+
     public function testItemWithNoUrgencyIsExcluded(): void
     {
         $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram);

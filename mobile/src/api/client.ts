@@ -394,6 +394,13 @@ export const api = {
     request<StockItem>(`/stock-items/${id}/snooze`, { method: 'POST', body: { operationKey } }),
 
   /**
+   * Congèle un lot : ce n'est pas qu'un changement de rangement, le serveur
+   * réestime aussi l'échéance depuis maintenant (voir StockService::freeze()).
+   */
+  freezeStockItem: (id: string, operationKey: string) =>
+    request<StockItem>(`/stock-items/${id}/freeze`, { method: 'POST', body: { operationKey } }),
+
+  /**
    * La sélection courte de « Aujourd'hui » : quelques lots à traiter
    * maintenant, jamais plus de 5 quel que soit `limit`.
    */

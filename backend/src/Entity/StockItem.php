@@ -161,6 +161,13 @@ class StockItem
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $remindAfter = null;
 
+    /**
+     * Date à laquelle le lot est passé au congélateur. `null` tant qu'il n'a
+     * jamais été congelé — voir {@see \App\Service\Stock\StockService::freeze()}.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $frozenAt = null;
+
     /** @var Collection<int, StockMovement> */
     #[ORM\OneToMany(targetEntity: StockMovement::class, mappedBy: 'stockItem', cascade: ['persist', 'remove'])]
     #[ORM\OrderBy(['createdAt' => 'DESC'])]
@@ -644,6 +651,16 @@ class StockItem
     public function setRemindAfter(?\DateTimeImmutable $remindAfter): void
     {
         $this->remindAfter = $remindAfter;
+    }
+
+    public function getFrozenAt(): ?\DateTimeImmutable
+    {
+        return $this->frozenAt;
+    }
+
+    public function setFrozenAt(?\DateTimeImmutable $frozenAt): void
+    {
+        $this->frozenAt = $frozenAt;
     }
 
     /** @return Collection<int, StockMovement> */

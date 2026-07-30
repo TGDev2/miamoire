@@ -460,6 +460,32 @@ class StockService
     }
 
     /**
+     * Passe un lot au congélateur : ce n'est pas qu'un changement de rangement.
+     *
+     * La congélation suspend le mûrissement — la date imprimée sur l'emballage
+     * ne veut plus rien dire une fois le produit gelé, elle est donc toujours
+     * remplacée par une nouvelle estimation (calculée par l'appelant, qui seul
+     * connaît l'estimateur de conservation). L'exemplaire entamé, lui, n'est
+     * pas refermé : congeler ne rescelle pas un paquet ouvert.
+     */
+    public function freeze(
+        StockItem $item,
+        Member $author,
+        \DateTimeImmutable $frozenAt,
+        \DateTimeImmutable $newExpirationDate,
+        ?StockOperation $operation = null,
+    ): StockMovement {
+        $item->setFrozenAt($frozenAt);
+        $item->setStorageLocation(StorageLocation::Freezer);
+        $item->setEstimatedExpirationDate($newExpirationDate);
+
+        $movement = $this->record($item, MovementType::Correction, 0.0, $author, 'Passé au congélateur : péremption réestimée', $operation);
+        $this->flush();
+
+        return $movement;
+    }
+
+    /**
      * Confirme qu'un lot proposé par « Vérifier mon stock » est toujours
      * conforme : aucune quantité ne change.
      *

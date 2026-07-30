@@ -670,6 +670,46 @@ class StockItemController extends AbstractApiController
     }
 
     /**
+     * Congèle un lot : ce n'est pas qu'un changement de rangement, voir
+     * {@see StockService::freeze()}. La nouvelle échéance est calculée ici,
+     * comme `/update` le fait déjà pour `estimateExpiration`.
+     */
+    #[Route('/{id}/freeze', methods: ['POST'])]
+    public function freeze(
+        string $id,
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        StockOperationGuard $guard,
+        ShelfLifeEstimator $shelfLife,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+
+        $response = $guard->run(
+            $context->household(),
+            $payload->requiredString('operationKey'),
+            StockOperationType::StockItemMutation,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $shelfLife, $presenter, $member): array {
+                $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
+                $frozenAt = new \DateTimeImmutable();
+                $newExpiration = $this->estimateFor($shelfLife, $item->getVariant(), StorageLocation::Freezer, $frozenAt);
+
+                $stockService->freeze($item, $member, $frozenAt, $newExpiration, $operation);
+
+                return $presenter->stockItem($item);
+            },
+        );
+
+        return $this->json($response);
+    }
+
+    /**
      * Corrige une erreur de saisie : annule l'ouverture comme si elle n'avait
      * jamais eu lieu. Distinct de `/open` (« refermer »), qui garde la trace de
      * l'exemplaire entamé — voir {@see StockService::cancelOpening()}.
