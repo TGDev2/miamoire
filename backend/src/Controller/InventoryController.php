@@ -12,6 +12,8 @@ use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Inventory\InventoryDeadlineBucket;
 use App\Service\Inventory\InventoryAggregator;
 use App\Service\Inventory\InventoryLine;
+use App\Service\Inventory\QuickConsumeCandidate;
+use App\Service\Inventory\QuickConsumeSelector;
 use App\Service\Inventory\ReviewCandidate;
 use App\Service\Inventory\SaveTodayCandidate;
 use App\Service\Inventory\SaveTodaySelector;
@@ -129,6 +131,35 @@ class InventoryController extends AbstractApiController
         return $this->json([
             'items' => array_map(
                 static fn (SaveTodayCandidate $candidate): array => [
+                    'stockItem' => $presenter->stockItem($candidate->item),
+                    'reasons' => array_map(
+                        static fn ($reason): array => ['code' => $reason->value, 'label' => $reason->label()],
+                        $candidate->reasons,
+                    ),
+                ],
+                $candidates,
+            ),
+        ]);
+    }
+
+    /**
+     * Les quelques produits les plus plausibles pour « J'ai utilisé quelque
+     * chose » : entamés, récemment consommés, utilisés dans une recette ou
+     * simplement consultés récemment.
+     */
+    #[Route('/quick-consume-candidates', methods: ['GET'])]
+    public function quickConsumeCandidates(
+        Request $request,
+        RequestContext $context,
+        QuickConsumeSelector $selector,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $limit = $request->query->getInt('limit', 8);
+        $candidates = $selector->selectForQuickConsume($context->household(), $limit);
+
+        return $this->json([
+            'items' => array_map(
+                static fn (QuickConsumeCandidate $candidate): array => [
                     'stockItem' => $presenter->stockItem($candidate->item),
                     'reasons' => array_map(
                         static fn ($reason): array => ['code' => $reason->value, 'label' => $reason->label()],

@@ -168,6 +168,17 @@ class StockItem
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $frozenAt = null;
 
+    /**
+     * Dernière consultation de la fiche détaillée, pour repérer les produits
+     * plausibles à « J'ai utilisé quelque chose ». Pas de setter public : ce
+     * champ ne doit jamais passer par un `flush()` de l'entité, sous peine de
+     * déclencher {@see touch()} et d'incrémenter `revision` sur une simple
+     * lecture — voir {@see \App\Repository\StockItemRepository::markViewed()},
+     * qui écrit cette colonne par UPDATE DQL en contournant le cycle de vie.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $lastViewedAt = null;
+
     /** @var Collection<int, StockMovement> */
     #[ORM\OneToMany(targetEntity: StockMovement::class, mappedBy: 'stockItem', cascade: ['persist', 'remove'])]
     #[ORM\OrderBy(['createdAt' => 'DESC'])]
@@ -661,6 +672,11 @@ class StockItem
     public function setFrozenAt(?\DateTimeImmutable $frozenAt): void
     {
         $this->frozenAt = $frozenAt;
+    }
+
+    public function getLastViewedAt(): ?\DateTimeImmutable
+    {
+        return $this->lastViewedAt;
     }
 
     /** @return Collection<int, StockMovement> */

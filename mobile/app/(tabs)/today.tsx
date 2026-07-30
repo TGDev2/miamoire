@@ -81,20 +81,18 @@ export default function TodayScreen() {
     router.push({ pathname: '/cook', params: { priorityKeys: priorityKeys.join(',') } });
   }
 
-  if (null === items && !loadError) {
-    return <Loader label="Recherche de ce qui presse…" />;
-  }
+  let body: React.ReactNode;
 
-  if (loadError) {
-    return (
+  if (null === items && !loadError) {
+    body = <Loader label="Recherche de ce qui presse…" />;
+  } else if (loadError) {
+    body = (
       <View style={styles.container}>
         <ErrorBanner message={loadError} />
       </View>
     );
-  }
-
-  if (0 === items?.length) {
-    return (
+  } else if (0 === items?.length) {
+    body = (
       <View style={styles.container}>
         <EmptyState
           title="Rien à sauver aujourd'hui"
@@ -102,48 +100,63 @@ export default function TodayScreen() {
         />
       </View>
     );
+  } else {
+    body = (
+      <ScrollView contentContainerStyle={styles.container}>
+        <ErrorBanner message={actionError} />
+
+        {(items ?? []).map((candidate) => (
+          <TodayCard
+            key={candidate.stockItem.id}
+            candidate={candidate}
+            busy={busy}
+            onConsumed={() =>
+              run(candidate.stockItem.id, 'consumed', (operationKey) =>
+                api.consume(candidate.stockItem.id, { mode: 'all' }, operationKey),
+              )
+            }
+            onSnoozed={() =>
+              run(candidate.stockItem.id, 'snoozed', (operationKey) =>
+                api.snoozeStockItem(candidate.stockItem.id, operationKey),
+              )
+            }
+            onDiscarded={() =>
+              run(candidate.stockItem.id, 'discarded', (operationKey) =>
+                api.discard(candidate.stockItem.id, operationKey, 'Jeté depuis Aujourd\'hui'),
+              )
+            }
+            onFrozen={() =>
+              run(candidate.stockItem.id, 'frozen', (operationKey) =>
+                api.freezeStockItem(candidate.stockItem.id, operationKey),
+              )
+            }
+            onCheckDetail={() => router.push(`/item/${candidate.stockItem.id}`)}
+          />
+        ))}
+
+        <Button
+          label="Trouver un repas avec ces aliments"
+          onPress={findAMeal}
+          disabled={busy || !items || items.length === 0}
+          style={styles.spaced}
+        />
+      </ScrollView>
+    );
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <ErrorBanner message={actionError} />
-
-      {(items ?? []).map((candidate) => (
-        <TodayCard
-          key={candidate.stockItem.id}
-          candidate={candidate}
-          busy={busy}
-          onConsumed={() =>
-            run(candidate.stockItem.id, 'consumed', (operationKey) =>
-              api.consume(candidate.stockItem.id, { mode: 'all' }, operationKey),
-            )
-          }
-          onSnoozed={() =>
-            run(candidate.stockItem.id, 'snoozed', (operationKey) =>
-              api.snoozeStockItem(candidate.stockItem.id, operationKey),
-            )
-          }
-          onDiscarded={() =>
-            run(candidate.stockItem.id, 'discarded', (operationKey) =>
-              api.discard(candidate.stockItem.id, operationKey, 'Jeté depuis Aujourd\'hui'),
-            )
-          }
-          onFrozen={() =>
-            run(candidate.stockItem.id, 'frozen', (operationKey) =>
-              api.freezeStockItem(candidate.stockItem.id, operationKey),
-            )
-          }
-          onCheckDetail={() => router.push(`/item/${candidate.stockItem.id}`)}
+    <View style={styles.screen}>
+      {/* Toujours visible, même sans urgence : la consommation ordinaire n'a
+          rien à voir avec ce que cet écran signale par ailleurs. */}
+      <View style={styles.entryPoint}>
+        <Button
+          label="J'ai utilisé quelque chose"
+          variant="secondary"
+          onPress={() => router.push('/quick-consume')}
         />
-      ))}
-
-      <Button
-        label="Trouver un repas avec ces aliments"
-        onPress={findAMeal}
-        disabled={busy || !items || items.length === 0}
-        style={styles.spaced}
-      />
-    </ScrollView>
+      </View>
+      {body}
+    </View>
   );
 }
 
@@ -205,6 +218,8 @@ function TodayCard({
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  entryPoint: { paddingHorizontal: spacing.xl, paddingTop: spacing.xl },
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
   card: { marginBottom: spacing.lg },
   name: { fontSize: 19, fontWeight: '800', color: colors.ink },

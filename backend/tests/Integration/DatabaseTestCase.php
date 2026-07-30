@@ -8,6 +8,9 @@ use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Member;
 use App\Entity\StockItem;
+use App\Entity\StockMovement;
+use App\Entity\StockOperation;
+use App\Enum\MovementType;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Service\Product\VariantIdentity;
@@ -124,6 +127,17 @@ abstract class DatabaseTestCase extends KernelTestCase
         $this->entityManager->persist($item);
 
         return $item;
+    }
+
+    protected function makeMovement(
+        StockItem $item,
+        MovementType $type = MovementType::Consumption,
+        ?StockOperation $operation = null,
+    ): StockMovement {
+        $movement = new StockMovement($item, $type, -1.0, $item->getUnit(), $item->getRemainingQuantity(), 'Test', null, $operation);
+        $this->entityManager->persist($movement);
+
+        return $movement;
     }
 
     /** La quantité telle que la base la voit, hors de tout cache d'entités. */

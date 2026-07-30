@@ -241,6 +241,24 @@ export interface SaveTodayCandidate {
   reasons: UrgencyReasonEntry[];
 }
 
+/** Pourquoi un produit est proposé par « J'ai utilisé quelque chose ». Distinct de `ReviewReasonCode`. */
+export type QuickConsumeReasonCode =
+  | 'opened'
+  | 'recently_consumed'
+  | 'recently_used_in_recipe'
+  | 'recently_viewed';
+
+export interface QuickConsumeReasonEntry {
+  code: QuickConsumeReasonCode;
+  label: string;
+}
+
+/** Un produit plausible à consommer là maintenant, et pourquoi il y figure. */
+export interface QuickConsumeCandidate {
+  stockItem: StockItem;
+  reasons: QuickConsumeReasonEntry[];
+}
+
 export interface StockMovement {
   id: string;
   type: 'addition' | 'consumption' | 'correction' | 'deletion';

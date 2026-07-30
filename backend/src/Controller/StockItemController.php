@@ -173,6 +173,7 @@ class StockItemController extends AbstractApiController
         ApiPresenter $presenter,
     ): JsonResponse {
         $item = $this->ownedStockItem($stockItems, $context, $id);
+        $stockItems->markViewed($item->getId(), $context->household(), new \DateTimeImmutable());
 
         return $this->json($presenter->stockItem($item, $stockItems->findSiblings($item)));
     }

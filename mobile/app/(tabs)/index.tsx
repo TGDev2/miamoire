@@ -162,12 +162,19 @@ export default function StockScreen() {
           ))}
         </ScrollView>
 
-        <Button
-          label="Vérifier mon stock"
-          variant="secondary"
-          onPress={() => router.push('/review')}
-          style={styles.reviewButton}
-        />
+        <View style={styles.toolbarButtons}>
+          <Button
+            label="J'ai utilisé quelque chose"
+            onPress={() => router.push('/quick-consume')}
+            style={styles.toolbarButton}
+          />
+          <Button
+            label="Vérifier mon stock"
+            variant="secondary"
+            onPress={() => router.push('/review')}
+            style={styles.toolbarButton}
+          />
+        </View>
       </View>
 
       {showReviewNudge ? (
@@ -336,7 +343,8 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   filters: { marginTop: spacing.md },
-  reviewButton: { marginTop: spacing.md },
+  toolbarButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+  toolbarButton: { flex: 1 },
   nudge: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,

@@ -150,6 +150,30 @@ class StockItemRepository extends ServiceEntityRepository
         return array_values(array_filter(array_column($rows, 'category')));
     }
 
+    /**
+     * Enregistre une consultation de la fiche détaillée.
+     *
+     * Volontairement un `UPDATE` DQL en masse plutôt que `$item->setX()` + `flush()` :
+     * `StockItem::touch()` (`#[ORM\PreUpdate]`) rafraîchirait `updatedAt` sur une
+     * simple lecture, effaçant la fenêtre de grâce de `StockReviewSelector`, et la
+     * colonne `#[ORM\Version]` incrémenterait `revision`, invalidant un
+     * `expectedRevision` envoyé par le mobile juste après avoir consulté l'écran.
+     * Ce chemin contourne le cycle de vie Doctrine pour éviter les deux.
+     */
+    public function markViewed(Uuid $id, Household $household, \DateTimeImmutable $viewedAt): void
+    {
+        $this->getEntityManager()->createQueryBuilder()
+            ->update(StockItem::class, 's')
+            ->set('s.lastViewedAt', ':viewedAt')
+            ->where('s.id = :id')
+            ->andWhere('s.household = :household')
+            ->setParameter('viewedAt', $viewedAt)
+            ->setParameter('id', $id, 'uuid')
+            ->setParameter('household', $household->getId(), 'uuid')
+            ->getQuery()
+            ->execute();
+    }
+
     private function baseQuery(Household $household, bool $includeEmpty, ?bool $archived): QueryBuilder
     {
         $qb = $this->createQueryBuilder('s')

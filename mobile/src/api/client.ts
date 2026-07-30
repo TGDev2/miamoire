@@ -10,6 +10,7 @@ import type {
   Product,
   ProductTraitValue,
   ProductVariant,
+  QuickConsumeCandidate,
   Recipe,
   RecipePlan,
   Reference,
@@ -407,6 +408,17 @@ export const api = {
   saveToday: (limit?: number) =>
     request<{ items: SaveTodayCandidate[] }>(
       `/inventory/save-today${limit !== undefined ? `?limit=${limit}` : ''}`,
+    ),
+
+  /**
+   * Les quelques produits les plus plausibles pour « J'ai utilisé quelque
+   * chose » : entamés, récemment consommés, utilisés dans une recette ou
+   * simplement consultés récemment. Le serveur plafonne de toute façon à 10
+   * quel que soit `limit`.
+   */
+  quickConsumeCandidates: (limit?: number) =>
+    request<{ items: QuickConsumeCandidate[] }>(
+      `/inventory/quick-consume-candidates${limit !== undefined ? `?limit=${limit}` : ''}`,
     ),
 
   /**
