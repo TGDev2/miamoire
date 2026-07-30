@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Service\Ai;
 
+use App\Enum\MealTemperature;
+
 /** Les contraintes saisies dans l'écran « Que cuisiner ? ». */
 final readonly class RecipeRequest
 {
@@ -14,6 +16,7 @@ final readonly class RecipeRequest
     public function __construct(
         public int $people = 2,
         public ?string $mealType = null,
+        public ?MealTemperature $mealTemperature = null,
         public ?int $maxMinutes = null,
         public array $equipment = [],
         public array $exclusions = [],

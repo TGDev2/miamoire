@@ -5,7 +5,6 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ApiError, api, generateOperationKey } from '../../src/api/client';
 import type { SaveTodayCandidate, StockItem } from '../../src/api/types';
 import { Badge, Button, Card, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
-import { useRecipes } from '../../src/recipes/RecipeContext';
 import { colors, radius, spacing } from '../../src/theme';
 
 /**
@@ -15,7 +14,6 @@ import { colors, radius, spacing } from '../../src/theme';
  */
 export default function TodayScreen() {
   const router = useRouter();
-  const { setSuggestion } = useRecipes();
 
   const [items, setItems] = useState<SaveTodayCandidate[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -70,30 +68,17 @@ export default function TodayScreen() {
     }
   }
 
-  async function findAMeal() {
+  /**
+   * Ouvre Cuisiner avec les aliments à sauver déjà imposés, plutôt que de
+   * générer directement avec un nombre de convives et des réglages devinés :
+   * l'utilisateur y retrouve ses réglages habituels (convives, durée, type de
+   * repas, équipement, achats autorisés) et peut ajuster la sélection.
+   */
+  function findAMeal() {
     if (!items || items.length === 0) return;
 
-    setActionError(null);
-    setBusy(true);
-
-    try {
-      const priorityKeys = Array.from(new Set(items.map((candidate) => candidate.stockItem.variant.key)));
-      const result = await api.suggestRecipes({
-        people: 2,
-        mealType: null,
-        maxMinutes: null,
-        equipment: [],
-        exclusions: [],
-        allowExtraIngredients: true,
-        priorityKeys,
-      });
-      setSuggestion(result);
-      router.push('/recipes');
-    } catch (exception) {
-      setActionError(exception instanceof Error ? exception.message : 'Génération impossible.');
-    } finally {
-      setBusy(false);
-    }
+    const priorityKeys = Array.from(new Set(items.map((candidate) => candidate.stockItem.variant.key))).slice(0, 3);
+    router.push({ pathname: '/cook', params: { priorityKeys: priorityKeys.join(',') } });
   }
 
   if (null === items && !loadError) {

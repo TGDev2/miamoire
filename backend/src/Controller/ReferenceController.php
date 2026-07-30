@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Enum\Allergen;
 use App\Enum\FillLevel;
+use App\Enum\MealTemperature;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
@@ -71,6 +72,13 @@ class ReferenceController extends AbstractApiController
                 ['value' => 'dinner', 'label' => 'Dîner'],
                 ['value' => 'snack', 'label' => 'Goûter'],
             ],
+            'mealTemperatures' => array_map(
+                static fn (MealTemperature $temperature): array => [
+                    'value' => $temperature->value,
+                    'label' => $temperature->label(),
+                ],
+                MealTemperature::cases(),
+            ),
             'equipment' => [
                 ['value' => 'stovetop', 'label' => 'Plaque / poêle'],
                 ['value' => 'oven', 'label' => 'Four'],

@@ -1,5 +1,5 @@
-import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
@@ -11,41 +11,58 @@ import { useRecipes } from '../../src/recipes/RecipeContext';
 import { colors, radius, spacing } from '../../src/theme';
 
 const TIME_OPTIONS = [15, 30, 45, 60];
+const MAX_PRIORITY_KEYS = 3;
 
 export default function CookScreen() {
   const router = useRouter();
   const { household } = useSession();
   const { setSuggestion } = useRecipes();
+  const params = useLocalSearchParams<{ priorityKeys?: string }>();
 
   const [reference, setReference] = useState<Reference | null>(null);
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
-  const [people, setPeople] = useState(2);
+  // Un foyer sans membre déclaré retombe sur 2 convives, une supposition
+  // raisonnable plutôt qu'une vraie donnée manquante.
+  const [people, setPeople] = useState(() => Math.max(1, household?.members.length ?? 2));
   const [mealType, setMealType] = useState<string | null>(null);
+  const [mealTemperature, setMealTemperature] = useState<string | null>(null);
   const [maxMinutes, setMaxMinutes] = useState<number | null>(null);
   const [equipment, setEquipment] = useState<string[]>([]);
   const [allowExtra, setAllowExtra] = useState(false);
-  /** Aliment imposé aux trois recettes. `null` = aucune contrainte, et c'est le défaut. */
-  const [priorityKey, setPriorityKey] = useState<string | null>(null);
+  /** Aliments imposés aux trois recettes, jusqu'à 3. Vide = aucune contrainte, le défaut. */
+  const [priorityKeys, setPriorityKeys] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  // Mémorise la dernière valeur de `priorityKeys` appliquée depuis les params,
+  // pour ne semer qu'une fois par navigation — pas à chaque refocus de l'onglet,
+  // ce qui écraserait silencieusement une édition faite entre-temps par l'utilisateur.
+  const appliedParams = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const [ref, inv] = await Promise.all([api.reference(), api.inventory()]);
       setReference(ref);
       setInventory(inv);
-      // Un aliment épuisé entre deux visites ne doit pas rester sélectionné :
-      // le serveur refuserait la génération avec une clé qu'il ne connaît plus.
-      setPriorityKey((current) =>
-        current !== null && inv.ingredients.some((entry) => entry.key === current) ? current : null,
-      );
+
+      const incoming = params.priorityKeys ?? null;
+      const seeding = incoming !== null && incoming !== appliedParams.current;
+      appliedParams.current = incoming;
+
+      const known = new Set(inv.ingredients.map((entry) => entry.key));
+      setPriorityKeys((current) => {
+        const base = seeding ? (incoming ?? '').split(',').filter(Boolean) : current;
+        // Un aliment épuisé entre deux visites ne doit pas rester sélectionné :
+        // le serveur refuserait la génération avec une clé qu'il ne connaît plus.
+        return base.filter((key) => known.has(key)).slice(0, MAX_PRIORITY_KEYS);
+      });
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Chargement impossible.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [params.priorityKeys]);
 
   useFocusEffect(
     useCallback(() => {
@@ -66,11 +83,12 @@ export default function CookScreen() {
       const result = await api.suggestRecipes({
         people,
         mealType,
+        mealTemperature,
         maxMinutes,
         equipment,
         exclusions: [],
         allowExtraIngredients: allowExtra,
-        priorityKeys: priorityKey ? [priorityKey] : [],
+        priorityKeys,
       });
       setSuggestion(result);
       router.push('/recipes');
@@ -81,8 +99,9 @@ export default function CookScreen() {
     }
   }
 
-  const priorityLabel =
-    inventory?.ingredients.find((entry) => entry.key === priorityKey)?.label ?? null;
+  const priorityLabels = priorityKeys
+    .map((key) => inventory?.ingredients.find((entry) => entry.key === key)?.label)
+    .filter((label): label is string => Boolean(label));
 
   if (loading) return <Loader />;
 
@@ -157,6 +176,18 @@ export default function CookScreen() {
         ))}
       </View>
 
+      <SectionTitle>Chaud ou froid ?</SectionTitle>
+      <View style={styles.chips}>
+        {reference?.mealTemperatures.map((option) => (
+          <Chip
+            key={option.value}
+            label={option.label}
+            selected={mealTemperature === option.value}
+            onPress={() => setMealTemperature(mealTemperature === option.value ? null : option.value)}
+          />
+        ))}
+      </View>
+
       <SectionTitle>Temps disponible</SectionTitle>
       <View style={styles.chips}>
         {TIME_OPTIONS.map((minutes) => (
@@ -185,11 +216,12 @@ export default function CookScreen() {
           ici, il faisait 115 puces pleine largeur et repoussait « Proposer 3
           recettes » huit balayages plus bas — un réglage facultatif qui
           enterrait l'action principale de l'écran. */}
-      <SectionTitle>Aliment à utiliser en priorité</SectionTitle>
+      <SectionTitle>Aliments à utiliser en priorité</SectionTitle>
       <IngredientPicker
         ingredients={inventory?.ingredients ?? []}
-        selectedKey={priorityKey}
-        onSelect={setPriorityKey}
+        selectedKeys={priorityKeys}
+        onChange={setPriorityKeys}
+        max={MAX_PRIORITY_KEYS}
       />
 
       <SectionTitle>Courses</SectionTitle>
@@ -241,8 +273,8 @@ export default function CookScreen() {
       />
       {/* Rappelé juste au-dessus du geste : la contrainte se pose en haut de
           l'écran et s'applique en bas, et rien ne la rappelait entre les deux. */}
-      {priorityLabel !== null ? (
-        <Text style={styles.submitNote}>Autour de : {priorityLabel}</Text>
+      {priorityLabels.length > 0 ? (
+        <Text style={styles.submitNote}>Autour de : {priorityLabels.join(', ')}</Text>
       ) : null}
       <Text style={styles.disclaimer}>
         Les recettes sont des propositions : rien n'est retiré de votre stock sans votre

@@ -419,6 +419,7 @@ export const api = {
   suggestRecipes: (body: {
     people: number;
     mealType?: string | null;
+    mealTemperature?: string | null;
     maxMinutes?: number | null;
     equipment: string[];
     exclusions: string[];

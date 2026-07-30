@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Entity\Household;
 use App\Entity\SavedRecipe;
+use App\Enum\MealTemperature;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
@@ -48,6 +49,7 @@ class RecipeController extends AbstractApiController
         $result = $service->suggest($household, new RecipeRequest(
             people: max(1, min(20, $payload->int('people', 2) ?? 2)),
             mealType: $payload->string('mealType'),
+            mealTemperature: $payload->enum('mealTemperature', MealTemperature::class),
             maxMinutes: $payload->int('maxMinutes'),
             equipment: $payload->stringList('equipment'),
             exclusions: $exclusions,

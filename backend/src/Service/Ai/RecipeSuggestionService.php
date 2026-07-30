@@ -65,6 +65,7 @@ class RecipeSuggestionService
         $payload = [
             'people' => $request->people,
             'mealType' => $request->mealType,
+            'mealTemperature' => $request->mealTemperature?->value,
             'maxPreparationMinutes' => $request->maxMinutes,
             'availableEquipment' => $request->equipment,
             'dietaryExclusions' => $guard->exclusions(),
@@ -283,9 +284,10 @@ class RecipeSuggestionService
             Tu es un assistant culinaire intégré à une application de gestion de stock alimentaire.
             Tu proposes exactement 3 recettes réalisables à partir d'un inventaire réel, en français.
 
-            Données reçues : le nombre de personnes, le type de repas, le temps disponible,
-            les équipements utilisables, les exclusions alimentaires, l'autorisation ou non
-            d'ajouter des ingrédients manquants, et l'inventaire du foyer.
+            Données reçues : le nombre de personnes, le type de repas, une préférence chaude
+            ou froide, le temps disponible, les équipements utilisables, les exclusions
+            alimentaires, l'autorisation ou non d'ajouter des ingrédients manquants, et
+            l'inventaire du foyer.
 
             Chaque ligne d'inventaire porte une clé stable `key`, un libellé, une quantité,
             une unité et `deadlines` : la même quantité ventilée par échéance effective,
@@ -343,6 +345,10 @@ class RecipeSuggestionService
                 aucun pour un plat déjà complet (une quiche, un curry déjà servi avec son
                 riz, une salade composée). `includesSideDish` doit refléter honnêtement ce
                 choix : true seulement si tu as effectivement ajouté un accompagnement.
+            11. `mealTemperature` vaut "hot", "cold", ou est absente. À "hot", ne propose que
+                des plats servis chauds. À "cold", ne propose que des plats froids ou à
+                température ambiante — rien qui exige une cuisson juste avant de servir.
+                Absente : aucune contrainte de température.
             {$imposed}{$wished}{$safety}
             À propos de `stockConsumptionProposal` :
 

@@ -314,6 +314,7 @@ export interface Reference {
   allergens: Array<ReferenceOption & { defaultSeverity: ExclusionSeverity }>;
   categories: string[];
   mealTypes: ReferenceOption[];
+  mealTemperatures: ReferenceOption[];
   equipment: ReferenceOption[];
 }
 

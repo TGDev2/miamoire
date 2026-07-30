@@ -14,7 +14,8 @@ import type { InventoryIngredient } from '../api/types';
 import { colors, radius, spacing } from '../theme';
 
 /**
- * Choisir un aliment parmi tout l'inventaire, sans dérouler tout l'inventaire.
+ * Choisir jusqu'à `max` aliments parmi tout l'inventaire, sans dérouler tout
+ * l'inventaire.
  *
  * La première version affichait une puce par ingrédient dans l'écran « Cuisiner ».
  * Sur un vrai foyer — 115 ingrédients, aux noms de fiches Open Food Facts longs
@@ -33,17 +34,20 @@ import { colors, radius, spacing } from '../theme';
  */
 export function IngredientPicker({
   ingredients,
-  selectedKey,
-  onSelect,
+  selectedKeys,
+  onChange,
+  max = 3,
 }: {
   ingredients: InventoryIngredient[];
-  selectedKey: string | null;
-  onSelect: (key: string | null) => void;
+  selectedKeys: string[];
+  onChange: (keys: string[]) => void;
+  max?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
 
-  const selected = ingredients.find((entry) => entry.key === selectedKey) ?? null;
+  const selected = ingredients.filter((entry) => selectedKeys.includes(entry.key));
+  const atLimit = selectedKeys.length >= max;
 
   /**
    * Deux groupes, et le premier est la raison d'être de l'écran : on impose
@@ -65,10 +69,17 @@ export function IngredientPicker({
     ].filter((section) => section.data.length > 0);
   }, [ingredients, search]);
 
-  function choose(key: string | null) {
-    onSelect(key);
-    setSearch('');
-    setOpen(false);
+  function toggle(key: string) {
+    if (selectedKeys.includes(key)) {
+      onChange(selectedKeys.filter((entry) => entry !== key));
+      return;
+    }
+    if (selectedKeys.length >= max) return;
+    onChange([...selectedKeys, key]);
+  }
+
+  function clear() {
+    onChange([]);
   }
 
   return (
@@ -77,26 +88,30 @@ export function IngredientPicker({
         onPress={() => setOpen(true)}
         accessibilityRole="button"
         accessibilityLabel={
-          selected ? `Aliment imposé : ${selected.label}` : 'Aucun aliment imposé'
+          selected.length > 0
+            ? `Aliments imposés : ${selected.map((entry) => entry.label).join(', ')}`
+            : 'Aucun aliment imposé'
         }
         accessibilityHint="Ouvre la liste des aliments de votre stock"
         style={({ pressed }) => [styles.trigger, pressed && styles.pressed]}
       >
         <View style={styles.flex}>
-          {selected ? (
+          {selected.length > 0 ? (
             <>
               <Text style={styles.triggerValue} numberOfLines={2}>
-                {selected.label}
+                {selected.map((entry) => entry.label).join(' · ')}
               </Text>
               <Text style={styles.triggerHint}>
-                Les trois recettes l'utiliseront. Touchez pour changer.
+                {selected.length > 1
+                  ? 'Les trois recettes les utiliseront. Touchez pour changer.'
+                  : "Les trois recettes l'utiliseront. Touchez pour changer."}
               </Text>
             </>
           ) : (
             <>
               <Text style={styles.triggerEmpty}>Aucun aliment imposé</Text>
               <Text style={styles.triggerHint}>
-                Facultatif. Touchez pour en choisir un à écouler.
+                Facultatif. Touchez pour en choisir jusqu'à {max} à écouler.
               </Text>
             </>
           )}
@@ -104,12 +119,12 @@ export function IngredientPicker({
 
         {/* Retirer sa sélection sans rouvrir la liste : c'est le geste le plus
             fréquent après l'avoir posée. */}
-        {selected ? (
+        {selected.length > 0 ? (
           <Pressable
-            onPress={() => choose(null)}
+            onPress={clear}
             hitSlop={12}
             accessibilityRole="button"
-            accessibilityLabel={`Retirer l'aliment imposé ${selected.label}`}
+            accessibilityLabel="Retirer les aliments imposés"
             style={styles.clear}
           >
             <Text style={styles.clearLabel}>Retirer</Text>
@@ -134,7 +149,7 @@ export function IngredientPicker({
         <SafeAreaView style={styles.sheet} accessibilityViewIsModal>
           <View style={styles.sheetHeader}>
             <Text style={styles.sheetTitle} accessibilityRole="header">
-              Aliment à utiliser
+              Aliments à utiliser
             </Text>
             <Pressable
               onPress={() => setOpen(false)}
@@ -162,49 +177,50 @@ export function IngredientPicker({
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
-              <Pressable
-                onPress={() => choose(null)}
-                accessibilityRole="button"
-                accessibilityLabel="Aucun aliment imposé"
-                accessibilityState={{ selected: selectedKey === null }}
-                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-              >
-                <Text style={[styles.rowLabel, selectedKey === null && styles.rowLabelSelected]}>
-                  Aucun aliment imposé
-                </Text>
-                {selectedKey === null ? (
-                  <Text style={styles.check} importantForAccessibility="no">
-                    ✓
-                  </Text>
-                ) : null}
-              </Pressable>
+              selected.length > 0 ? (
+                <Pressable
+                  onPress={clear}
+                  accessibilityRole="button"
+                  accessibilityLabel="Vider la sélection"
+                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                >
+                  <Text style={styles.rowLabel}>Vider la sélection</Text>
+                </Pressable>
+              ) : null
             }
             renderSectionHeader={({ section }) => (
               <Text style={styles.sectionHeader}>{section.title}</Text>
             )}
             renderItem={({ item }) => {
               const meta = describeDeadlines(item);
+              const isSelected = selectedKeys.includes(item.key);
+              const disabled = !isSelected && atLimit;
 
               return (
                 <Pressable
-                  onPress={() => choose(item.key)}
+                  onPress={() => toggle(item.key)}
+                  disabled={disabled}
                   accessibilityRole="button"
-                  accessibilityLabel={`${item.label}, ${meta}`}
+                  accessibilityLabel={
+                    disabled ? `${item.label}, ${meta}, maximum ${max} aliments` : `${item.label}, ${meta}`
+                  }
                   // La sélection n'était marquée que par un « ✓ » décoratif :
                   // invisible pour un lecteur d'écran, qui lisait donc deux
                   // lignes identiques sans savoir laquelle était choisie.
-                  accessibilityState={{ selected: selectedKey === item.key }}
-                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                  accessibilityState={{ selected: isSelected, disabled }}
+                  style={({ pressed }) => [
+                    styles.row,
+                    pressed && !disabled && styles.pressed,
+                    disabled && styles.rowDisabled,
+                  ]}
                 >
                   <View style={styles.flex}>
-                    <Text
-                      style={[styles.rowLabel, selectedKey === item.key && styles.rowLabelSelected]}
-                    >
+                    <Text style={[styles.rowLabel, isSelected && styles.rowLabelSelected]}>
                       {item.label}
                     </Text>
                     <Text style={styles.rowMeta}>{meta}</Text>
                   </View>
-                  {selectedKey === item.key ? (
+                  {isSelected ? (
                     <Text style={styles.check} importantForAccessibility="no">
                       ✓
                     </Text>
@@ -216,6 +232,13 @@ export function IngredientPicker({
               <Text style={styles.empty}>
                 Aucun aliment ne correspond à « {search.trim()} ».
               </Text>
+            }
+            ListFooterComponent={
+              atLimit ? (
+                <Text style={styles.limitNote}>
+                  Maximum {max} aliments : retirez-en un pour en choisir un autre.
+                </Text>
+              ) : null
             }
           />
         </SafeAreaView>
@@ -321,9 +344,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  rowDisabled: { opacity: 0.4 },
   rowLabel: { fontSize: 15, color: colors.ink },
   rowLabelSelected: { fontWeight: '700', color: colors.primary },
   rowMeta: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
   check: { fontSize: 17, fontWeight: '700', color: colors.primary },
   empty: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.xl, textAlign: 'center' },
+  limitNote: {
+    fontSize: 13,
+    color: colors.inkMuted,
+    textAlign: 'center',
+    marginTop: spacing.lg,
+  },
 });
