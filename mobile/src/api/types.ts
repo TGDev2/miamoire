@@ -451,6 +451,69 @@ export interface SavedRecipe {
 }
 
 /**
+ * Le créneau d'un repas planifié — distinct de `mealType` (Cuisiner), qui
+ * catégorise une recette plutôt qu'il n'ordonne une journée du plan.
+ */
+export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+
+export type MealPlanLineStatus = 'covered' | 'short' | 'needs_reassociation';
+
+/** Un autre repas planifié qui réclame le même ingrédient — informatif, jamais un signal de pénurie. */
+export interface MealPlanCrossReference {
+  entryId: string;
+  displayName: string;
+  date: string;
+  slotLabel: string;
+}
+
+export interface MealPlanLine {
+  key: string;
+  label: string;
+  requestedQuantity: number;
+  requestedUnit: Unit;
+  status: MealPlanLineStatus;
+  statusLabel: string;
+  /** Dans `requestedUnit`, une fois les repas plus proches déjà servis. */
+  shortfall: number;
+  detail: string | null;
+  alsoClaimedBy: MealPlanCrossReference[];
+}
+
+export type MealPlanEntryKind = 'saved_recipe' | 'snapshot' | 'freeform';
+
+/** Un repas à venir, avec son plan de préparation et ses lignes de réservation recalculés à l'instant. */
+export interface MealPlanEntry {
+  id: string;
+  date: string;
+  mealSlot: MealSlot;
+  mealSlotLabel: string;
+  kind: MealPlanEntryKind;
+  displayName: string;
+  savedRecipeId: string | null;
+  label: string | null;
+  /** `null` pour un repas libre. */
+  recipe: Recipe | null;
+  addedBy: string | null;
+  createdAt: string;
+  /** `null` pour un repas libre — rien à préparer, donc rien à vérifier. */
+  plan: RecipePlan | null;
+  lines: MealPlanLine[];
+}
+
+/** Un manque déjà agrégé sur l'ensemble du plan — jamais un manque par repas. */
+export interface MealPlanShortfallLine {
+  label: string;
+  quantity: number;
+  unit: Unit;
+}
+
+export interface MealPlanOverview {
+  entries: MealPlanEntry[];
+  shortfallSummary: MealPlanShortfallLine[];
+  unclaimedUrgentItems: SaveTodayCandidate[];
+}
+
+/**
  * Une ligne de la liste de courses du foyer.
  *
  * `quantity` est facultative — un simple rappel (« acheter du pain ») reste

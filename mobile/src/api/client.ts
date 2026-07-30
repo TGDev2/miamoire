@@ -6,6 +6,9 @@ import type {
   Household,
   HouseholdWithKey,
   InventorySummary,
+  MealPlanEntry,
+  MealPlanOverview,
+  MealSlot,
   Member,
   Product,
   ProductTraitValue,
@@ -479,6 +482,9 @@ export const api = {
     recipeName: string,
     proposal: ConsumptionLine[],
     recipeSource: { savedId: string } | { recipe: Recipe },
+    // Repas planifié dont cette confirmation tient lieu : le serveur remplace
+    // la réservation souple par cette consommation réelle, dans le même geste.
+    mealPlanEntryId?: string,
   ) =>
     request<ConfirmationResponse>('/recipes/confirm', {
       method: 'POST',
@@ -488,8 +494,40 @@ export const api = {
         stockConsumptionProposal: proposal,
         savedRecipeId: 'savedId' in recipeSource ? recipeSource.savedId : undefined,
         recipe: 'recipe' in recipeSource ? recipeSource.recipe : undefined,
+        mealPlanEntryId,
       },
     }),
+
+  /**
+   * Le plan de repas court : chaque entrée avec son plan de préparation et
+   * ses lignes de réservation recalculés à l'instant — jamais une déduction
+   * de stock, seulement ce que les repas plus proches ont déjà promis.
+   */
+  mealPlan: () => request<MealPlanOverview>('/meal-plan'),
+
+  /** Une entrée seule, pour l'écran de préparation d'une proposition non enregistrée. */
+  mealPlanEntry: (id: string) => request<MealPlanEntry>(`/meal-plan/entries/${id}`),
+
+  /**
+   * Exactement un de `savedRecipeId`, `recipe` (une proposition jamais
+   * enregistrée), ou `label` (un repas libre). Le serveur refuse un 5ᵉ repas
+   * actif : le plan reste court par construction.
+   */
+  addMealPlanEntry: (
+    body: { date: string; mealSlot: MealSlot }
+      & ({ savedRecipeId: string } | { recipe: Recipe } | { label: string }),
+  ) => request<MealPlanEntry>('/meal-plan/entries', { method: 'POST', body }),
+
+  /** Replanification seulement — changer le contenu se fait en supprimant puis recréant l'entrée. */
+  rescheduleMealPlanEntry: (id: string, body: { date?: string; mealSlot?: MealSlot }) =>
+    request<MealPlanEntry>(`/meal-plan/entries/${id}`, { method: 'PATCH', body }),
+
+  deleteMealPlanEntry: (id: string) =>
+    request<{ removed: boolean }>(`/meal-plan/entries/${id}`, { method: 'DELETE' }),
+
+  /** Ajoute le manque cumulé du plan entier à la liste de courses, en un seul geste. */
+  addMealPlanShortfallToShoppingList: () =>
+    request<{ items: ShoppingListItem[] }>('/meal-plan/shopping-list', { method: 'POST' }),
 
   shoppingList: () => request<{ items: ShoppingListItem[] }>('/shopping-list'),
 

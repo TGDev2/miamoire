@@ -16,6 +16,10 @@ use App\Enum\ProductTrait;
 use App\Service\Ai\RecipePlan;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimate;
+use App\Service\MealPlan\MealPlanCrossReference;
+use App\Service\MealPlan\MealPlanEntryView;
+use App\Service\MealPlan\MealPlanLine;
+use App\Service\MealPlan\MealPlanShortfallLine;
 use App\Service\UnitConverter;
 
 /** Mise en forme des entités pour l'API. Une seule source de vérité pour le contrat JSON. */
@@ -252,6 +256,62 @@ class ApiPresenter
             ),
             'checkedExclusions' => $plan->checkedExclusions,
             'evaluatedAt' => $plan->evaluatedAt->format(\DATE_ATOM),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function mealPlanEntry(MealPlanEntryView $view): array
+    {
+        $entry = $view->entry;
+
+        return [
+            'id' => (string) $entry->getId(),
+            'date' => $entry->getDate()->format('Y-m-d'),
+            'mealSlot' => $entry->getSlot()->value,
+            'mealSlotLabel' => $entry->getSlot()->label(),
+            'kind' => $entry->kind(),
+            'displayName' => $entry->displayName(),
+            'savedRecipeId' => null !== $entry->getSavedRecipe() ? (string) $entry->getSavedRecipe()->getId() : null,
+            'label' => $entry->getLabel(),
+            'recipe' => $entry->recipeDocument(),
+            'addedBy' => $entry->getAddedBy()?->getFirstName(),
+            'createdAt' => $entry->getCreatedAt()->format(\DATE_ATOM),
+            'plan' => null !== $view->plan ? $this->recipePlan($view->plan) : null,
+            'lines' => array_map(fn (MealPlanLine $line): array => $this->mealPlanLine($line), $view->lines),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function mealPlanLine(MealPlanLine $line): array
+    {
+        return [
+            'key' => $line->key,
+            'label' => $line->label,
+            'requestedQuantity' => $line->requestedQuantity,
+            'requestedUnit' => $line->requestedUnit->value,
+            'status' => $line->status->value,
+            'statusLabel' => $line->status->label(),
+            'shortfall' => $line->shortfall,
+            'detail' => $line->detail,
+            'alsoClaimedBy' => array_map(
+                static fn (MealPlanCrossReference $ref): array => [
+                    'entryId' => $ref->entryId,
+                    'displayName' => $ref->displayName,
+                    'date' => $ref->date->format('Y-m-d'),
+                    'slotLabel' => $ref->slotLabel,
+                ],
+                $line->alsoClaimedBy,
+            ),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function mealPlanShortfallLine(MealPlanShortfallLine $line): array
+    {
+        return [
+            'label' => $line->label,
+            'quantity' => $line->quantity,
+            'unit' => $line->unit->value,
         ];
     }
 

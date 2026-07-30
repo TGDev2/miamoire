@@ -19,7 +19,7 @@ import { spacing } from '../../src/theme';
  */
 export default function SavedRecipeScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, mealPlanEntryId } = useLocalSearchParams<{ id: string; mealPlanEntryId?: string }>();
 
   const [saved, setSaved] = useState<SavedRecipe | null>(null);
   const [plan, setPlan] = useState<RecipePlan | null>(null);
@@ -91,6 +91,7 @@ export default function SavedRecipeScreen() {
       confirmation={confirmation}
       onConfirmed={setConfirmation}
       savedId={saved.id}
+      mealPlanEntryId={mealPlanEntryId}
       onSavedChange={(next) => {
         // Retirée depuis sa propre fiche : il n'y a plus rien à afficher.
         if (next === null) router.back();

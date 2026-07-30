@@ -34,6 +34,18 @@ export const radius = {
 } as const;
 
 /**
+ * Les quatre créneaux d'un repas planifié, dans leur ordre chronologique du
+ * jour — distinct de `mealType` (Cuisiner), qui catégorise une recette sans
+ * ordonner une journée.
+ */
+export const mealSlotOptions: Array<{ value: 'breakfast' | 'lunch' | 'dinner' | 'snack'; label: string }> = [
+  { value: 'breakfast', label: 'Petit-déjeuner' },
+  { value: 'lunch', label: 'Déjeuner' },
+  { value: 'dinner', label: 'Dîner' },
+  { value: 'snack', label: 'Goûter' },
+];
+
+/**
  * Correspondance entre l'état renvoyé par l'API et sa présentation.
  *
  * `archived` manquait alors que le serveur le renvoie en priorité sur tous les

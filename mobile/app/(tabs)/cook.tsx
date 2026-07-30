@@ -121,12 +121,20 @@ export default function CookScreen() {
         ) : null}
       </Card>
 
-      <Button
-        label="Mes recettes enregistrées"
-        variant="secondary"
-        onPress={() => router.push('/saved')}
-        style={styles.savedLink}
-      />
+      <View style={styles.linkRow}>
+        <Button
+          label="Mon plan de repas"
+          variant="secondary"
+          onPress={() => router.push('/meal-plan')}
+          style={styles.linkButton}
+        />
+        <Button
+          label="Mes recettes enregistrées"
+          variant="secondary"
+          onPress={() => router.push('/saved')}
+          style={styles.linkButton}
+        />
+      </View>
 
       <SectionTitle>Nous sommes</SectionTitle>
       {/* Les deux boutons n'avaient pour libellé que leur glyphe : un lecteur
@@ -311,7 +319,8 @@ const styles = StyleSheet.create({
   stepperGlyph: { fontSize: 22, fontWeight: '700', color: colors.primary },
   stepperValue: { fontSize: 17, fontWeight: '700', color: colors.ink },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  savedLink: { marginTop: spacing.lg },
+  linkRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+  linkButton: { flex: 1 },
   submitNote: {
     fontSize: 13,
     fontWeight: '600',

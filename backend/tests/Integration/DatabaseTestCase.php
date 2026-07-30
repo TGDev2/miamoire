@@ -6,10 +6,12 @@ namespace App\Tests\Integration;
 
 use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
+use App\Entity\MealPlanEntry;
 use App\Entity\Member;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
 use App\Entity\StockOperation;
+use App\Enum\MealSlot;
 use App\Enum\MovementType;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
@@ -138,6 +140,51 @@ abstract class DatabaseTestCase extends KernelTestCase
         $this->entityManager->persist($movement);
 
         return $movement;
+    }
+
+    /**
+     * Une entrée de plan de repas — snapshot avec la proposition de
+     * consommation donnée (clé = slug de variante), ou repas libre si `$label`
+     * est fourni.
+     *
+     * @param list<array{key: string, label: string, quantity: float, unit: Unit}>|null $stockConsumptionProposal
+     */
+    protected function makeMealPlanEntry(
+        Household $household,
+        \DateTimeImmutable $date,
+        MealSlot $slot,
+        ?array $stockConsumptionProposal = null,
+        ?string $label = null,
+    ): MealPlanEntry {
+        if (null !== $label) {
+            $entry = MealPlanEntry::forFreeform($household, $date, $slot, $label);
+        } else {
+            $entry = MealPlanEntry::forSnapshot($household, $date, $slot, [
+                'recipeName' => 'Recette de test',
+                'feasibility' => 'ready',
+                'servings' => 2,
+                'preparationTime' => 10,
+                'summary' => 'Une recette de test.',
+                'includesSideDish' => false,
+                'ingredientsFromInventory' => [],
+                'missingIngredients' => [],
+                'substitutions' => [],
+                'steps' => ['Une étape.'],
+                'stockConsumptionProposal' => array_map(
+                    static fn (array $line): array => [
+                        'key' => $line['key'],
+                        'label' => $line['label'],
+                        'quantity' => $line['quantity'],
+                        'unit' => $line['unit']->value,
+                    ],
+                    $stockConsumptionProposal ?? [],
+                ),
+            ]);
+        }
+
+        $this->entityManager->persist($entry);
+
+        return $entry;
     }
 
     /** La quantité telle que la base la voit, hors de tout cache d'entités. */

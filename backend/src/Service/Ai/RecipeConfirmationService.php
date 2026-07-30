@@ -6,6 +6,7 @@ namespace App\Service\Ai;
 
 use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
+use App\Entity\MealPlanEntry;
 use App\Entity\Member;
 use App\Entity\StockOperation;
 use App\Enum\RecipePlanStatus;
@@ -20,6 +21,7 @@ use App\Service\Stock\FefoPlan;
 use App\Service\Stock\ProposalConsolidator;
 use App\Service\Stock\StockOperationGuard;
 use App\Service\Stock\StockService;
+use Doctrine\ORM\EntityManagerInterface;
 
 /**
  * Applique une proposition de consommation APRÈS confirmation explicite de l'utilisateur.
@@ -48,6 +50,7 @@ class RecipeConfirmationService
         private readonly StockOperationGuard $operationGuard,
         private readonly DietaryGuardFactory $guards,
         private readonly RecipePlanService $planner,
+        private readonly EntityManagerInterface $entityManager,
     ) {
     }
 
@@ -65,6 +68,7 @@ class RecipeConfirmationService
         ?string $recipeName,
         string $operationKey,
         array $recipe,
+        ?MealPlanEntry $mealPlanEntry = null,
     ): array {
         $lines = $this->consolidator->consolidate($proposal);
         $requestHash = $this->consolidator->hash($lines, $recipeName);
@@ -80,7 +84,7 @@ class RecipeConfirmationService
             $requestHash,
             $author,
             $this->stockService,
-            fn (StockOperation $operation): array => $this->applyWithin($operation, $targets, $author, $recipeName),
+            fn (StockOperation $operation): array => $this->applyWithin($operation, $targets, $author, $recipeName, $mealPlanEntry),
         );
     }
 
@@ -104,6 +108,7 @@ class RecipeConfirmationService
         array $targets,
         Member $author,
         ?string $recipeName,
+        ?MealPlanEntry $mealPlanEntry,
     ): array {
         /** @var list<array{line: ConsumptionLine, variant: HouseholdProductVariant, plan: FefoPlan}> $plans */
         $plans = [];
@@ -154,6 +159,14 @@ class RecipeConfirmationService
                     $operation,
                 );
             }
+        }
+
+        // La réservation souple est remplacée par la consommation qui vient
+        // d'être écrite, dans la même transaction : un plan devenu incomplet
+        // aurait déjà levé StockConflictException ci-dessus, avant d'arriver
+        // ici — l'entrée ne disparaît jamais sur un échec.
+        if (null !== $mealPlanEntry) {
+            $this->entityManager->remove($mealPlanEntry);
         }
 
         return $this->describe($operation, $plans, $recipeName);

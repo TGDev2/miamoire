@@ -1,4 +1,5 @@
-import React from 'react';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -12,6 +13,19 @@ import {
 } from 'react-native';
 
 import { colors, radius, spacing } from '../theme';
+
+/** `Date` → `« 2026-08-02 »`, le format que l'API attend pour une date sans heure. */
+export function toIsoDate(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** L'inverse, interprété localement : `new Date(iso)` serait en UTC, donc décalé d'un jour. */
+export function fromIsoDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
 
 export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
   return <View style={[styles.card, style]}>{children}</View>;
@@ -133,6 +147,54 @@ export function Field({
       {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
     </View>
   );
+}
+
+/** Une date au format AAAA-MM-JJ, saisie via le sélecteur natif plutôt qu'au clavier. */
+export function DateField({
+  label,
+  value,
+  onChange,
+  placeholder = 'Aucune date',
+}: {
+  label: string;
+  value: string | null;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [showPicker, setShowPicker] = useState(false);
+
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <Pressable
+        onPress={() => setShowPicker(true)}
+        style={styles.input}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint={value ? formatDisplayDate(fromIsoDate(value)) : placeholder}
+      >
+        <Text style={{ color: value ? colors.ink : colors.inkMuted, fontSize: 16 }}>
+          {value ? formatDisplayDate(fromIsoDate(value)) : placeholder}
+        </Text>
+      </Pressable>
+      {showPicker ? (
+        <DateTimePicker
+          value={value ? fromIsoDate(value) : new Date()}
+          mode="date"
+          onChange={(event, selected) => {
+            setShowPicker(false);
+            if ('set' === event.type && selected) {
+              onChange(toIsoDate(selected));
+            }
+          }}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function formatDisplayDate(date: Date): string {
+  return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 export function SectionTitle({ children }: { children: React.ReactNode }) {

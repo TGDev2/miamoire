@@ -6,12 +6,13 @@ import { api } from '../api/client';
 import type {
   ConfirmationResponse,
   ConsumptionLine,
+  MealSlot,
   Recipe,
   RecipeIngredient,
   RecipePlan,
 } from '../api/types';
-import { Badge, Button, Card, ErrorBanner, SectionTitle } from '../components/ui';
-import { colors, feasibilityPresentation, radius, spacing } from '../theme';
+import { Badge, Button, Card, Chip, DateField, ErrorBanner, SectionTitle } from '../components/ui';
+import { colors, feasibilityPresentation, mealSlotOptions, radius, spacing } from '../theme';
 
 /**
  * L'écran d'une recette, qu'elle vienne d'une génération ou des enregistrées.
@@ -29,6 +30,7 @@ export function RecipeDetailView({
   onConfirmed,
   savedId,
   onSavedChange,
+  mealPlanEntryId,
 }: {
   recipe: Recipe;
   /**
@@ -45,6 +47,8 @@ export function RecipeDetailView({
   /** Identifiant de l'enregistrement, `null` si la recette n'est pas conservée. */
   savedId: string | null;
   onSavedChange: (id: string | null) => void;
+  /** Le repas planifié dont cette confirmation tient lieu — sa réservation est remplacée par cette consommation. */
+  mealPlanEntryId?: string;
 }) {
   const router = useRouter();
 
@@ -56,6 +60,12 @@ export function RecipeDetailView({
   // de cet écran.
   const [addedToList, setAddedToList] = useState(false);
   const [addingToList, setAddingToList] = useState(false);
+
+  const [planningOpen, setPlanningOpen] = useState(false);
+  const [planDate, setPlanDate] = useState<string | null>(null);
+  const [planSlot, setPlanSlot] = useState<MealSlot | null>(null);
+  const [addingToPlan, setAddingToPlan] = useState(false);
+  const [addedToPlan, setAddedToPlan] = useState(false);
 
   /**
    * Les quantités réellement utilisées, saisies par l'utilisateur.
@@ -136,6 +146,7 @@ export function RecipeDetailView({
         recipe.recipeName,
         lines,
         savedId !== null ? { savedId } : { recipe },
+        mealPlanEntryId,
       );
       onConfirmed(result);
 
@@ -176,6 +187,30 @@ export function RecipeDetailView({
       setError(exception instanceof Error ? exception.message : 'Ajout à la liste de courses impossible.');
     } finally {
       setAddingToList(false);
+    }
+  }
+
+  /** Une réservation souple, jamais une déduction : rien n'est retiré du stock avant une vraie préparation. */
+  async function addToMealPlan() {
+    if (null === planDate || null === planSlot) {
+      setError('Choisissez une date et un moment de la journée.');
+      return;
+    }
+
+    setError(null);
+    setAddingToPlan(true);
+    try {
+      await api.addMealPlanEntry(
+        savedId !== null
+          ? { date: planDate, mealSlot: planSlot, savedRecipeId: savedId }
+          : { date: planDate, mealSlot: planSlot, recipe },
+      );
+      setAddedToPlan(true);
+      setPlanningOpen(false);
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Ajout au plan de repas impossible.');
+    } finally {
+      setAddingToPlan(false);
     }
   }
 
@@ -229,6 +264,40 @@ export function RecipeDetailView({
           ? 'Conservée sur le serveur, elle reste accessible à tout le foyer, même après avoir quitté cet écran.'
           : 'Enregistrée : vous la retrouverez dans « Mes recettes » depuis l\'onglet Cuisiner.'}
       </Text>
+
+      {undefined === mealPlanEntryId ? (
+        <>
+          <Button
+            label={addedToPlan ? '✓ Ajoutée à votre plan de repas' : 'Ajouter à mon plan de repas'}
+            variant="secondary"
+            onPress={() => setPlanningOpen((current) => !current)}
+            disabled={addedToPlan}
+            style={styles.save}
+          />
+          {planningOpen ? (
+            <Card style={styles.planCard}>
+              <DateField label="Date du repas" value={planDate} onChange={setPlanDate} />
+              <Text style={styles.fieldLabel}>Moment de la journée</Text>
+              <View style={styles.chips}>
+                {mealSlotOptions.map((option) => (
+                  <Chip
+                    key={option.value}
+                    label={option.label}
+                    selected={planSlot === option.value}
+                    onPress={() => setPlanSlot(option.value)}
+                  />
+                ))}
+              </View>
+              <Button
+                label="Ajouter au plan"
+                onPress={addToMealPlan}
+                loading={addingToPlan}
+                style={styles.spaced}
+              />
+            </Card>
+          ) : null}
+        </>
+      ) : null}
 
       <SectionTitle>Depuis votre stock</SectionTitle>
       {recipe.ingredientsFromInventory.map((ingredient, position) => (
@@ -389,6 +458,10 @@ const styles = StyleSheet.create({
   meta: { fontSize: 14, color: colors.ink, marginTop: spacing.md, fontWeight: '600' },
   save: { marginTop: spacing.lg },
   saved: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  planCard: { marginTop: spacing.md },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: colors.inkMuted, marginTop: spacing.md },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm },
+  spaced: { marginTop: spacing.md },
   ingredient: {
     flexDirection: 'row',
     justifyContent: 'space-between',

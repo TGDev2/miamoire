@@ -10,6 +10,7 @@ use App\Enum\MealTemperature;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
+use App\Repository\MealPlanEntryRepository;
 use App\Repository\SavedRecipeRepository;
 use App\Service\Ai\RecipeConfirmationService;
 use App\Service\Ai\RecipeNormalizer;
@@ -84,10 +85,17 @@ class RecipeController extends AbstractApiController
         RecipeConfirmationService $service,
         RecipeNormalizer $normalizer,
         SavedRecipeRepository $savedRecipes,
+        MealPlanEntryRepository $mealPlanEntries,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
         $household = $context->household();
         $recipe = $this->confirmedRecipeDocument($payload, $household, $normalizer, $savedRecipes);
+
+        // Résolu avec tolérance : un id périmé, étranger, ou déjà effacé ne doit
+        // jamais empêcher la confirmation réelle — seul le nettoyage du plan
+        // de repas en pâtit, pas la consommation.
+        $mealPlanEntryId = $payload->string('mealPlanEntryId');
+        $mealPlanEntry = null !== $mealPlanEntryId ? $mealPlanEntries->findOwned($household, $mealPlanEntryId) : null;
 
         $result = $service->confirm(
             $household,
@@ -96,6 +104,7 @@ class RecipeController extends AbstractApiController
             $payload->string('recipeName'),
             $payload->requiredString('operationKey'),
             $recipe,
+            $mealPlanEntry,
         );
 
         return $this->json($result);
