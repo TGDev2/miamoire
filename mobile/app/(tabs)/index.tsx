@@ -1,5 +1,4 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useState } from 'react';
 import {
   FlatList,
@@ -20,33 +19,6 @@ import { colors, radius, spacing, statusPresentation } from '../../src/theme';
 
 const EXPIRY_FILTER_DAYS = 3;
 
-/** Une fois par semaine au plus : la date de la dernière proposition, qu'elle ait été acceptée ou non. */
-const LAST_REVIEW_PROMPT_KEY = 'food.lastReviewPromptAt';
-const REVIEW_PROMPT_INTERVAL_DAYS = 7;
-
-/**
- * Faut-il proposer « Vérifier mon stock » cette fois-ci ?
- *
- * Un seul appel réseau, gardé par les 7 jours : contrairement au bouton
- * d'entrée toujours visible, une bannière qui s'affiche sur un stock déjà à
- * jour apprend à l'utilisateur à la fermer par réflexe.
- */
-async function shouldOfferReviewNudge(): Promise<boolean> {
-  const last = await SecureStore.getItemAsync(LAST_REVIEW_PROMPT_KEY);
-  const daysSinceLast = last ? (Date.now() - Number(last)) / 86_400_000 : Infinity;
-
-  if (daysSinceLast < REVIEW_PROMPT_INTERVAL_DAYS) return false;
-
-  await SecureStore.setItemAsync(LAST_REVIEW_PROMPT_KEY, String(Date.now()));
-
-  try {
-    const queue = await api.reviewQueue(1);
-    return queue.items.length > 0;
-  } catch {
-    return false;
-  }
-}
-
 export default function StockScreen() {
   const router = useRouter();
 
@@ -61,7 +33,6 @@ export default function StockScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showReviewNudge, setShowReviewNudge] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -101,12 +72,6 @@ export default function StockScreen() {
   useFocusEffect(
     useCallback(() => {
       void resyncExpiryAlerts();
-    }, []),
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      void shouldOfferReviewNudge().then(setShowReviewNudge);
     }, []),
   );
 
@@ -176,28 +141,6 @@ export default function StockScreen() {
           />
         </View>
       </View>
-
-      {showReviewNudge ? (
-        <View style={styles.nudge} accessible accessibilityLabel="Envie de vérifier votre stock ?">
-          <Text style={styles.nudgeText}>Envie de vérifier votre stock ?</Text>
-          <View style={styles.nudgeActions}>
-            <Button
-              label="Plus tard"
-              variant="ghost"
-              onPress={() => setShowReviewNudge(false)}
-              style={styles.nudgeButton}
-            />
-            <Button
-              label="Vérifier"
-              onPress={() => {
-                setShowReviewNudge(false);
-                router.push('/review');
-              }}
-              style={styles.nudgeButton}
-            />
-          </View>
-        </View>
-      ) : null}
 
       <FlatList
         data={items}
@@ -345,16 +288,6 @@ const styles = StyleSheet.create({
   filters: { marginTop: spacing.md },
   toolbarButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
   toolbarButton: { flex: 1 },
-  nudge: {
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-  },
-  nudgeText: { fontSize: 14, fontWeight: '600', color: colors.ink },
-  nudgeActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  nudgeButton: { flex: 1 },
   list: { padding: spacing.lg, paddingBottom: 96 },
   row: {
     backgroundColor: colors.surface,

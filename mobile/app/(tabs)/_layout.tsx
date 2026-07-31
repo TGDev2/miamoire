@@ -18,10 +18,9 @@ export default function TabsLayout() {
 
   return (
     <Tabs
-      // « Aujourd'hui » vient en tête visuellement, mais l'onglet actif à
-      // l'ouverture reste « Mon stock » (index) : l'ordre des `Tabs.Screen`
-      // ne pilote que l'ordre visuel, pas l'onglet initial.
-      initialRouteName="index"
+      // « Aujourd'hui » est l'écran d'ouverture : c'est lui qui répond à
+      // « que dois-je faire maintenant ? », avant même de consulter le stock.
+      initialRouteName="today"
       screenOptions={{
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.inkMuted,
