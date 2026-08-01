@@ -42,10 +42,17 @@ final class RecipeSchema
             'required' => [
                 'recipeName', 'feasibility', 'servings', 'preparationTime', 'summary',
                 'ingredientsFromInventory', 'missingIngredients', 'substitutions',
-                'steps', 'stockConsumptionProposal', 'includesSideDish',
+                'steps', 'stockConsumptionProposal', 'includesSideDish', 'utensils',
             ],
             'properties' => [
                 'recipeName' => ['type' => 'string'],
+                // Ustensiles et équipements réellement nécessaires à CETTE recette,
+                // concrets plutôt que génériques — voir la règle correspondante du
+                // prompt système.
+                'utensils' => [
+                    'type' => 'array',
+                    'items' => ['type' => 'string'],
+                ],
                 // Vrai seulement quand un accompagnement a été ajouté parce que le
                 // plat principal ne se suffisait pas à lui seul — voir la règle
                 // correspondante du prompt système.

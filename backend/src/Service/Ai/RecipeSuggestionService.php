@@ -12,6 +12,7 @@ use App\Service\Ai\Safety\DietaryGuardFactory;
 use App\Service\Ai\Safety\RecipeSafetyFilter;
 use App\Service\Inventory\InventoryAggregator;
 use App\Service\Inventory\InventoryLine;
+use Doctrine\ORM\EntityManagerInterface;
 
 /**
  * Génération de propositions culinaires à partir de l'inventaire réel.
@@ -41,6 +42,7 @@ class RecipeSuggestionService
         private readonly RecipeSafetyFilter $safetyFilter,
         private readonly RequiredIngredientFilter $requiredFilter,
         private readonly RecipePlanService $planner,
+        private readonly EntityManagerInterface $entityManager,
     ) {
     }
 
@@ -81,7 +83,7 @@ class RecipeSuggestionService
         ];
 
         $raw = $generator->generate(
-            $this->systemPrompt($guard->exclusions(), $required, $desired),
+            $this->systemPrompt($guard->exclusions(), $required, $desired, $household->getRecentRecipeSuggestions()),
             json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
             RecipeSchema::definition(),
         );
@@ -128,6 +130,19 @@ class RecipeSuggestionService
             fn (array $recipe): array => $recipe + ['plan' => $this->planner->plan($guard, $strictLabels, $household, $recipe)],
             $constrained['recipes'],
         );
+
+        // Seules les recettes réellement montrées nourrissent l'historique anti-
+        // répétition : une proposition écartée par un filtre de sûreté n'a jamais
+        // été vue, la compter empêcherait le modèle de la reproposer à tort.
+        $shownNames = array_map(
+            static fn (array $recipe): string => is_string($recipe['recipeName'] ?? null) ? $recipe['recipeName'] : '',
+            $recipes,
+        );
+        $household->rememberRecipeSuggestions(array_values(array_filter(
+            $shownNames,
+            static fn (string $name): bool => '' !== $name,
+        )));
+        $this->entityManager->flush();
 
         return [
             'recipes' => $recipes,
@@ -238,7 +253,8 @@ class RecipeSuggestionService
      * @param list<string>        $exclusions
      * @param list<InventoryLine> $desired
      */
-    private function systemPrompt(array $exclusions, ?InventoryLine $required, array $desired = []): string
+    /** @param list<string> $recentNames */
+    private function systemPrompt(array $exclusions, ?InventoryLine $required, array $desired = [], array $recentNames = []): string
     {
         $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
         $traits = $this->traitGlossary();
@@ -278,6 +294,20 @@ class RecipeSuggestionService
                 ."            Une recette écartée est une proposition perdue : n'en propose aucune qui\n"
                 ."            s'en approche, y compris en accompagnement ou en suggestion de service.\n",
                 implode(', ', $exclusions),
+            );
+
+        $recentAvoidance = [] === $recentNames
+            ? ''
+            : sprintf(
+                "\n            PLATS RÉCEMMENT PROPOSÉS À CE FOYER (du plus ancien au plus récent) : %s.\n"
+                ."            N'en propose aucun à l'identique, et évite aussi leur famille culinaire\n"
+                ."            immédiate — un gratin dauphinois après une tartiflette ou une croziflette\n"
+                ."            est un doublon, pas une nouveauté. Un ingrédient qui revient (le fromage,\n"
+                ."            par exemple) ne doit pas systématiquement mener au même type de plat :\n"
+                ."            envisage d'autres formats (tarte salée, poêlée, risotto, feuilleté, salade\n"
+                ."            tiède, soupe, croque, gratin seulement si aucune autre idée ne convient\n"
+                ."            vraiment mieux) avant de répéter une recette de cette liste.\n",
+                implode(', ', array_map(static fn (string $name): string => sprintf('« %s »', $name), $recentNames)),
             );
 
         return <<<PROMPT
@@ -349,7 +379,19 @@ class RecipeSuggestionService
                 des plats servis chauds. À "cold", ne propose que des plats froids ou à
                 température ambiante — rien qui exige une cuisson juste avant de servir.
                 Absente : aucune contrainte de température.
-            {$imposed}{$wished}{$safety}
+            12. `utensils` liste les ustensiles et équipements réellement nécessaires à CETTE
+                recette précise, jamais un terme générique : « poêle antiadhésive 26 cm »,
+                « plat à gratin », « four à 200°C », « fouet », « mixeur plongeant », pas
+                « un plat » ni « des ustensiles de cuisine ». Si `availableEquipment` n'est
+                pas vide, chaque élément de `utensils` doit lui appartenir (règle 6).
+            13. Les trois recettes renvoyées doivent différer entre elles de technique et de
+                format (four/poêle/cocotte/cru/vapeur, plat unique/tarte/soupe/salade…) :
+                jamais trois variantes du même plat, même avec des ingrédients différents.
+            14. Rédige des étapes précises et actionnables : température du four en °C,
+                durée de cuisson ou de repos, taille de découpe, indice visuel de cuisson.
+                Une étape comme « faites cuire » sans aucune de ces précisions n'est pas
+                assez concrète.
+            {$imposed}{$wished}{$safety}{$recentAvoidance}
             À propos de `stockConsumptionProposal` :
 
             - C'est une PROPOSITION de retrait de stock, soumise ensuite à validation humaine.
@@ -364,8 +406,8 @@ class RecipeSuggestionService
               recette : deux lignes pour le même ingrédient seraient fusionnées de toute façon.
             - N'y fais figurer que ce qui est réellement consommé par la recette.
 
-            Rédige des étapes courtes et concrètes. Réponds uniquement par le JSON demandé,
-            sans texte d'introduction ni bloc de code.
+            Rédige des étapes concises mais concrètes (voir règle 14). Réponds uniquement par
+            le JSON demandé, sans texte d'introduction ni bloc de code.
             PROMPT;
     }
 }

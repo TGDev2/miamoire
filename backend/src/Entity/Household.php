@@ -22,6 +22,8 @@ use Symfony\Component\Uid\Uuid;
 #[ORM\Table(name: 'household')]
 class Household
 {
+    private const MAX_RECENT_RECIPE_SUGGESTIONS = 15;
+
     #[ORM\Id]
     #[ORM\Column(type: 'uuid')]
     private Uuid $id;
@@ -59,6 +61,21 @@ class Household
      */
     #[ORM\Column(type: 'json')]
     private array $mutedReviewCategories = [];
+
+    /**
+     * Noms des dernières recettes réellement montrées au foyer, du plus ancien
+     * au plus récent — jamais celles écartées par un filtre de sûreté.
+     *
+     * Chaque génération est un appel indépendant au modèle, sans mémoire de ce
+     * qui a déjà été proposé : sans cette liste, un ingrédient récurrent (le
+     * fromage, par exemple) retombe presque toujours sur le même plat d'un
+     * jour sur l'autre. Elle est repassée au modèle pour qu'il évite de
+     * répéter, voir `RecipeSuggestionService`.
+     *
+     * @var list<string>
+     */
+    #[ORM\Column(type: 'json')]
+    private array $recentRecipeSuggestions = [];
 
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
@@ -189,6 +206,33 @@ class Household
         }
 
         $this->mutedReviewCategories = $entries;
+    }
+
+    /** @return list<string> */
+    public function getRecentRecipeSuggestions(): array
+    {
+        return $this->recentRecipeSuggestions;
+    }
+
+    /**
+     * Ajoute les noms des recettes tout juste montrées, et plafonne l'historique.
+     *
+     * Le plafond garde le prompt court et l'historique pertinent : ce qui
+     * compte pour éviter une répétition, c'est ce qui a été vu récemment, pas
+     * l'intégralité de ce que le foyer a jamais vu.
+     *
+     * @param list<string> $names
+     */
+    public function rememberRecipeSuggestions(array $names): void
+    {
+        $trimmed = array_values(array_filter(array_map(
+            static fn (string $name): string => trim($name),
+            $names,
+        ), static fn (string $name): bool => '' !== $name));
+
+        $merged = [...$this->recentRecipeSuggestions, ...$trimmed];
+
+        $this->recentRecipeSuggestions = \array_slice($merged, -self::MAX_RECENT_RECIPE_SUGGESTIONS);
     }
 
     public function getCreatedAt(): \DateTimeImmutable

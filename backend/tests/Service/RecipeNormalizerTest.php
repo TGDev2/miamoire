@@ -114,4 +114,23 @@ class RecipeNormalizerTest extends TestCase
 
         self::assertFalse($recipe['includesSideDish']);
     }
+
+    /** Sans ce champ, l'écran de recette perdrait la liste d'ustensiles à l'enregistrement. */
+    public function testUtensilsAreKept(): void
+    {
+        $recipe = $this->normalizer->normalize([
+            'recipeName' => 'Gratin dauphinois',
+            'utensils' => ['Plat à gratin', 'Mandoline', 'Four à 180°C'],
+        ]);
+
+        self::assertSame(['Plat à gratin', 'Mandoline', 'Four à 180°C'], $recipe['utensils']);
+    }
+
+    /** Une recette enregistrée avant l'ajout de ce champ ne doit pas faire échouer la normalisation. */
+    public function testUtensilsDefaultToAnEmptyList(): void
+    {
+        $recipe = $this->normalizer->normalize(['recipeName' => 'Quiche lorraine']);
+
+        self::assertSame([], $recipe['utensils']);
+    }
 }

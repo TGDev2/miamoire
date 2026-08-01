@@ -66,4 +66,52 @@ class HouseholdTest extends TestCase
 
         self::assertSame([['label' => 'Lait', 'severity' => 'allergy']], $household->getDietaryExclusions());
     }
+
+    public function testRecentRecipeSuggestionsStartEmpty(): void
+    {
+        $household = new Household('Foyer de test');
+
+        self::assertSame([], $household->getRecentRecipeSuggestions());
+    }
+
+    public function testRememberedSuggestionsAreAppendedInOrder(): void
+    {
+        $household = new Household('Foyer de test');
+
+        $household->rememberRecipeSuggestions(['Gratin dauphinois', 'Croziflette']);
+        $household->rememberRecipeSuggestions(['Tarte au fromage']);
+
+        self::assertSame(
+            ['Gratin dauphinois', 'Croziflette', 'Tarte au fromage'],
+            $household->getRecentRecipeSuggestions(),
+        );
+    }
+
+    public function testBlankNamesAreDropped(): void
+    {
+        $household = new Household('Foyer de test');
+
+        $household->rememberRecipeSuggestions(['Gratin', '  ', '']);
+
+        self::assertSame(['Gratin'], $household->getRecentRecipeSuggestions());
+    }
+
+    /**
+     * Le plafond garde le prompt court : seules les entrées les plus récentes
+     * comptent pour éviter une répétition, pas tout ce que le foyer a jamais vu.
+     */
+    public function testHistoryIsCappedToTheMostRecentEntries(): void
+    {
+        $household = new Household('Foyer de test');
+
+        for ($i = 1; $i <= 20; ++$i) {
+            $household->rememberRecipeSuggestions([sprintf('Recette %d', $i)]);
+        }
+
+        $recent = $household->getRecentRecipeSuggestions();
+
+        self::assertCount(15, $recent);
+        self::assertSame('Recette 6', $recent[0], 'Les plus anciennes doivent être évincées en premier.');
+        self::assertSame('Recette 20', $recent[14]);
+    }
 }

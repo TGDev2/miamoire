@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import type {
   ConfirmationResponse,
   ConsumptionLine,
@@ -66,6 +66,10 @@ export function RecipeDetailView({
   const [planSlot, setPlanSlot] = useState<MealSlot | null>(null);
   const [addingToPlan, setAddingToPlan] = useState(false);
   const [addedToPlan, setAddedToPlan] = useState(false);
+
+  // Une seule clé à la fois : évite qu'un double appui déclenche deux
+  // résolutions concurrentes vers deux fiches différentes.
+  const [resolvingKey, setResolvingKey] = useState<string | null>(null);
 
   /**
    * Les quantités réellement utilisées, saisies par l'utilisateur.
@@ -232,6 +236,24 @@ export function RecipeDetailView({
     }
   }
 
+  /** Ouvre la fiche du lot le plus urgent de cet aliment — le stock a pu changer depuis la génération. */
+  async function openIngredient(key: string) {
+    setResolvingKey(key);
+    try {
+      const { id } = await api.stockItemIdForIngredient(key);
+      router.push(`/item/${id}`);
+    } catch (exception) {
+      Alert.alert(
+        'Aliment introuvable',
+        exception instanceof ApiError || exception instanceof Error
+          ? exception.message
+          : 'Impossible d\'ouvrir la fiche de cet aliment.',
+      );
+    } finally {
+      setResolvingKey(null);
+    }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
@@ -248,6 +270,13 @@ export function RecipeDetailView({
         {recipe.servings > 1 ? 'personnes' : 'personne'}
         {recipe.includesSideDish ? ' · avec accompagnement' : ''}
       </Text>
+
+      {recipe.utensils && recipe.utensils.length > 0 ? (
+        <>
+          <SectionTitle>Ustensiles</SectionTitle>
+          <Text style={styles.utensils}>{recipe.utensils.join(' · ')}</Text>
+        </>
+      ) : null}
 
       {/* L'état « enregistrée » était rendu en variante ghost — sans bordure ni
           fond, il se lisait comme une phrase et non comme un bouton, si bien que
@@ -301,7 +330,12 @@ export function RecipeDetailView({
 
       <SectionTitle>Depuis votre stock</SectionTitle>
       {recipe.ingredientsFromInventory.map((ingredient, position) => (
-        <IngredientRow key={`inv-${position}`} ingredient={ingredient} />
+        <IngredientRow
+          key={`inv-${position}`}
+          ingredient={ingredient}
+          onOpen={openIngredient}
+          resolving={ingredient.key !== undefined && ingredient.key === resolvingKey}
+        />
       ))}
 
       {recipe.missingIngredients.length > 0 ? (
@@ -362,14 +396,21 @@ export function RecipeDetailView({
 
           {recipe.stockConsumptionProposal.map((line) => (
             <View key={`prop-${line.key}`} style={styles.proposalRow}>
-              <View style={styles.flex}>
+              <Pressable
+                style={styles.flex}
+                onPress={() => openIngredient(line.key)}
+                disabled={resolvingKey === line.key}
+                accessibilityRole="button"
+                accessibilityLabel={line.label}
+                accessibilityHint="Ouvre la fiche de cet aliment"
+              >
                 <Text style={styles.proposalLabel}>{line.label}</Text>
                 {parseQuantity(amounts[line.key]) !== line.quantity ? (
                   <Text style={styles.proposalOriginal}>
                     recette : {line.quantity} {line.unit}
                   </Text>
                 ) : null}
-              </View>
+              </Pressable>
               <TextInput
                 value={amounts[line.key] ?? ''}
                 onChangeText={(value) =>
@@ -433,16 +474,38 @@ function parseQuantity(raw: string | undefined): number | null {
 function IngredientRow({
   ingredient,
   missing = false,
+  onOpen,
+  resolving = false,
 }: {
   ingredient: RecipeIngredient;
   missing?: boolean;
+  /** Absent pour les ingrédients manquants : ils n'ont pas de `key`, donc rien à ouvrir. */
+  onOpen?: (key: string) => void;
+  resolving?: boolean;
 }) {
+  const label = (
+    <Text style={[styles.ingredientLabel, missing && styles.ingredientMissing]}>
+      {ingredient.label}
+      {!ingredient.essential ? ' (facultatif)' : ''}
+    </Text>
+  );
+
   return (
     <View style={styles.ingredient}>
-      <Text style={[styles.ingredientLabel, missing && styles.ingredientMissing]}>
-        {ingredient.label}
-        {!ingredient.essential ? ' (facultatif)' : ''}
-      </Text>
+      {undefined !== ingredient.key && undefined !== onOpen ? (
+        <Pressable
+          style={styles.flex}
+          onPress={() => onOpen(ingredient.key as string)}
+          disabled={resolving}
+          accessibilityRole="button"
+          accessibilityLabel={ingredient.label}
+          accessibilityHint="Ouvre la fiche de cet aliment"
+        >
+          {label}
+        </Pressable>
+      ) : (
+        label
+      )}
       <Text style={styles.ingredientQuantity}>
         {ingredient.quantity} {ingredient.unit}
       </Text>
@@ -456,6 +519,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '800', color: colors.ink, marginTop: spacing.md },
   summary: { fontSize: 15, color: colors.inkMuted, marginTop: spacing.sm, lineHeight: 21 },
   meta: { fontSize: 14, color: colors.ink, marginTop: spacing.md, fontWeight: '600' },
+  utensils: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 19 },
   save: { marginTop: spacing.lg },
   saved: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   planCard: { marginTop: spacing.md },

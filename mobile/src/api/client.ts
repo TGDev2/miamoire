@@ -281,6 +281,14 @@ export const api = {
   stockItem: (id: string) => request<StockItem>(`/stock-items/${id}`),
 
   /**
+   * Résout la clé d'un ingrédient de recette (`ingredientsFromInventory` /
+   * `stockConsumptionProposal`) vers le lot le plus urgent de cet aliment, pour
+   * ouvrir sa fiche depuis l'écran d'une recette.
+   */
+  stockItemIdForIngredient: (key: string) =>
+    request<{ id: string }>(`/stock-items/by-ingredient/${encodeURIComponent(key)}`),
+
+  /**
    * Un ajout crée un lot par date de péremption : la réponse est donc une liste.
    *
    * `operationKey` rend le geste rejouable sans effet supplémentaire : un

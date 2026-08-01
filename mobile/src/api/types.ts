@@ -400,6 +400,8 @@ export interface Recipe {
   summary: string;
   /** Vrai seulement quand un accompagnement a été ajouté parce que le plat seul ne suffisait pas. */
   includesSideDish: boolean;
+  /** Absent sur les recettes enregistrées avant l'ajout de ce champ. */
+  utensils?: string[];
   ingredientsFromInventory: RecipeIngredient[];
   missingIngredients: RecipeIngredient[];
   substitutions: Array<{ original: string; replacedBy: string; reason: string }>;

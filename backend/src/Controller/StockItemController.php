@@ -17,6 +17,7 @@ use App\Exception\StockConflictException;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
+use App\Repository\HouseholdProductVariantRepository;
 use App\Repository\ProductRepository;
 use App\Repository\StockItemRepository;
 use App\Repository\StockMovementRepository;
@@ -29,6 +30,7 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Uid\Uuid;
 
@@ -61,6 +63,33 @@ class StockItemController extends AbstractApiController
                 $items,
             ),
         ]);
+    }
+
+    /**
+     * Résout la clé d'ingrédient d'une recette vers le lot le plus urgent
+     * (FEFO) de cet aliment — c'est ce qui permet d'ouvrir sa fiche depuis un
+     * ingrédient touché sur l'écran d'une recette.
+     *
+     * La clé désigne une variante précise, jamais un simple libellé : `tomate`
+     * et `tomate-conserve` restent deux stocks différents, jamais confondus
+     * (voir `RecipeSuggestionService`). Le stock a pu changer depuis la
+     * génération de la recette — variante renommée, dernier lot consommé —
+     * d'où les deux 404 distincts plutôt qu'une réponse vide silencieuse.
+     */
+    #[Route('/by-ingredient/{key}', methods: ['GET'])]
+    public function byIngredient(
+        string $key,
+        RequestContext $context,
+        HouseholdProductVariantRepository $variants,
+        StockItemRepository $stockItems,
+    ): JsonResponse {
+        $variant = $variants->findOneBySlug($context->household(), $key)
+            ?? throw new NotFoundHttpException('Cet aliment ne correspond plus à rien dans votre inventaire.');
+
+        $item = $stockItems->findAvailableByVariant($variant)[0]
+            ?? throw new NotFoundHttpException('Il ne reste plus aucun lot de cet aliment en stock.');
+
+        return $this->json(['id' => (string) $item->getId()]);
     }
 
     /**
