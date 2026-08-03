@@ -11,6 +11,7 @@ use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Service\Freshness\EffectiveUseBy;
 use App\Service\Freshness\EffectiveUseByCalculator;
+use App\Service\Food\FoodTermMatcher;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\Product\VariantIdentity;
 use App\Service\TextNormalizer;
@@ -28,8 +29,15 @@ class EffectiveUseByCalculatorTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->calculator = new EffectiveUseByCalculator(new ShelfLifeEstimator(new TextNormalizer()));
+        $this->calculator = new EffectiveUseByCalculator(self::estimator());
         $this->household = new Household('Foyer de test');
+    }
+
+    private static function estimator(): ShelfLifeEstimator
+    {
+        $normalizer = new TextNormalizer();
+
+        return new ShelfLifeEstimator($normalizer, new FoodTermMatcher($normalizer));
     }
 
     public function testAnUnopenedLotUsesOnlyThePrintedDate(): void

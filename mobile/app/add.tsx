@@ -4,8 +4,24 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
-import type { Product, ProductTraitValue, Reference, ShelfLifeEstimate, Unit } from '../src/api/types';
-import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
+import type {
+  FoodNature,
+  FoodProfile,
+  Product,
+  ProductTraitValue,
+  Reference,
+  Unit,
+} from '../src/api/types';
+import {
+  Button,
+  Card,
+  Chip,
+  ErrorBanner,
+  Field,
+  Loader,
+  SectionTitle,
+  Stepper,
+} from '../src/components/ui';
 import { colors, radius, spacing } from '../src/theme';
 
 /**
@@ -14,6 +30,10 @@ import { colors, radius, spacing } from '../src/theme';
  * Trois yaourts pour le 27 et deux pour le 3 août, c'est un seul passage en caisse
  * mais deux lots. Les fondre en un seul ferait mentir la date la plus proche —
  * donc les alertes, et la consommation FEFO.
+ *
+ * Pour un aliment frais compté à la pièce, `packages` EST le nombre de courgettes :
+ * une courgette est un exemplaire d'une pièce. Rien à convertir, et la notion
+ * d'exemplaire cesse d'elle-même d'avoir un sens visible.
  */
 type Batch = {
   id: number;
@@ -27,6 +47,11 @@ let nextBatchId = 1;
 
 function newBatch(packages = '1'): Batch {
   return { id: nextBatchId++, packages, expiration: null, estimate: false };
+}
+
+/** Les unités qui se comptent : la saisie y devient un compteur, pas un clavier. */
+function isCountedUnit(unit: Unit): boolean {
+  return unit === 'piece' || unit === 'portion';
 }
 
 export default function AddScreen() {
@@ -46,10 +71,20 @@ export default function AddScreen() {
   const [traits, setTraits] = useState<ProductTraitValue[]>([]);
   const [batches, setBatches] = useState<Batch[]>([newBatch()]);
   const [pickerFor, setPickerFor] = useState<number | null>(null);
-  const [freshness, setFreshness] = useState<ShelfLifeEstimate | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /** Ce que le serveur sait de l'aliment : sa nature, son unité naturelle, sa conservation. */
+  const [profile, setProfile] = useState<FoodProfile | null>(null);
+  /** Nature corrigée à la main — elle prime toujours sur la déduction. */
+  const [natureOverride, setNatureOverride] = useState<FoodNature | null>(null);
+  /**
+   * L'unité a été choisie explicitement : le profil ne doit plus la remplacer.
+   * Sans ce drapeau, passer une courgette « en grammes » se défaisait tout seul
+   * au prochain rafraîchissement du profil.
+   */
+  const unitTouched = useRef(false);
 
   /**
    * Conservée jusqu'au succès : un double appui, ou une réponse réseau perdue
@@ -75,8 +110,13 @@ export default function AddScreen() {
             setBrand(found.product.brand ?? '');
             // L'état déjà déduit du libellé par le serveur reste modifiable ici.
             setTraits(found.product.traits);
+            // Un code-barres décrit un conditionnement : sa contenance est une
+            // vraie information, elle prime donc sur l'unité naturelle du profil.
             if (found.product.packageQuantity) setQuantity(String(found.product.packageQuantity));
-            if (found.product.packageUnit) setUnit(found.product.packageUnit);
+            if (found.product.packageUnit) {
+              setUnit(found.product.packageUnit);
+              unitTouched.current = true;
+            }
           } catch (exception) {
             // La base est collaborative : un produit absent bascule sur la saisie manuelle.
             if (!cancelled) {
@@ -102,48 +142,116 @@ export default function AddScreen() {
     };
   }, [barcode]);
 
+  const effectiveName = (product?.name ?? name).trim();
+
+  /**
+   * Demande au serveur de quel genre d'aliment il s'agit, dès que son nom est
+   * connu — et à chaque fois que ce qui pourrait changer la réponse change.
+   *
+   * C'est cette réponse qui décide du formulaire. La poser après coup, comme le
+   * faisait l'ancienne estimation de fraîcheur, revenait à demander « combien
+   * d'exemplaires, et quel poids chacun ? » pour une courgette : deux questions
+   * qui n'existent pas.
+   */
+  useEffect(() => {
+    if (effectiveName.length < 3) {
+      setProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const found = await api.foodProfile({
+          name: effectiveName,
+          category: product?.category,
+          storageLocation: location,
+          traits,
+          scanned: Boolean(product?.barcode),
+        });
+        if (!cancelled) setProfile(found);
+      } catch {
+        // Un profil indisponible ne bloque pas une saisie : on retombe sur le
+        // formulaire du conditionné, qui est le comportement d'avant.
+        if (!cancelled) setProfile(null);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [effectiveName, product?.category, product?.barcode, location, traits]);
+
+  const nature: FoodNature = natureOverride ?? profile?.nature ?? 'packaged';
+  const isFresh = nature === 'fresh';
+
+  // Un aliment frais adopte l'unité que le lexique lui connaît, tant que personne
+  // n'en a choisi une autre. Faute de lexique, les grammes restent le repli.
+  useEffect(() => {
+    if (!isFresh || unitTouched.current || !profile?.naturalUnit) return;
+    setUnit(profile.naturalUnit);
+  }, [isFresh, profile?.naturalUnit]);
+
+  const counted = isFresh && isCountedUnit(unit);
+
+  /**
+   * Une date estimée, posée d'office et affichée.
+   *
+   * Un aliment frais ne porte aucune date imprimée. Tant qu'il fallait penser à
+   * toucher « Pas de date : estimer », il entrait le plus souvent sans date : pas
+   * d'alerte, pas de « Aujourd'hui », pas de priorité en cuisine. L'aliment qui
+   * pourrit était exactement celui que l'application ne voyait pas.
+   *
+   * Elle n'écrase jamais une date choisie à la main — seulement une case vide ou
+   * une estimation précédente, que le changement de rangement rend caduque.
+   */
+  useEffect(() => {
+    if (!isFresh || !profile) return;
+
+    const until = fromIsoDate(profile.shelfLife.until);
+    setBatches((current) =>
+      current.map((batch) =>
+        batch.expiration === null || batch.estimate
+          ? { ...batch, expiration: until, estimate: true }
+          : batch,
+      ),
+    );
+  }, [isFresh, profile?.shelfLife.until]);
+
   const total = useMemo(() => {
-    const per = Number(quantity.replace(',', '.')) || 0;
     const count = batches.reduce(
       (sum, batch) => sum + Math.max(1, Math.round(Number(batch.packages.replace(',', '.')) || 1)),
       0,
     );
+
+    // Un aliment frais compté : chaque exemplaire vaut une pièce, le total EST
+    // le compte. Sinon, c'est bien « exemplaires × contenance ».
+    if (counted) return count;
+
+    const per = Number(quantity.replace(',', '.')) || 0;
     return count * per;
-  }, [batches, quantity]);
+  }, [batches, quantity, counted]);
 
-  const effectiveName = (product?.name ?? name).trim();
+  /** « courgettes », « portions » — ce que le compteur compte réellement. */
+  const countedLabel = useMemo(() => {
+    if (unit === 'portion') return 'portions';
+    const label = (product?.name ?? name).trim().toLowerCase();
+    return label.length > 0 ? label : 'unités';
+  }, [unit, product?.name, name]);
 
-  /**
-   * Demande au serveur combien de temps cet aliment se garde là où il est rangé.
-   *
-   * L'estimation est affichée avec sa justification : une date déduite qu'on ne
-   * peut pas discuter finirait par n'être crue par personne.
-   */
-  async function estimateFreshness(batchId: number) {
-    if (!effectiveName) {
-      setError('Indiquez d\'abord le nom de l\'aliment pour estimer sa fraîcheur.');
-      return;
-    }
+  const unitLabel = reference?.units.find((option) => option.value === unit)?.label ?? unit;
 
-    try {
-      const estimate = await api.shelfLife({
-        name: effectiveName,
-        category: product?.category,
-        storageLocation: location,
-        traits,
-      });
-      setFreshness(estimate);
-      setBatches((current) =>
-        current.map((batch) =>
-          batch.id === batchId
-            ? { ...batch, estimate: true, expiration: fromIsoDate(estimate.until) }
-            : batch,
-        ),
-      );
-    } catch (exception) {
-      setError(exception instanceof Error ? exception.message : 'Estimation impossible.');
-    }
-  }
+  /** Les unités proposées au frais pesé : sa famille, et rien d'autre. */
+  const freshWeighedUnits = useMemo(
+    () =>
+      (reference?.units ?? []).filter((option) =>
+        unit === 'ml' || unit === 'cl' || unit === 'l'
+          ? option.value === 'ml' || option.value === 'cl' || option.value === 'l'
+          : option.value === 'g' || option.value === 'kg',
+      ),
+    [reference?.units, unit],
+  );
 
   function updateBatch(id: number, changes: Partial<Batch>) {
     setBatches((current) =>
@@ -151,12 +259,35 @@ export default function AddScreen() {
     );
   }
 
+  /** Applique au lot demandé l'estimation déjà connue du profil. */
+  function estimateFor(batchId: number) {
+    if (!profile) {
+      setError('Indiquez d\'abord le nom de l\'aliment pour estimer sa fraîcheur.');
+      return;
+    }
+
+    updateBatch(batchId, { estimate: true, expiration: fromIsoDate(profile.shelfLife.until) });
+  }
+
+  /** Repasse un aliment frais du compteur à la balance, et inversement. */
+  function switchCounting(to: Unit) {
+    unitTouched.current = true;
+    setUnit(to);
+    if (isCountedUnit(to)) setQuantity('');
+  }
+
   async function submit() {
     setError(null);
 
-    const perPackage = Number(quantity.replace(',', '.'));
+    // Un aliment compté n'a rien à saisir de plus : chaque exemplaire vaut une pièce.
+    const perPackage = counted ? 1 : Number(quantity.replace(',', '.'));
+
     if (!Number.isFinite(perPackage) || perPackage <= 0) {
-      setError('Indiquez une quantité par exemplaire strictement positive.');
+      setError(
+        isFresh
+          ? 'Indiquez une quantité strictement positive.'
+          : 'Indiquez une quantité par exemplaire strictement positive.',
+      );
       return;
     }
     if (!product && !name.trim()) {
@@ -180,6 +311,9 @@ export default function AddScreen() {
           storageLocation: location,
           // Sans sélection, le serveur déduit l'état du libellé plutôt que de le vider.
           traits: traits.length > 0 ? traits : undefined,
+          // Envoyée seulement si quelqu'un a corrigé la nature détectée : sinon
+          // le serveur la déduit lui-même, et retient sa propre déduction.
+          nature: natureOverride ?? undefined,
           note: note.trim() || undefined,
           // Une ligne par date : le serveur crée les lots en une seule transaction.
           batches: batches.map((batch) => ({
@@ -218,7 +352,7 @@ export default function AddScreen() {
               <Image source={{ uri: product.imageUrl }} style={styles.thumb} />
             ) : (
               <View style={[styles.thumb, styles.thumbEmpty]}>
-                <Text style={styles.thumbGlyph}>🥫</Text>
+                <Text style={styles.thumbGlyph}>{isFresh ? '🥬' : '🥫'}</Text>
               </View>
             )}
             <View style={styles.flex}>
@@ -246,65 +380,110 @@ export default function AddScreen() {
             label="Nom de l'aliment"
             value={name}
             onChangeText={setName}
-            placeholder="Tomates, riz, reste de gratin…"
+            placeholder="Courgettes, riz, reste de gratin…"
           />
           <Field label="Marque (facultatif)" value={brand} onChangeText={setBrand} />
         </>
       )}
 
-      <SectionTitle>Ce que vous ajoutez réellement</SectionTitle>
+      <SectionTitle>Combien en ajoutez-vous ?</SectionTitle>
 
-      {/* « 500 » en gris se lisait comme une valeur déjà saisie : on appuyait sur
-          « Ajouter au stock » et le formulaire refusait un champ qui semblait
-          rempli. Un exemple explicite ne peut plus être confondu avec une saisie. */}
-      <Field
-        label="Quantité par exemplaire"
-        value={quantity}
-        onChangeText={setQuantity}
-        keyboardType="decimal-pad"
-        placeholder="ex. 500"
-        hint="Le contenu d'UN paquet, pas le total : 3 sachets de 500 g, c'est 500."
-      />
-
-      <Text style={styles.fieldLabel}>Unité</Text>
-      <View style={styles.chips}>
-        {compatibleUnits.map((option) => (
-          <Chip
-            key={option.value}
-            label={option.label}
-            selected={unit === option.value}
-            onPress={() => setUnit(option.value as Unit)}
+      {counted ? (
+        /* Le cas de la courgette : un seul chiffre, et rien d'autre. Un exemplaire
+           vaut une pièce, donc le compteur du lot EST le nombre de courgettes. */
+        <>
+          {batches.length === 1 ? (
+            <Stepper
+              label="Quantité"
+              value={Math.max(1, Math.round(Number(batches[0].packages) || 1))}
+              unitLabel={countedLabel}
+              onChange={(value) => updateBatch(batches[0].id, { packages: String(value) })}
+            />
+          ) : (
+            /* Plusieurs dates : chaque lot porte sa propre quantité plus bas. Un
+               compteur en tête ne piloterait que le premier, et mentirait sur le total. */
+            <Text style={styles.help}>
+              {formatNumber(total)} {countedLabel} au total, réparties par date ci-dessous.
+            </Text>
+          )}
+          <Pressable
+            onPress={() => switchCounting('g')}
+            accessibilityRole="button"
+            accessibilityLabel="Compter en grammes plutôt qu'à l'unité"
+            style={styles.switchLink}
+          >
+            <Text style={styles.switchLinkText}>Je préfère le peser ›</Text>
+          </Pressable>
+        </>
+      ) : isFresh ? (
+        /* Frais mais pesé — 500 g de champignons, 1,5 kg de pommes de terre.
+           Toujours une seule quantité : il n'y a pas d'emballage à décrire. */
+        <>
+          <Field
+            label="Quantité"
+            value={quantity}
+            onChangeText={setQuantity}
+            keyboardType="decimal-pad"
+            placeholder="ex. 500"
           />
-        ))}
-      </View>
+          <Text style={styles.fieldLabel}>Unité</Text>
+          <View style={styles.chips}>
+            {freshWeighedUnits.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={unit === option.value}
+                onPress={() => switchCounting(option.value as Unit)}
+              />
+            ))}
+          </View>
+          {profile?.naturalUnit && isCountedUnit(profile.naturalUnit) ? (
+            <Pressable
+              onPress={() => switchCounting(profile.naturalUnit as Unit)}
+              accessibilityRole="button"
+              accessibilityLabel="Compter à l'unité plutôt que peser"
+              style={styles.switchLink}
+            >
+              <Text style={styles.switchLinkText}>Je préfère les compter ›</Text>
+            </Pressable>
+          ) : null}
+        </>
+      ) : (
+        /* Produit conditionné : « exemplaires × contenance » décrit exactement ce
+           qu'on rapporte des courses, et reste donc inchangé.
 
-      {total > 0 ? (
+           « 500 » en gris se lisait comme une valeur déjà saisie : on appuyait sur
+           « Ajouter au stock » et le formulaire refusait un champ qui semblait
+           rempli. Un exemple explicite ne peut plus être confondu avec une saisie. */
+        <>
+          <Field
+            label="Quantité par exemplaire"
+            value={quantity}
+            onChangeText={setQuantity}
+            keyboardType="decimal-pad"
+            placeholder="ex. 500"
+            hint="Le contenu d'UN paquet, pas le total : 3 sachets de 500 g, c'est 500."
+          />
+
+          <Text style={styles.fieldLabel}>Unité</Text>
+          <View style={styles.chips}>
+            {compatibleUnits.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={unit === option.value}
+                onPress={() => switchCounting(option.value as Unit)}
+              />
+            ))}
+          </View>
+        </>
+      )}
+
+      {total > 0 && !counted ? (
         <Text style={styles.total}>
-          Total ajouté au stock : {formatNumber(total)} {unit}
+          Total ajouté au stock : {formatNumber(total)} {unitLabel}
         </Text>
       ) : null}
-
-      <SectionTitle>Dans quel état est-il ?</SectionTitle>
-      <Text style={styles.help}>
-        Ce que les recettes doivent savoir : des pommes de terre en conserve ne s'épluchent
-        pas, un légume surgelé se décongèle.
-      </Text>
-      <View style={styles.chips}>
-        {reference?.productTraits.map((option) => (
-          <Chip
-            key={option.value}
-            label={option.label}
-            selected={traits.includes(option.value)}
-            onPress={() =>
-              setTraits((current) =>
-                current.includes(option.value)
-                  ? current.filter((trait) => trait !== option.value)
-                  : [...current, option.value],
-              )
-            }
-          />
-        ))}
-      </View>
 
       <SectionTitle>Où est-il rangé ?</SectionTitle>
       <View style={styles.chips}>
@@ -318,17 +497,18 @@ export default function AddScreen() {
         ))}
       </View>
 
-      <SectionTitle>Dates de péremption</SectionTitle>
+      <SectionTitle>{isFresh ? 'À consommer avant' : 'Dates de péremption'}</SectionTitle>
       <Text style={styles.help}>
-        Une ligne par date. Trois yaourts pour le 27 et deux pour le 3 août font deux
-        lots : c'est ce qui permet de consommer le plus urgent en premier.
+        {isFresh
+          ? 'Un produit frais ne porte pas de date : celle-ci est estimée, et signalée comme telle dans votre stock. Corrigez-la si vous en savez plus.'
+          : 'Une ligne par date. Trois yaourts pour le 27 et deux pour le 3 août font deux lots : c\'est ce qui permet de consommer le plus urgent en premier.'}
       </Text>
 
       {batches.map((batch, position) => (
         <Card key={batch.id} style={styles.batchCard}>
-          <View style={styles.batchHeader}>
-            <Text style={styles.batchTitle}>Lot {position + 1}</Text>
-            {batches.length > 1 ? (
+          {batches.length > 1 ? (
+            <View style={styles.batchHeader}>
+              <Text style={styles.batchTitle}>Lot {position + 1}</Text>
               <Pressable
                 onPress={() => setBatches((current) => current.filter((entry) => entry.id !== batch.id))}
                 accessibilityRole="button"
@@ -336,17 +516,22 @@ export default function AddScreen() {
               >
                 <Text style={styles.clearDateText}>Retirer</Text>
               </Pressable>
-            ) : null}
-          </View>
+            </View>
+          ) : null}
 
           <View style={styles.pair}>
-            <Field
-              label="Exemplaires"
-              value={batch.packages}
-              onChangeText={(value) => updateBatch(batch.id, { packages: value })}
-              keyboardType="number-pad"
-              containerStyle={styles.pairInput}
-            />
+            {/* Le nombre d'exemplaires est déjà porté par le compteur du haut pour
+                un aliment frais compté : le redemander ici serait la question de
+                trop, celle-là même qu'on a retirée. */}
+            {counted && batches.length === 1 ? null : (
+              <Field
+                label={counted ? 'Quantité' : 'Exemplaires'}
+                value={batch.packages}
+                onChangeText={(value) => updateBatch(batch.id, { packages: value })}
+                keyboardType="number-pad"
+                containerStyle={styles.pairInput}
+              />
+            )}
             <View style={styles.pairInput}>
               <Text style={styles.fieldLabel}>À consommer avant</Text>
               <Pressable
@@ -382,12 +567,15 @@ export default function AddScreen() {
                 }
               />
             ))}
-            {/* Fruits, légumes, vrac, restes : rien n'est imprimé sur l'emballage. */}
-            <Chip
-              label="Pas de date : estimer"
-              selected={batch.estimate}
-              onPress={() => estimateFreshness(batch.id)}
-            />
+            {/* Le conditionné n'est pas daté d'office : sa date est imprimée, et
+                l'estimer à sa place l'écraserait par une valeur moins fiable. */}
+            {!isFresh ? (
+              <Chip
+                label="Pas de date : estimer"
+                selected={batch.estimate}
+                onPress={() => estimateFor(batch.id)}
+              />
+            ) : null}
             {batch.expiration ? (
               <Chip
                 label="Effacer"
@@ -397,10 +585,10 @@ export default function AddScreen() {
             ) : null}
           </View>
 
-          {batch.estimate && freshness ? (
+          {batch.estimate && profile ? (
             <Text style={styles.estimateHint}>
-              Estimation, pas une date lue : {freshness.explanation} Elle sera signalée
-              comme telle dans votre stock.
+              Estimation, pas une date lue : {profile.shelfLife.explanation} Elle sera
+              signalée comme telle dans votre stock.
             </Text>
           ) : null}
         </Card>
@@ -409,7 +597,16 @@ export default function AddScreen() {
       <Button
         label="Ajouter une autre date"
         variant="secondary"
-        onPress={() => setBatches((current) => [...current, newBatch()])}
+        onPress={() =>
+          setBatches((current) => [
+            ...current,
+            // Le nouveau lot hérite de l'estimation en cours : deux achats du même
+            // aliment le même jour se conservent aussi longtemps l'un que l'autre.
+            isFresh && profile
+              ? { ...newBatch(), expiration: fromIsoDate(profile.shelfLife.until), estimate: true }
+              : newBatch(),
+          ])
+        }
       />
 
       {pickerFor !== null ? (
@@ -425,6 +622,43 @@ export default function AddScreen() {
           }}
         />
       ) : null}
+
+      <SectionTitle>Dans quel état est-il ?</SectionTitle>
+      <Text style={styles.help}>
+        Ce que les recettes doivent savoir : des pommes de terre en conserve ne s'épluchent
+        pas, un légume surgelé se décongèle.
+      </Text>
+
+      {/* La nature est déduite, et se corrige d'un appui. Elle décide du formulaire
+          ci-dessus, mais aussi du rang de l'aliment quand on demande une recette :
+          un légume frais passe devant une conserve. */}
+      <View style={styles.chips}>
+        {(['fresh', 'packaged'] as const).map((option) => (
+          <Chip
+            key={option}
+            label={option === 'fresh' ? 'Produit frais' : 'Produit conditionné'}
+            selected={nature === option}
+            onPress={() => setNatureOverride(option)}
+          />
+        ))}
+      </View>
+
+      <View style={styles.chips}>
+        {reference?.productTraits.map((option) => (
+          <Chip
+            key={option.value}
+            label={option.label}
+            selected={traits.includes(option.value)}
+            onPress={() =>
+              setTraits((current) =>
+                current.includes(option.value)
+                  ? current.filter((trait) => trait !== option.value)
+                  : [...current, option.value],
+              )
+            }
+          />
+        ))}
+      </View>
 
       <Field
         label="Note (facultatif)"
@@ -492,6 +726,8 @@ const styles = StyleSheet.create({
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   help: { fontSize: 13, color: colors.inkMuted, lineHeight: 19, marginBottom: spacing.md },
+  switchLink: { alignSelf: 'flex-end', paddingVertical: spacing.xs, marginBottom: spacing.md },
+  switchLinkText: { fontSize: 14, fontWeight: '600', color: colors.primary },
   total: {
     fontSize: 15,
     fontWeight: '600',

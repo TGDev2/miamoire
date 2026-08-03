@@ -47,6 +47,19 @@ final readonly class InventoryLine
         public array $traits = [],
         public array $notes = [],
         public array $buckets = [],
+        /**
+         * Un aliment frais se dégrade dès l'achat, une conserve attend des années.
+         * Les traiter à égalité tant que la date n'est pas proche, c'est perdre le
+         * frais — le tri et le modèle en tiennent compte tous les deux.
+         */
+        public bool $perishable = false,
+        /**
+         * Poids indicatif d'une pièce, pour que le modèle puisse écrire « environ
+         * 500 g de courgettes » tout en demandant « 2 pièces » au stock. Jamais une
+         * conversion : `UnitConverter` refuse délibérément de franchir les familles
+         * d'unité, et ce refus protège l'inventaire.
+         */
+        public ?int $approxPieceWeight = null,
     ) {
     }
 
@@ -66,6 +79,16 @@ final readonly class InventoryLine
                 $this->buckets,
             ),
         ];
+
+        // Le frais passe avant le stable dès que les dates ne tranchent pas : une
+        // courgette attend une semaine, une boîte de pois chiches attend deux ans.
+        if ($this->perishable) {
+            $payload['perishable'] = true;
+        }
+
+        if (null !== $this->approxPieceWeight && Unit::Piece === $this->unit) {
+            $payload['approxWeightPerPiece'] = sprintf('%d g', $this->approxPieceWeight);
+        }
 
         // Ces trois champs décrivent l'aliment lui-même : sans eux, le modèle
         // propose d'éplucher des pommes de terre déjà pelées par le conserveur.

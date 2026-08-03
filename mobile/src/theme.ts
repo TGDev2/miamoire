@@ -59,6 +59,9 @@ export const statusPresentation: Record<string, { label: string; color: string; 
   running_low: { label: 'Bientôt terminé', color: colors.accent, background: colors.accentSoft },
   opened: { label: 'Entamé', color: colors.info, background: colors.infoSoft },
   resealed: { label: 'Entamé et refermé', color: colors.info, background: colors.infoSoft },
+  // Un produit frais n'a pas d'emballage : « Fermé » ne décrivait rien de réel
+  // sur une courgette. Voir EffectiveUseByCalculator::status().
+  fresh: { label: 'Frais', color: colors.primary, background: colors.primarySoft },
   sealed: { label: 'Fermé', color: colors.primary, background: colors.primarySoft },
   empty: { label: 'Épuisé', color: colors.inkMuted, background: colors.surfaceMuted },
 };

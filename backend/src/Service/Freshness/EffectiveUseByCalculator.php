@@ -67,6 +67,11 @@ class EffectiveUseByCalculator
      * sur l'échéance effective plutôt que sur la seule date imprimée/estimée,
      * et distingue désormais un exemplaire entamé refermé d'un exemplaire
      * ouvert.
+     *
+     * Les trois derniers états décrivent un emballage, et un produit frais n'en a
+     * pas : une courgette s'affichait « Fermé » sur la liste de stock, ce qui ne
+     * décrit rien de réel. Elle est simplement « Frais » tant que sa date le
+     * permet — les états d'urgence, eux, valent pour tout le monde.
      */
     public function status(StockItem $item): string
     {
@@ -76,6 +81,7 @@ class EffectiveUseByCalculator
             $this->isExpired($item) => 'expired',
             $this->isExpiringSoon($item) => 'expiring_soon',
             $item->isRunningLow() => 'running_low',
+            $item->getVariant()->isFresh() => 'fresh',
             $item->isPackageResealed() => 'resealed',
             $item->isOpened() => 'opened',
             default => 'sealed',

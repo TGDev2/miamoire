@@ -21,6 +21,8 @@ export type ProductTraitValue =
 
 export type StockStatus =
   | 'sealed'
+  /** Produit frais : il n'a pas d'emballage, donc il n'est ni fermé ni entamé. */
+  | 'fresh'
   | 'opened'
   /** Entamé, refermé sans être fini : reste prioritaire, juste rangé différemment. */
   | 'resealed'
@@ -116,6 +118,10 @@ export interface ProductVariant {
   unitFamily: UnitFamily;
   nameOrigin: DataOrigin;
   traitsOrigin: DataOrigin;
+  /** Frais ou conditionné : décide du formulaire de saisie et du vocabulaire de la fiche. */
+  nature: FoodNature;
+  natureLabel: string;
+  natureOrigin: DataOrigin;
   /** Ce qui vient du catalogue partagé, non modifiable localement. */
   productId: string | null;
   barcode: string | null;
@@ -282,6 +288,32 @@ export interface ShelfLifeEstimate {
   explanation: string;
 }
 
+/**
+ * Un aliment est-il protégé par son emballage, ou se dégrade-t-il déjà ?
+ *
+ * Tout le formulaire d'ajout en découle. Une courgette n'a ni « exemplaires »,
+ * ni « quantité par exemplaire », ni date imprimée : lui poser ces questions
+ * revenait à lui demander d'inventer un poids qu'elle ne connaît pas.
+ */
+export type FoodNature = 'fresh' | 'packaged';
+
+/**
+ * Ce que le serveur sait d'un aliment avant même qu'on l'ajoute — de quel genre
+ * il est, dans quelle unité il se saisit, et combien de temps il se garde.
+ *
+ * `naturalUnit` n'est renseignée que pour un aliment frais reconnu : c'est la
+ * seule situation où l'application a mieux à proposer que « grammes ».
+ */
+export interface FoodProfile {
+  nature: FoodNature;
+  natureLabel: string;
+  naturalUnit: Unit | null;
+  naturalUnitLabel: string | null;
+  /** Poids indicatif d'une pièce, transmis au générateur de recettes. */
+  approxPieceWeight: number | null;
+  shelfLife: ShelfLifeEstimate;
+}
+
 export interface Member {
   id: string;
   firstName: string;
@@ -347,6 +379,11 @@ export interface InventoryIngredient {
   unitLabel: string;
   /** Dérivé de `deadlines` : vrai si au moins un groupe l'est. */
   expiresSoon: boolean;
+  /**
+   * Produit frais : il se dégrade dès l'achat, là où une conserve attend deux
+   * ans. Les recettes le privilégient juste après ce qui périme sous trois jours.
+   */
+  perishable: boolean;
   /** Dérivé de `deadlines` : au moins un exemplaire est entamé, les recettes le privilégient. */
   alreadyOpened: boolean;
   earliestExpiration: string | null;

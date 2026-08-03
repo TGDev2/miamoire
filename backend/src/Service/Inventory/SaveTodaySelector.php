@@ -85,9 +85,15 @@ class SaveTodaySelector
             $reasons[] = UrgencyReason::ExpiringSoon;
         }
 
-        // Congelé, un exemplaire entamé n'est plus une urgence : la congélation
-        // suspend justement le mûrissement que ce motif signale.
-        if ($item->isOpened() && StorageLocation::Freezer !== $item->getStorageLocation()) {
+        // Deux cas où « entamé » ne dit rien d'utile :
+        //
+        // - congelé, le mûrissement que ce motif signale est justement suspendu ;
+        // - frais, il n'y a pas d'emballage à entamer. Un sac de pommes de terre
+        //   ouvert n'est pas une urgence : son urgence vient de sa date, qui
+        //   existe désormais toujours puisqu'elle est estimée d'office.
+        if ($item->isOpened()
+            && StorageLocation::Freezer !== $item->getStorageLocation()
+            && !$item->getVariant()->isFresh()) {
             $reasons[] = UrgencyReason::Opened;
         }
 

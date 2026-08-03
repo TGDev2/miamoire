@@ -50,9 +50,17 @@ export function IngredientPicker({
   const atLimit = selectedKeys.length >= max;
 
   /**
-   * Deux groupes, et le premier est la raison d'être de l'écran : on impose
-   * presque toujours un aliment parce qu'il faut l'écouler. La recherche, elle,
-   * porte sur tout — chercher « poulet » ne doit pas dépendre de sa fraîcheur.
+   * Trois groupes, dans l'ordre où ils se perdent — le même que celui qui classe
+   * l'inventaire envoyé au modèle, pour que l'écran et la génération ne puissent
+   * pas se contredire :
+   *
+   * 1. ce qui périme sous trois jours, ou ce qui est déjà entamé ;
+   * 2. les produits frais, qui se dégradent bien avant leur date là où une
+   *    conserve attend deux ans ;
+   * 3. le reste.
+   *
+   * La recherche, elle, porte sur tout — chercher « poulet » ne doit pas dépendre
+   * de sa fraîcheur.
    */
   const sections = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -61,10 +69,16 @@ export function IngredientPicker({
       : ingredients;
 
     const urgent = matching.filter((entry) => entry.expiresSoon || entry.alreadyOpened);
-    const rest = matching.filter((entry) => !entry.expiresSoon && !entry.alreadyOpened);
+    const fresh = matching.filter(
+      (entry) => !entry.expiresSoon && !entry.alreadyOpened && entry.perishable,
+    );
+    const rest = matching.filter(
+      (entry) => !entry.expiresSoon && !entry.alreadyOpened && !entry.perishable,
+    );
 
     return [
       { title: 'À écouler en priorité', data: urgent },
+      { title: 'Produits frais', data: fresh },
       { title: 'Tout l\'inventaire', data: rest },
     ].filter((section) => section.data.length > 0);
   }, [ingredients, search]);
@@ -271,7 +285,9 @@ function describeDeadlines(item: InventoryIngredient): string {
   return [
     `${item.quantity} ${item.unitLabel}`,
     item.expiresSoon ? 'périme bientôt' : null,
-    item.alreadyOpened ? 'paquet entamé' : null,
+    // « paquet entamé » ne veut rien dire d'un produit frais : il n'a pas d'emballage.
+    item.alreadyOpened && !item.perishable ? 'paquet entamé' : null,
+    item.perishable && !item.expiresSoon ? 'produit frais' : null,
   ]
     .filter(Boolean)
     .join(' · ');

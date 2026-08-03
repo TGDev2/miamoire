@@ -3,6 +3,8 @@ import type {
   ConfirmationResponse,
   ConsumptionLine,
   DietaryExclusion,
+  FoodNature,
+  FoodProfile,
   Household,
   HouseholdWithKey,
   InventorySummary,
@@ -21,7 +23,6 @@ import type {
   ReviewCandidate,
   SavedRecipe,
   SaveTodayCandidate,
-  ShelfLifeEstimate,
   ShoppingAdvisorCandidate,
   ShoppingListItem,
   StockItem,
@@ -185,6 +186,11 @@ export interface CreateStockItemInput {
   quantityIsEstimated?: boolean;
   /** Omis, l'état est déduit du libellé côté serveur. */
   traits?: ProductTraitValue[];
+  /**
+   * Envoyée seulement quand quelqu'un a corrigé la nature détectée : elle est
+   * alors retenue par la variante et ne sera plus jamais redéduite.
+   */
+  nature?: FoodNature;
   /** Une entrée par date de péremption. Omis, un seul lot est créé. */
   batches?: StockBatchInput[];
 }
@@ -317,19 +323,33 @@ export const api = {
   restoreStockItem: (id: string, operationKey: string) =>
     request<StockItem>(`/stock-items/${id}/restore`, { method: 'POST', body: { operationKey } }),
 
-  /** Combien de temps cet aliment se garde-t-il, et pourquoi. */
-  shelfLife: (params: {
+  /**
+   * De quel genre d'aliment s'agit-il, dans quelle unité se saisit-il, et
+   * combien de temps se garde-t-il ?
+   *
+   * Appelée AVANT de dessiner le formulaire d'ajout : la nature décide des
+   * champs à montrer. Demander « quel poids par exemplaire ? » pour une
+   * courgette est une question qui n'existe pas.
+   */
+  foodProfile: (params: {
     name: string;
     category?: string | null;
     storageLocation?: string;
     traits?: ProductTraitValue[];
+    /**
+     * Le libellé vient d'une fiche à code-barres. Un code-barres est un
+     * emballage, et un emballage porte sa date : c'est ce qui distingue une
+     * courgette du marché d'une barquette de courgettes déjà datée.
+     */
+    scanned?: boolean;
   }) => {
     const query = new URLSearchParams({ name: params.name });
     if (params.category) query.set('category', params.category);
     if (params.storageLocation) query.set('storageLocation', params.storageLocation);
     if (params.traits?.length) query.set('traits', params.traits.join(','));
+    if (params.scanned) query.set('scanned', '1');
 
-    return request<ShelfLifeEstimate>(`/products/shelf-life?${query.toString()}`);
+    return request<FoodProfile>(`/products/profile?${query.toString()}`);
   },
 
   consume: (id: string, body: Record<string, unknown>, operationKey: string) =>

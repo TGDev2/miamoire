@@ -6,6 +6,7 @@ namespace App\Tests\Service;
 
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
+use App\Service\Food\FoodTermMatcher;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\TextNormalizer;
 use PHPUnit\Framework\TestCase;
@@ -24,7 +25,12 @@ class ShelfLifeEstimatorTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->estimator = new ShelfLifeEstimator(new TextNormalizer());
+        $normalizer = new TextNormalizer();
+
+        // Le repérage des termes a été extrait dans FoodTermMatcher, partagé avec
+        // le lexique du frais. Seul ce câblage change : pas une assertion, ce qui
+        // est précisément ce que cette suite doit prouver.
+        $this->estimator = new ShelfLifeEstimator($normalizer, new FoodTermMatcher($normalizer));
     }
 
     public function testFreshProduceGetsAShortShelfLife(): void
@@ -71,6 +77,27 @@ class ShelfLifeEstimatorTest extends TestCase
 
         self::assertSame(365, $pasta->days);
         self::assertSame(4, $pate->days);
+    }
+
+    /**
+     * Un plat se nomme par sa forme, pas par son ingrédient.
+     *
+     * « Soupe de potiron » désignait `potiron`, plus long que `soupe` : la soupe
+     * héritait des soixante jours de placard d'une courge entière, alors qu'une
+     * soupe maison se garde trois jours. L'écart n'était pas une nuance, c'était
+     * un aliment avarié servi à table.
+     */
+    public function testAPreparedDishBeatsItsIngredient(): void
+    {
+        $soup = $this->estimator->estimate('Soupe de potiron', null, [], StorageLocation::Fridge);
+
+        self::assertSame('soupe', $soup->matched);
+        self::assertSame(3, $soup->days);
+
+        $gratin = $this->estimator->estimate('Gratin de pommes de terre', null, [], StorageLocation::Fridge);
+
+        self::assertSame('gratin', $gratin->matched);
+        self::assertSame(3, $gratin->days);
     }
 
     /** Le congélateur normalise tout : le légume précis n'a plus d'importance. */

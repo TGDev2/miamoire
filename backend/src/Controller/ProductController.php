@@ -13,6 +13,8 @@ use App\Http\RequestContext;
 use App\Repository\HouseholdProductVariantRepository;
 use App\Repository\ShoppingListItemRepository;
 use App\Repository\StockItemRepository;
+use App\Service\Food\FoodNatureDetector;
+use App\Service\Food\FreshFoodLexicon;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\ProductLookupService;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -87,16 +89,22 @@ class ProductController extends AbstractApiController
     }
 
     /**
-     * Combien de temps cet aliment se garde-t-il ?
+     * De quel genre d'aliment s'agit-il, et combien de temps se garde-t-il ?
      *
-     * Prévisualisation de l'estimation avant l'ajout : l'utilisateur voit la date
-     * proposée et sa justification, et peut la corriger. Une estimation qu'on ne
+     * Cette route ne répondait qu'à la seconde question. La première la précède
+     * pourtant : c'est elle qui décide du formulaire à afficher. Demander à
+     * quelqu'un « quel poids par exemplaire ? » pour une courgette est une question
+     * qui n'existe pas — il faut le savoir AVANT de dessiner l'écran, pas après.
+     *
+     * L'estimation reste renvoyée avec sa justification : une date déduite qu'on ne
      * peut pas discuter finirait par n'être crue par personne.
      */
-    #[Route('/shelf-life', methods: ['GET'])]
-    public function shelfLife(
+    #[Route('/profile', methods: ['GET'])]
+    public function profile(
         Request $request,
         RequestContext $context,
+        FoodNatureDetector $natureDetector,
+        FreshFoodLexicon $lexicon,
         ShelfLifeEstimator $estimator,
         ApiPresenter $presenter,
     ): JsonResponse {
@@ -105,23 +113,27 @@ class ProductController extends AbstractApiController
         $name = trim($request->query->getString('name'));
 
         if ('' === $name) {
-            throw new BadRequestHttpException('Indiquez le nom de l\'aliment à estimer.');
+            throw new BadRequestHttpException('Indiquez le nom de l\'aliment à décrire.');
         }
 
         $location = StorageLocation::tryFrom($request->query->getString('storageLocation'))
             ?? StorageLocation::Pantry;
+
+        $category = $request->query->getString('category') ?: null;
 
         $traits = ProductTrait::fromValues(array_values(array_filter(
             explode(',', $request->query->getString('traits')),
             static fn (string $value) => '' !== $value,
         )));
 
-        return $this->json($presenter->shelfLife($estimator->estimate(
-            $name,
-            $request->query->getString('category') ?: null,
-            $traits,
-            $location,
-        )));
+        return $this->json($presenter->foodProfile(
+            // `scanned` dit que le libellé vient d'une fiche à code-barres, donc
+            // d'un emballage : c'est ce qui distingue une courgette du marché
+            // d'une barquette de courgettes déjà datée.
+            $natureDetector->detect($name, $category, $traits, $request->query->getBoolean('scanned')),
+            $lexicon->find($name),
+            $estimator->estimate($name, $category, $traits, $location),
+        ));
     }
 
     /**

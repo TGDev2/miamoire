@@ -160,6 +160,18 @@ export default function StockItemScreen() {
 
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
 
+  /**
+   * Un produit frais n'a pas d'emballage, donc pas d'exemplaire à entamer ni à
+   * refermer. Tout le vocabulaire du conditionnement disparaît pour lui : parler
+   * d'« exemplaire entamé » à propos d'une courgette ne décrit rien de réel, et
+   * proposer de la « refermer » propose un geste qui n'existe pas.
+   *
+   * Le modèle de stock, lui, ne change pas : une courgette est un exemplaire
+   * d'une pièce, ce qui rend l'état « entamé » naturellement inatteignable pour
+   * un aliment compté (voir `add.tsx`).
+   */
+  const isFresh = item.variant.nature === 'fresh';
+
   // Deux unités d'une même famille se convertissent ; entre familles, il faut redonner la quantité.
   const currentUnitFamily = reference?.units.find((option) => option.value === item.unit)?.family;
   const traitLabels = (reference?.productTraits ?? [])
@@ -203,7 +215,7 @@ export default function StockItemScreen() {
       {/* Un lot n'est pas un tas : trois sachets de 500 g dont un entamé ne
           se résument pas à « 1,25 kg ». Voir quel exemplaire est ouvert évite
           d'en déballer un second alors qu'il en reste dans le premier. */}
-      {item.packages.length > 0 ? (
+      {item.packages.length > 0 && !isFresh ? (
         <>
           <SectionTitle>Exemplaires</SectionTitle>
           <View style={styles.packages}>
@@ -338,26 +350,33 @@ export default function StockItemScreen() {
           disabled={busy}
           style={styles.gridItem}
         />
-        <Button
-          label="Retirer un exemplaire"
-          variant="secondary"
-          onPress={() =>
-            run('consume-package', (operationKey) => api.consume(id, { mode: 'package' }, operationKey))
-          }
-          disabled={busy}
-          style={styles.gridItem}
-        />
+        {/* Un produit frais compté se retire déjà à l'unité par le −1 ci-dessus :
+            « retirer un exemplaire » ferait deux boutons pour un seul geste. */}
+        {isFresh && item.isDiscreteUnit ? null : (
+          <Button
+            label={isFresh ? 'Retirer une portion' : 'Retirer un exemplaire'}
+            variant="secondary"
+            onPress={() =>
+              run('consume-package', (operationKey) => api.consume(id, { mode: 'package' }, operationKey))
+            }
+            disabled={busy}
+            style={styles.gridItem}
+          />
+        )}
         {/* Le geste porte sur UN exemplaire : ouvrir un lot de trois sachets
-            n'en entame qu'un, les deux autres restent scellés. */}
-        <Button
-          label={item.isOpened ? 'Refermer l\'exemplaire entamé' : 'Entamer un exemplaire'}
-          variant="secondary"
-          onPress={() =>
-            run('toggle-opened', (operationKey) => api.setOpened(id, !item.isOpened, operationKey))
-          }
-          disabled={busy}
-          style={styles.gridItem}
-        />
+            n'en entame qu'un, les deux autres restent scellés. Sans objet sur un
+            produit frais, qui n'a pas d'emballage. */}
+        {isFresh ? null : (
+          <Button
+            label={item.isOpened ? 'Refermer l\'exemplaire entamé' : 'Entamer un exemplaire'}
+            variant="secondary"
+            onPress={() =>
+              run('toggle-opened', (operationKey) => api.setOpened(id, !item.isOpened, operationKey))
+            }
+            disabled={busy}
+            style={styles.gridItem}
+          />
+        )}
         <Button
           label="Ajouter une quantité"
           variant="secondary"
@@ -383,7 +402,7 @@ export default function StockItemScreen() {
       {/* Distinct de « Refermer », juste au-dessus : celui-ci garde la trace de
           l'exemplaire entamé, ce geste-ci l'efface — réservé à une vraie erreur
           de saisie, pas à un simple couvercle remis en place. */}
-      {item.isOpened ? (
+      {item.isOpened && !isFresh ? (
         <Button
           label="Corriger : annuler l'ouverture"
           variant="ghost"
@@ -563,6 +582,29 @@ export default function StockItemScreen() {
               </View>
             </View>
           ) : null}
+
+          {/* La nature décide de ce que cette fiche montre — exemplaires ou non —
+              et du rang de l'aliment quand on demande une recette : un légume frais
+              passe devant une conserve. La corriger ici la fixe définitivement. */}
+          <Text style={styles.label}>Nature de l'aliment</Text>
+          <Text style={styles.help}>
+            Un produit frais se dégrade dès l'achat et n'a pas d'emballage à entamer ; les
+            recettes le proposent en priorité.
+          </Text>
+          <View style={styles.chips}>
+            {(['fresh', 'packaged'] as const).map((option) => (
+              <Chip
+                key={option}
+                label={option === 'fresh' ? 'Produit frais' : 'Produit conditionné'}
+                selected={item.variant.nature === option}
+                onPress={() =>
+                  run(`nature-${option}`, (operationKey) =>
+                    api.updateStockItem(id, { nature: option }, operationKey),
+                  )
+                }
+              />
+            ))}
+          </View>
 
           <Text style={styles.label}>État du produit</Text>
           <Text style={styles.help}>

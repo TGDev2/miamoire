@@ -8,11 +8,13 @@ use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Product;
 use App\Enum\DataOrigin;
+use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Enum\Unit;
 use App\Enum\UnitFamily;
 use App\Exception\StockException;
 use App\Repository\HouseholdProductVariantRepository;
+use App\Service\Food\FoodNatureDetector;
 use App\Service\IngredientKeyGenerator;
 use App\Service\ProductTraitDetector;
 use Doctrine\ORM\EntityManagerInterface;
@@ -37,12 +39,15 @@ class VariantResolver
         private readonly HouseholdProductVariantRepository $variants,
         private readonly IngredientKeyGenerator $keyGenerator,
         private readonly ProductTraitDetector $traitDetector,
+        private readonly FoodNatureDetector $natureDetector,
         private readonly EntityManagerInterface $entityManager,
     ) {
     }
 
     /**
      * @param list<ProductTrait>|null $explicitTraits état choisi à la saisie ;
+     *                                                `null` = déduire du libellé
+     * @param FoodNature|null         $explicitNature nature corrigée à la saisie ;
      *                                                `null` = déduire du libellé
      */
     public function resolve(
@@ -53,6 +58,7 @@ class VariantResolver
         ?array $explicitTraits = null,
         ?string $brand = null,
         ?string $category = null,
+        ?FoodNature $explicitNature = null,
     ): HouseholdProductVariant {
         $label = trim($name);
         if ('' === $label) {
@@ -71,6 +77,10 @@ class VariantResolver
         if (null !== $existing) {
             $this->completeMissingData($existing, $product, $brand, $category);
 
+            if (null !== $explicitNature) {
+                $this->changeNature($existing, $explicitNature);
+            }
+
             return $existing;
         }
 
@@ -82,7 +92,33 @@ class VariantResolver
             null !== $explicitTraits ? DataOrigin::User : $traitsOrigin,
             $brand ?? $product?->getBrand(),
             $category ?? $product?->getCategory(),
+            $explicitNature ?? $this->natureDetector->detect(
+                $label,
+                $category ?? $product?->getCategory(),
+                $traits,
+                scanned: null !== $product?->getBarcode(),
+            ),
+            null !== $explicitNature ? DataOrigin::User : DataOrigin::Detected,
         );
+    }
+
+    /**
+     * Corrige la nature d'un aliment — « ce n'est pas un produit conditionné ».
+     *
+     * Aucune ré-identification : la nature ne fait pas partie de l'identité de la
+     * variante (voir {@see VariantIdentity}), la corriger ne peut donc jamais
+     * heurter une autre ligne d'inventaire ni scinder un stock.
+     */
+    public function changeNature(HouseholdProductVariant $variant, FoodNature $nature): HouseholdProductVariant
+    {
+        if ($nature === $variant->getNature() && DataOrigin::User === $variant->getNatureOrigin()) {
+            return $variant;
+        }
+
+        $variant->setNature($nature, DataOrigin::User);
+        $this->entityManager->flush();
+
+        return $variant;
     }
 
     /**
@@ -109,6 +145,10 @@ class VariantResolver
                 $variant->getTraitsOrigin(),
                 $variant->getBrand(),
                 $variant->getCategory(),
+                // Compter une courgette en grammes plutôt qu'en pièces ne la rend
+                // pas conditionnée : la nature suit le lot dans sa nouvelle famille.
+                $variant->getNature(),
+                $variant->getNatureOrigin(),
                 $variant->getNameOrigin(),
             );
     }
@@ -138,6 +178,7 @@ class VariantResolver
 
         $variant->setName($label);
         $variant->setNameOrigin(DataOrigin::User);
+        $this->refreshDetectedNature($variant, $variant->getTraits());
 
         return $this->reidentify($variant, $identity);
     }
@@ -156,8 +197,40 @@ class VariantResolver
         }
 
         $variant->setTraitsOrigin(DataOrigin::User);
+        // Cocher « surgelé » range l'aliment du côté conditionné : laisser la
+        // nature en arrière ferait cohabiter un légume « frais » avec un état qui
+        // dit le contraire, et le formulaire de saisie mentirait au geste suivant.
+        $this->refreshDetectedNature($variant, $identity->traits);
 
         return $this->reidentify($variant, $identity);
+    }
+
+    /**
+     * Réévalue la nature après un changement de nom ou d'état — sauf si quelqu'un
+     * l'a déjà tranchée : une correction humaine ne se fait pas écraser par une
+     * déduction, c'est la règle tenue partout ailleurs par {@see DataOrigin}.
+     *
+     * Les traits sont passés plutôt que relus sur la variante : ceux qui comptent
+     * ici sont les nouveaux, et ils ne lui sont appliqués qu'après le contrôle de
+     * collision de {@see reidentify()} — qui peut encore tout refuser.
+     *
+     * @param list<ProductTrait> $traits
+     */
+    private function refreshDetectedNature(HouseholdProductVariant $variant, array $traits): void
+    {
+        if (DataOrigin::User === $variant->getNatureOrigin()) {
+            return;
+        }
+
+        $variant->setNature(
+            $this->natureDetector->detect(
+                $variant->getName(),
+                $variant->getCategory(),
+                $traits,
+                scanned: null !== $variant->getProduct()?->getBarcode(),
+            ),
+            DataOrigin::Detected,
+        );
     }
 
     /**
@@ -222,6 +295,8 @@ class VariantResolver
         DataOrigin $traitsOrigin,
         ?string $brand,
         ?string $category,
+        FoodNature $nature,
+        DataOrigin $natureOrigin,
         DataOrigin $nameOrigin = DataOrigin::Catalog,
     ): HouseholdProductVariant {
         $variant = new HouseholdProductVariant(
@@ -235,6 +310,7 @@ class VariantResolver
         $variant->setProduct($product);
         $variant->setBrand($brand);
         $variant->setCategory($category);
+        $variant->setNature($nature, $natureOrigin);
 
         $this->entityManager->persist($variant);
         $this->entityManager->flush();

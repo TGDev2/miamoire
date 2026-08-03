@@ -8,6 +8,7 @@ use App\Entity\Household;
 use App\Entity\StockItem;
 use App\Repository\StockItemRepository;
 use App\Service\Ai\Safety\DietaryGuard;
+use App\Service\Food\FreshFoodLexicon;
 use App\Service\Freshness\EffectiveUseBy;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\UnitConverter;
@@ -40,6 +41,7 @@ class InventoryAggregator
         private readonly StockItemRepository $stockItems,
         private readonly UnitConverter $converter,
         private readonly EffectiveUseByCalculator $effectiveUseBy,
+        private readonly FreshFoodLexicon $lexicon,
     ) {
     }
 
@@ -181,15 +183,27 @@ class InventoryAggregator
                 traits: $variant->getTraits(),
                 notes: array_keys($data['notes']),
                 buckets: $buckets,
+                perishable: $variant->isFresh(),
+                approxPieceWeight: $this->lexicon->find($variant->getName())?->approxPieceWeight,
             );
         }
 
-        // Ce qui périme bientôt d'abord, puis ce qui est déjà entamé : les deux
-        // urgences que l'IA doit voir en tête de liste, dans cet ordre. Un paquet
-        // ouvert ne prime jamais sur une date qui approche — il vient juste après.
+        // Trois urgences, dans cet ordre, et l'ordre est le propos :
+        //
+        // 1. ce qui périme bientôt — une date proche ne se rattrape pas ;
+        // 2. ce qui est frais — une courgette attend une semaine, une conserve
+        //    attend deux ans. Sans ce palier, les deux étaient à égalité stricte
+        //    tant que la courgette n'entrait pas dans les trois derniers jours,
+        //    c'est-à-dire tant qu'il était encore temps de la sauver ;
+        // 3. ce qui est déjà entamé — un paquet ouvert se dégrade pendant qu'un
+        //    paquet scellé attend.
         usort($lines, static function (InventoryLine $a, InventoryLine $b): int {
             if ($a->expiresSoon !== $b->expiresSoon) {
                 return $a->expiresSoon ? -1 : 1;
+            }
+
+            if ($a->perishable !== $b->perishable) {
+                return $a->perishable ? -1 : 1;
             }
 
             if ($a->alreadyOpened !== $b->alreadyOpened) {

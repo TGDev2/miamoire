@@ -188,7 +188,20 @@ function QuickConsumeCard({
       </Text>
 
       <View style={styles.row}>
-        <Button label="Un exemplaire" onPress={onOnePackage} disabled={busy} style={styles.rowItem} />
+        {/* Un produit frais n'a pas d'exemplaire : on en retire un — une courgette,
+            une portion — pas « un exemplaire ». Le geste serveur est le même. */}
+        <Button
+          label={
+            item.variant.nature === 'fresh'
+              ? item.isDiscreteUnit
+                ? `Un(e) ${item.unitLabel === 'unité' ? item.variant.name.toLowerCase() : item.unitLabel}`
+                : 'Une portion'
+              : 'Un exemplaire'
+          }
+          onPress={onOnePackage}
+          disabled={busy}
+          style={styles.rowItem}
+        />
         <Button
           label="Environ la moitié"
           variant="secondary"

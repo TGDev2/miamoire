@@ -116,7 +116,7 @@ class ApiAuthenticationTest extends WebTestCase
      */
     public function testProductLookupsAreRefusedWithoutAHousehold(): void
     {
-        foreach (['/api/products/barcode/3017620422003', '/api/products/shelf-life?name=tomate'] as $path) {
+        foreach (['/api/products/barcode/3017620422003', '/api/products/profile?name=tomate'] as $path) {
             $this->client->request('GET', $path);
 
             self::assertFalse(
@@ -133,7 +133,7 @@ class ApiAuthenticationTest extends WebTestCase
      */
     public function testTheHouseholdIdentifierAloneIsNotEnough(): void
     {
-        foreach (['/api/products/barcode/3017620422003', '/api/products/shelf-life?name=tomate'] as $path) {
+        foreach (['/api/products/barcode/3017620422003', '/api/products/profile?name=tomate'] as $path) {
             $this->client->request('GET', $path, server: ['HTTP_X_HOUSEHOLD' => $this->householdId]);
 
             self::assertSame(
@@ -162,7 +162,7 @@ class ApiAuthenticationTest extends WebTestCase
 
     public function testAWrongKeyIsRefused(): void
     {
-        $this->client->request('GET', '/api/products/shelf-life?name=tomate', server: [
+        $this->client->request('GET', '/api/products/profile?name=tomate', server: [
             'HTTP_X_HOUSEHOLD' => $this->householdId,
             'HTTP_X_HOUSEHOLD_KEY' => 'AAAA-AAAA-AAAA-AAAA-AAAA',
         ]);
@@ -176,14 +176,18 @@ class ApiAuthenticationTest extends WebTestCase
      */
     public function testTheEstimationStillAnswersWithAValidKey(): void
     {
-        $this->client->request('GET', '/api/products/shelf-life?name=tomate', server: $this->authenticated());
+        $this->client->request('GET', '/api/products/profile?name=tomate', server: $this->authenticated());
 
         $response = $this->client->getResponse();
         self::assertSame(Response::HTTP_OK, $response->getStatusCode());
 
         $payload = json_decode((string) $response->getContent(), true);
         self::assertIsArray($payload);
-        self::assertArrayHasKey('days', $payload);
+        // La route dit désormais de quel genre d'aliment il s'agit, pas seulement
+        // combien de temps il se garde : c'est la nature qui décide du formulaire.
+        self::assertSame('fresh', $payload['nature']);
+        self::assertSame('piece', $payload['naturalUnit']);
+        self::assertArrayHasKey('days', $payload['shelfLife']);
     }
 
     /** Une écriture exige en plus de dire qui agit — la règle vaut ici aussi. */

@@ -9,6 +9,7 @@ use App\Entity\Product;
 use App\Entity\StockItem;
 use App\Entity\StockOperation;
 use App\Enum\FillLevel;
+use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Enum\StockOperationType;
 use App\Enum\StorageLocation;
@@ -144,6 +145,9 @@ class StockItemController extends AbstractApiController
                 : null,
             brand: $payload->string('brand'),
             category: $payload->string('category'),
+            // Envoyée seulement quand quelqu'un a corrigé la nature détectée ;
+            // elle est alors retenue et ne sera plus jamais redéduite.
+            explicitNature: $payload->enum('nature', FoodNature::class),
         );
 
         $defaults = [
@@ -153,7 +157,10 @@ class StockItemController extends AbstractApiController
             'note' => $payload->string('note'),
             'quantityIsEstimated' => $payload->bool('quantityIsEstimated'),
             'expirationDate' => $payload->date('expirationDate'),
-            'estimateExpiration' => $payload->bool('estimateExpiration'),
+            // `null` — et non `false` — quand rien n'est dit : c'est ce qui permet
+            // à un aliment frais de recevoir une date estimée d'office sans écraser
+            // un refus explicite. Voir addBatch().
+            'estimateExpiration' => $payload->has('estimateExpiration') ? $payload->bool('estimateExpiration') : null,
         ];
 
         $batches = $payload->objectList('batches');
@@ -293,6 +300,13 @@ class StockItemController extends AbstractApiController
                         $item->getVariant(),
                         ProductTrait::fromValues($payload->stringList('traits')),
                     ));
+                }
+
+                // « Ce n'est pas un produit conditionné. » Corrigée après les traits :
+                // cocher « surgelé » redéduit la nature, et ce choix-ci doit rester
+                // le dernier mot. Il ne sera plus jamais redéduit ensuite.
+                if ($payload->has('nature')) {
+                    $variants->changeNature($item->getVariant(), $payload->requiredEnum('nature', FoodNature::class));
                 }
 
                 if ($payload->has('isOpened')) {
@@ -844,6 +858,13 @@ class StockItemController extends AbstractApiController
         $purchaseDate = $line->date('purchaseDate');
         $expiration = $line->has('expirationDate') ? $line->date('expirationDate') : $defaults['expirationDate'];
         $estimate = $line->has('estimateExpiration') ? $line->bool('estimateExpiration') : $defaults['estimateExpiration'];
+
+        // Un aliment frais ne porte aucune date imprimée. Sans consigne explicite,
+        // on l'estime donc d'office : sans elle il entrait sans date, et restait
+        // invisible pour les alertes, « Aujourd'hui » et les recettes — l'aliment
+        // qui pourrit était précisément celui que l'application ne voyait pas.
+        // Un `false` explicite reste respecté : c'est quelqu'un qui a tranché.
+        $estimate ??= $variant->isFresh();
 
         // Une date lue sur l'emballage prime toujours : on n'estime que ce qui manque.
         $estimated = false;

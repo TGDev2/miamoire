@@ -14,6 +14,7 @@ use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Exception\StockException;
 use App\Service\Freshness\EffectiveUseByCalculator;
+use App\Service\Food\FoodTermMatcher;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\Product\VariantIdentity;
 use App\Service\Stock\StockService;
@@ -37,7 +38,14 @@ class StockServiceTest extends TestCase
             $this->createMock(EntityManagerInterface::class),
             new UnitConverter(),
         );
-        $this->effectiveUseBy = new EffectiveUseByCalculator(new ShelfLifeEstimator(new TextNormalizer()));
+        $this->effectiveUseBy = new EffectiveUseByCalculator(self::estimator());
+    }
+
+    private static function estimator(): ShelfLifeEstimator
+    {
+        $normalizer = new TextNormalizer();
+
+        return new ShelfLifeEstimator($normalizer, new FoodTermMatcher($normalizer));
     }
 
     /** L'exemple du cahier des charges : 1 000 g de riz, 250 g consommés, 750 g restants. */

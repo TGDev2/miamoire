@@ -6,6 +6,8 @@ namespace App\Service\Freshness;
 
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
+use App\Service\Food\FoodTermMatcher;
+use App\Service\Food\PreparedDish;
 use App\Service\TextNormalizer;
 
 /**
@@ -32,9 +34,9 @@ class ShelfLifeEstimator
     /**
      * Durées usuelles, en jours, par aliment puis par emplacement.
      *
-     * Les termes sont cherchés au pluriel tolérant (`tomate` reconnaît « tomates ») ;
-     * le terme le plus long l'emporte, pour que « pomme de terre » ne soit jamais
-     * traité comme « pomme ».
+     * Les termes sont reconnus par {@see \App\Service\Food\FoodTermMatcher} : au
+     * pluriel tolérant (`tomate` reconnaît « tomates »), et le terme le plus long
+     * l'emporte, pour que « pomme de terre » ne soit jamais traité comme « pomme ».
      *
      * @var array<string, array<value-of<StorageLocation>, int>>
      */
@@ -156,7 +158,8 @@ class ShelfLifeEstimator
      *
      * « pâtes » et « pâté » se normalisent tous deux en `pate` : une tolérance de
      * pluriel donnerait un an de conservation à une terrine de campagne. Ces
-     * termes-là se listent en toutes lettres (leçon n° 2).
+     * termes-là se listent en toutes lettres (leçon n° 2), et l'emportent à
+     * longueur égale sur un terme tolérant.
      *
      * @var array<string, array<value-of<StorageLocation>, int>>
      */
@@ -235,8 +238,25 @@ class ShelfLifeEstimator
         'canned' => 3,
     ];
 
-    public function __construct(private readonly TextNormalizer $normalizer)
+    public function __construct(
+        private readonly TextNormalizer $normalizer,
+        private readonly FoodTermMatcher $matcher,
+    ) {
+    }
+
+    /**
+     * Les aliments que cette table sait nommer.
+     *
+     * Exposés pour que {@see \App\Service\Food\FreshFoodLexicon} soit vérifiable :
+     * un aliment déclaré frais mais absent d'ici n'aurait aucune durée de
+     * conservation propre, donc aucune date — exactement l'angle mort que le
+     * traitement du frais existe pour fermer.
+     *
+     * @return list<string>
+     */
+    public static function knownTerms(): array
     {
+        return array_map('strval', array_keys(self::FOODS + self::EXACT_FOODS));
     }
 
     /** @param list<ProductTrait> $traits */
@@ -246,20 +266,18 @@ class ShelfLifeEstimator
         array $traits = [],
         StorageLocation $location = StorageLocation::Pantry,
     ): ShelfLifeEstimate {
-        $haystack = $this->normalizer->toWords($name);
-
-        $food = $this->matchFood($haystack);
+        $food = $this->matcher->match($name, self::FOODS, self::EXACT_FOODS, PreparedDish::TERMS);
 
         // Le congélateur normalise tout : un légume surgelé se garde des mois,
         // qu'il s'agisse d'épinards ou de haricots. L'aliment ne reprend la main
         // que s'il déclare explicitement une durée de congélation.
-        if (StorageLocation::Freezer === $location && (null === $food || !isset($food['days']['freezer']))) {
+        if (StorageLocation::Freezer === $location && (null === $food || !isset($food['value']['freezer']))) {
             return ShelfLifeEstimate::fromLocation(self::LOCATION_DAYS['freezer'], $location);
         }
 
         if (null !== $food) {
             return ShelfLifeEstimate::fromFood(
-                $this->daysFor($food['days'], $location),
+                $this->daysFor($food['value'], $location),
                 $food['term'],
                 $location,
             );
@@ -302,18 +320,10 @@ class ShelfLifeEstimator
         array $traits = [],
         StorageLocation $location = StorageLocation::Fridge,
     ): ?ShelfLifeEstimate {
-        $haystack = $this->normalizer->toWords($name);
-
-        $best = null;
-        foreach (self::AFTER_OPENING_DAYS as $term => $days) {
-            if (1 === preg_match($this->pluralTolerantPattern($term), $haystack)
-                && (null === $best || mb_strlen($term) > mb_strlen($best['term']))) {
-                $best = ['term' => $term, 'days' => $days];
-            }
-        }
+        $best = $this->matcher->match($name, self::AFTER_OPENING_DAYS, [], PreparedDish::TERMS);
 
         if (null !== $best) {
-            return ShelfLifeEstimate::fromFood($best['days'], $best['term'], $location);
+            return ShelfLifeEstimate::fromFood($best['value'], $best['term'], $location);
         }
 
         foreach ($traits as $trait) {
@@ -327,45 +337,6 @@ class ShelfLifeEstimator
         }
 
         return null;
-    }
-
-    /**
-     * Le terme le plus long gagne : « pomme de terre » n'est pas une « pomme ».
-     *
-     * @return array{term: string, days: array<string, int>}|null
-     */
-    private function matchFood(string $haystack): ?array
-    {
-        $best = null;
-
-        foreach (self::EXACT_FOODS as $term => $days) {
-            if (1 === preg_match('/\b'.preg_quote($term, '/').'\b/', $haystack)
-                && (null === $best || mb_strlen($term) > mb_strlen($best['term']))) {
-                $best = ['term' => $term, 'days' => $days];
-            }
-        }
-
-        foreach (self::FOODS as $term => $days) {
-            if (1 === preg_match($this->pluralTolerantPattern($term), $haystack)
-                && (null === $best || mb_strlen($term) > mb_strlen($best['term']))) {
-                $best = ['term' => $term, 'days' => $days];
-            }
-        }
-
-        return $best;
-    }
-
-    /** « pomme de terre » doit reconnaître « pommes de terre » sans reconnaître « pommade ». */
-    private function pluralTolerantPattern(string $term): string
-    {
-        $words = array_map(
-            static fn (string $word): string => mb_strlen($word) > 3
-                ? preg_quote($word, '/').'(?:s|x)?'
-                : preg_quote($word, '/'),
-            explode(' ', $term),
-        );
-
-        return '/\b'.implode('\s+', $words).'\b/';
     }
 
     /**

@@ -330,6 +330,13 @@ class RecipeSuggestionService
             `expirationIsEstimated`, qui décrivent l'état réel de l'aliment et la confiance
             qu'on peut lui accorder.
 
+            `perishable` à true signale un produit frais, sans emballage qui le protège.
+            `approxWeightPerPiece`, quand elle est présente, donne le poids indicatif
+            d'une pièce : sers-t'en pour écrire des quantités lisibles dans tes étapes
+            (« 2 courgettes, environ 500 g ») — mais `stockConsumptionProposal` doit
+            rester exprimée dans l'unité de l'inventaire, ici en pièces. Ne convertis
+            JAMAIS une masse en pièces dans la proposition de déduction.
+
             Signification des `traits` :
 
             {$traits}
@@ -339,9 +346,16 @@ class RecipeSuggestionService
             1. Priorise les ingrédients dont au moins une part de `deadlines` a
                `expiresSoon` à true : ils doivent apparaître dans au moins deux des trois
                propositions quand c'est culinairement cohérent, et la quantité utilisée doit
-               d'abord venir de cette part-là. Puis, à égalité, ceux dont une part a `opened`
-               à true : un paquet entamé se dégrade pendant qu'un paquet scellé attend. La
-               date passe toujours devant.
+               d'abord venir de cette part-là.
+               Viennent ensuite les ingrédients marqués `perishable` : ce sont des produits
+               frais — légumes, fruits, viande au détail, pain, restes — qui se dégradent
+               dès l'achat, là où une conserve ou un paquet sec attend des mois. Tant qu'il
+               en reste en stock, au moins deux des trois recettes doivent s'appuyer sur
+               l'un d'eux, et tu ne dois jamais choisir un équivalent en conserve, sec ou
+               surgelé quand le frais correspondant est disponible.
+               Puis seulement, à égalité, ceux dont une part a `opened` à true : un paquet
+               entamé se dégrade pendant qu'un paquet scellé attend. La date passe toujours
+               devant, et le frais passe devant l'entamé.
             2. Classe chaque recette par `feasibility` :
                - "ready" : tous les ingrédients essentiels sont dans l'inventaire ;
                - "adapted" : tu remplaces un ingrédient absent par un autre réellement disponible

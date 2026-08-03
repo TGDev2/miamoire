@@ -12,8 +12,10 @@ use App\Entity\SavedRecipe;
 use App\Entity\ShoppingListItem;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
+use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Service\Ai\RecipePlan;
+use App\Service\Food\FreshFood;
 use App\Service\Freshness\EffectiveUseBy;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimate;
@@ -111,6 +113,12 @@ class ApiPresenter
             'unitFamily' => $variant->getUnitFamily()->value,
             'nameOrigin' => $variant->getNameOrigin()->value,
             'traitsOrigin' => $variant->getTraitsOrigin()->value,
+            // Frais ou conditionné : c'est ce qui décide du formulaire de saisie et
+            // du vocabulaire de la fiche — une courgette n'a pas d'« exemplaire
+            // entamé ». Voir App\Enum\FoodNature.
+            'nature' => $variant->getNature()->value,
+            'natureLabel' => $variant->getNature()->label(),
+            'natureOrigin' => $variant->getNatureOrigin()->value,
             // `null` : rien déclaré par ce foyer, on se fie au produit canonique.
             'allergensOverride' => $variant->getAllergensOverride(),
             // Ce qui vient du catalogue partagé et n'est pas corrigeable localement.
@@ -424,6 +432,30 @@ class ApiPresenter
             'source' => $estimate->source,
             'matched' => $estimate->matched,
             'explanation' => $estimate->explanation(),
+        ];
+    }
+
+    /**
+     * Tout ce que le formulaire d'ajout a besoin de savoir avant de se dessiner.
+     *
+     * `naturalUnit` n'est renseignée que pour un aliment frais reconnu : c'est la
+     * seule situation où l'application a mieux à proposer que « grammes ». Pour le
+     * reste, elle se tait plutôt que d'inventer.
+     *
+     * @param FreshFood|null $fresh ce que le lexique sait de l'aliment, s'il le connaît
+     *
+     * @return array<string, mixed>
+     */
+    public function foodProfile(FoodNature $nature, ?FreshFood $fresh, ShelfLifeEstimate $shelfLife): array
+    {
+        return [
+            'nature' => $nature->value,
+            'natureLabel' => $nature->label(),
+            'naturalUnit' => $fresh?->naturalUnit->value,
+            'naturalUnitLabel' => $fresh?->naturalUnit->label(),
+            // Sert au générateur de recettes, jamais à convertir : voir FreshFood.
+            'approxPieceWeight' => $fresh?->approxPieceWeight,
+            'shelfLife' => $this->shelfLife($shelfLife),
         ];
     }
 }

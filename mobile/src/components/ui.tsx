@@ -124,6 +124,80 @@ export function Chip({
 }
 
 /**
+ * « Combien ? » quand la réponse est un nombre d'objets entiers.
+ *
+ * Trois courgettes se saisissent en touchant deux fois « + », pas en tapant un
+ * poids qu'on ne connaît pas. Le clavier reste accessible pour les grandes
+ * quantités — on ne touche pas quinze fois « + » pour quinze clémentines.
+ */
+export function Stepper({
+  label,
+  value,
+  unitLabel,
+  onChange,
+  min = 1,
+  hint,
+}: {
+  label: string;
+  value: number;
+  /** « courgettes », « portions » — ce que compte le nombre affiché. */
+  unitLabel: string;
+  onChange: (value: number) => void;
+  min?: number;
+  hint?: string;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={styles.stepper}>
+        <Pressable
+          onPress={() => onChange(Math.max(min, value - 1))}
+          disabled={value <= min}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Retirer un"
+          accessibilityState={{ disabled: value <= min }}
+          style={({ pressed }) => [
+            styles.stepperButton,
+            pressed && styles.stepperButtonPressed,
+            value <= min && styles.stepperButtonDisabled,
+          ]}
+        >
+          <Text style={styles.stepperGlyph}>−</Text>
+        </Pressable>
+
+        <TextInput
+          value={String(value)}
+          onChangeText={(text) => {
+            const parsed = Number(text.replace(/[^0-9]/g, ''));
+            onChange(Number.isFinite(parsed) && parsed >= min ? parsed : min);
+          }}
+          keyboardType="number-pad"
+          selectTextOnFocus
+          accessibilityLabel={`${label} : ${value} ${unitLabel}`}
+          style={styles.stepperValue}
+        />
+
+        <Pressable
+          onPress={() => onChange(value + 1)}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Ajouter un"
+          style={({ pressed }) => [styles.stepperButton, pressed && styles.stepperButtonPressed]}
+        >
+          <Text style={styles.stepperGlyph}>+</Text>
+        </Pressable>
+
+        <Text style={styles.stepperUnit} numberOfLines={1}>
+          {unitLabel}
+        </Text>
+      </View>
+      {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
+    </View>
+  );
+}
+
+/**
  * Le libellé et l'aide sont des `Text` voisins, donc invisibles pour le champ
  * lui-même : à la saisie, un lecteur d'écran n'annonçait que « champ de texte ».
  * On les rattache, sans empêcher un appelant de préciser son propre libellé.
@@ -305,6 +379,34 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs + 2,
   },
   fieldHint: { fontSize: 12, color: colors.inkMuted, marginTop: spacing.xs },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  stepperButton: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepperButtonPressed: { backgroundColor: colors.primarySoft },
+  stepperButtonDisabled: { opacity: 0.4 },
+  stepperGlyph: { fontSize: 24, fontWeight: '600', color: colors.primary, lineHeight: 28 },
+  stepperValue: {
+    minWidth: 64,
+    height: 52,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    textAlign: 'center',
+    fontSize: 22,
+    fontWeight: '700',
+    color: colors.ink,
+    paddingVertical: 0,
+  },
+  stepperUnit: { flexShrink: 1, fontSize: 16, color: colors.inkMuted },
   input: {
     backgroundColor: colors.surface,
     borderWidth: 1,

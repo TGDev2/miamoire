@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Entity;
 
 use App\Enum\DataOrigin;
+use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
 use App\Enum\UnitFamily;
@@ -104,6 +105,21 @@ class HouseholdProductVariant
 
     #[ORM\Column(type: 'string', length: 16, enumType: DataOrigin::class)]
     private DataOrigin $traitsOrigin;
+
+    /**
+     * Frais ou conditionné — ce qui décide du formulaire de saisie, de
+     * l'estimation d'office de la date, et du rang dans les recettes.
+     *
+     * Volontairement HORS de {@see VariantIdentity} : les traits `canned` /
+     * `frozen` / `dried` séparent déjà « tomate » de « tomate-conserve ». L'ajouter
+     * au hachage scinderait les variantes existantes sans rien distinguer de plus.
+     * C'est un attribut descriptif et corrigeable, comme la catégorie.
+     */
+    #[ORM\Column(type: 'string', length: 16, enumType: FoodNature::class)]
+    private FoodNature $nature = FoodNature::Packaged;
+
+    #[ORM\Column(type: 'string', length: 16, enumType: DataOrigin::class)]
+    private DataOrigin $natureOrigin = DataOrigin::Detected;
 
     /**
      * Correction ou validation par CE foyer des allergènes de cette variante.
@@ -286,6 +302,32 @@ class HouseholdProductVariant
     public function setTraitsOrigin(DataOrigin $origin): void
     {
         $this->traitsOrigin = $origin;
+    }
+
+    public function getNature(): FoodNature
+    {
+        return $this->nature;
+    }
+
+    public function isFresh(): bool
+    {
+        return $this->nature->isFresh();
+    }
+
+    public function getNatureOrigin(): DataOrigin
+    {
+        return $this->natureOrigin;
+    }
+
+    /**
+     * La nature et son origine changent toujours ensemble : sans quoi une nature
+     * corrigée à la main serait réécrite au prochain scan, et la correction
+     * n'aurait servi qu'une fois.
+     */
+    public function setNature(FoodNature $nature, DataOrigin $origin): void
+    {
+        $this->nature = $nature;
+        $this->natureOrigin = $origin;
     }
 
     /** @return list<string>|null */
