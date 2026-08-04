@@ -627,10 +627,40 @@ La même commande est appelée par le workflow
 deux scripts de diffusion, c'est celui qu'on lance le moins souvent qui dérive, donc
 celui qui casse le jour où on en a besoin.
 
-Le déclenchement est **manuel et non sur `push`** : une compilation EAS consomme un
-crédit et prend une dizaine de minutes. Diffuser à chaque commit épuiserait le quota
-et noierait les testeurs sous les notifications — deux façons de rendre la mise à
+Le déclenchement est **manuel et non sur `push`** : une compilation occupe une
+demi-heure de runner. Diffuser à chaque commit épuiserait le quota Actions et
+noierait les testeurs sous les notifications — deux façons de rendre la mise à
 jour automatique plus pénible que le QR code qu'elle remplace.
+
+### La compilation se fait sur le runner, pas chez Expo
+
+Une diffusion a mis **1 h 35**, dont quarante secondes de travail utile. Tout le
+reste tenait dans une ligne de log — `Waiting for build to complete` : la file
+d'attente du plan gratuit d'EAS, où un build patiente pendant que le runner GitHub
+tourne à vide.
+
+`eas build --local` exécute le même processus — même `eas.json`, mêmes identifiants
+et même keystore, téléchargés depuis Expo — sur la machine qui lance déjà le script.
+Vingt à trente-cinq minutes la première fois, moins ensuite grâce au cache Gradle,
+et aucun crédit EAS consommé.
+
+```bash
+npm run distribute:android -- --remote          # repli : compiler chez Expo
+npm run distribute:android -- --artifact-url …  # rediffuser un APK déjà compilé
+```
+
+**Le `versionCode` est le nombre de commits du dépôt** (`git rev-list --count HEAD`).
+Il vivait sur les serveurs d'EAS, qui l'incrémentaient à chaque compilation ; une
+compilation locale ne passe plus par eux. L'historique git fait un meilleur
+compteur qu'un fichier à éditer : monotone tant que l'historique reste linéaire,
+identique ici et en intégration continue, et surtout **reproductible** — le même
+commit produit le même numéro.
+
+`app.json` en garde un, `15`, qui n'est qu'un plancher : la valeur du dernier APK
+diffusé par EAS. Le script refuse de diffuser en dessous, ce qui attrape le piège
+le plus probable — `actions/checkout` clone en `fetch-depth: 1` par défaut, le
+compte vaudrait alors 1, et Android refuse d'installer une version dont le numéro
+recule. D'où le `fetch-depth: 0` du workflow.
 
 ### Mise en place, une fois
 

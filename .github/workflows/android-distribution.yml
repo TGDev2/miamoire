@@ -1,9 +1,15 @@
 # Diffusion d'une nouvelle version aux testeurs du foyer.
 #
-# Déclenchée à la main, jamais sur `push` : une compilation EAS consomme un
-# crédit et prend une dizaine de minutes. Diffuser à chaque commit épuiserait le
-# quota et noierait les testeurs sous les notifications — deux façons de rendre
-# la mise à jour automatique plus pénible que le QR code qu'elle remplace.
+# L'APK est compilé **ici**, sur le runner. La compilation passait auparavant par
+# les serveurs d'EAS : sur le plan gratuit, elle y attend dans une file de basse
+# priorité, et une diffusion a mis 1 h 35 dont quarante secondes de travail utile.
+# Le runner restait bloqué pendant toute l'attente. `eas build --local` exécute
+# le même processus sans la file — voir mobile/scripts/distribute-android.mjs.
+#
+# Déclenchée à la main, jamais sur `push` : une compilation occupe une demi-heure
+# de runner. Diffuser à chaque commit épuiserait le quota Actions et noierait les
+# testeurs sous les notifications — deux façons de rendre la mise à jour
+# automatique plus pénible que le QR code qu'elle remplace.
 name: Diffuser l'application Android
 
 on:
@@ -21,12 +27,21 @@ on:
 jobs:
   distribute:
     runs-on: ubuntu-latest
+    # Une compilation qui dépasse trois quarts d'heure est cassée, pas lente. Sans
+    # cette borne, un job part pour les six heures du délai par défaut de GitHub.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: mobile
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Le versionCode de l'APK est le nombre de commits. Le clone superficiel
+          # par défaut n'en rapporterait qu'un seul, et Android refuse d'installer
+          # une version dont le numéro recule. Le script s'en aperçoit et échoue,
+          # mais autant lui donner ce qu'il attend.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -34,14 +49,35 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
+      - name: Installer le JDK attendu par React Native
+        # Compiler ici plutôt que sur les serveurs d'Expo, c'est hériter de leur
+        # responsabilité : le JDK par défaut du runner change avec l'image, celui
+        # de React Native 0.86 non.
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Restaurer le cache Gradle
+        # Ce qui sépare une première compilation d'une demi-heure des suivantes.
+        # La clé suit package-lock.json : de nouvelles dépendances natives, un
+        # nouveau cache.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
       - name: Installer les dépendances
         # `npm ci` sans aucun drapeau : `--legacy-peer-deps` réécrirait tout
         # l'arbre de dépendances et retirerait des pairs dont le build a besoin.
         run: npm ci
 
       - name: Vérifier les types avant de compiler
-        # Dix minutes de compilation pour découvrir une erreur que `tsc` voyait
-        # en dix secondes, c'est dix minutes et un crédit EAS perdus.
+        # Une demi-heure de compilation pour découvrir une erreur que `tsc` voyait
+        # en dix secondes, c'est une demi-heure de runner perdue.
         run: npm run typecheck
 
       - name: Écrire la clé du compte de service

@@ -16,6 +16,7 @@
     },
     "android": {
       "package": "com.theo.food",
+      "versionCode": 15,
       "adaptiveIcon": {
         "backgroundColor": "#2F6B4F",
         "foregroundImage": "./assets/android-icon-foreground.png",
