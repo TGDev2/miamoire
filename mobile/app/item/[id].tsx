@@ -185,9 +185,18 @@ export default function StockItemScreen() {
     .filter((option) => item.variant.traits.includes(option.value))
     .map((option) => option.label);
 
+  // Le serveur dit lesquelles ont un sens pour cet aliment ; la référence donne
+  // leurs libellés. Une découpe déjà posée reste proposée même si le lexique a
+  // changé d'avis depuis — sans quoi elle deviendrait incorrigeable.
+  const cutOptions = (reference?.productCuts ?? []).filter(
+    (option) =>
+      item.variant.plausibleCuts.includes(option.value) || item.variant.cut === option.value,
+  );
+
   const facts = [
     item.storageLocationLabel,
     item.addedBy ? `enregistré par ${item.addedBy}` : null,
+    item.variant.cutLabel,
     ...traitLabels,
   ].filter(Boolean);
 
@@ -673,6 +682,36 @@ export default function StockItemScreen() {
               );
             })}
           </View>
+
+          {/* Absente pour un aliment dont la forme ne change rien : le serveur
+              renvoie alors `plausibleCuts` vide, et la question ne se pose pas. */}
+          {cutOptions.length > 0 ? (
+            <>
+              <Text style={[text.label, styles.editLabel]}>Découpe</Text>
+              <Text style={[text.small, styles.help]}>
+                C'est elle qui décide de la cuisson : une escalope se saisit trois minutes par
+                face, de l'émincé saute deux minutes à feu vif.
+              </Text>
+              <View style={styles.chips}>
+                {cutOptions.map((option) => {
+                  const selected = item.variant.cut === option.value;
+
+                  return (
+                    <Chip
+                      key={option.value}
+                      label={option.label}
+                      selected={selected}
+                      onPress={() =>
+                        run(`cut-${option.value}`, (operationKey) =>
+                          api.updateStockItem(id, { cut: selected ? null : option.value }, operationKey),
+                        )
+                      }
+                    />
+                  );
+                })}
+              </View>
+            </>
+          ) : null}
 
           <Text style={[text.label, styles.editLabel]}>Date de péremption</Text>
           <View style={styles.dateRow}>

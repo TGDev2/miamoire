@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Enum\Allergen;
+use App\Enum\Equipment;
 use App\Enum\FillLevel;
+use App\Enum\FoodCut;
 use App\Enum\MealTemperature;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
@@ -54,6 +56,16 @@ class ReferenceController extends AbstractApiController
                 ],
                 ProductTrait::cases(),
             ),
+            // La liste complète, pour l'écran de correction. À la saisie, seules
+            // les découpes plausibles pour l'aliment sont proposées — elles
+            // arrivent avec sa fiche, via `GET /api/products/profile`.
+            'productCuts' => array_map(
+                static fn (FoodCut $cut): array => [
+                    'value' => $cut->value,
+                    'label' => $cut->label(),
+                ],
+                FoodCut::cases(),
+            ),
             // Les exclusions proposées à la sélection plutôt que saisies à la main :
             // « arachide » choisi dans cette liste couvre aussi « beurre de
             // cacahuète » et « satay », ce qu'un texte libre ne peut pas faire.
@@ -79,14 +91,13 @@ class ReferenceController extends AbstractApiController
                 ],
                 MealTemperature::cases(),
             ),
-            'equipment' => [
-                ['value' => 'stovetop', 'label' => 'Plaque / poêle'],
-                ['value' => 'oven', 'label' => 'Four'],
-                ['value' => 'microwave', 'label' => 'Micro-ondes'],
-                ['value' => 'blender', 'label' => 'Mixeur'],
-                ['value' => 'pressure_cooker', 'label' => 'Autocuiseur'],
-                ['value' => 'airfryer', 'label' => 'Air fryer'],
-            ],
+            'equipment' => array_map(
+                static fn (Equipment $equipment): array => [
+                    'value' => $equipment->value,
+                    'label' => $equipment->label(),
+                ],
+                Equipment::cases(),
+            ),
         ]);
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Entity;
 
 use App\Enum\DataOrigin;
+use App\Enum\FoodCut;
 use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
@@ -90,6 +91,23 @@ class HouseholdProductVariant
     /** @var list<string> valeurs de ProductTrait */
     #[ORM\Column(type: 'json')]
     private array $traits = [];
+
+    /**
+     * La forme sous laquelle l'aliment se trouve : escalopes, émincé, en tranches.
+     *
+     * Fait partie de {@see VariantIdentity}, au contraire de {@see $nature} : deux
+     * découpes ne sont pas deux états d'un même stock, ce sont deux ingrédients
+     * — une escalope se saisit trois minutes là où un blanc entier en cuit vingt.
+     *
+     * `null` signifie « inconnue », jamais « entière » : c'est la valeur de tout
+     * ce qui existait avant cet axe, et celle de tout aliment dont la forme ne
+     * change rien à la cuisson.
+     */
+    #[ORM\Column(type: 'string', length: 16, enumType: FoodCut::class, nullable: true)]
+    private ?FoodCut $cut = null;
+
+    #[ORM\Column(type: 'string', length: 16, enumType: DataOrigin::class)]
+    private DataOrigin $cutOrigin = DataOrigin::Detected;
 
     /**
      * La famille d'unité fait partie de l'identité.
@@ -189,18 +207,19 @@ class HouseholdProductVariant
         $this->updatedAt = new \DateTimeImmutable();
     }
 
-    /** Les trois champs d'identité changent toujours ensemble, jamais séparément. */
+    /** Les quatre champs d'identité changent toujours ensemble, jamais séparément. */
     public function applyIdentity(VariantIdentity $identity): void
     {
         $this->ingredientKey = $identity->ingredientKey;
         $this->unitFamily = $identity->unitFamily;
         $this->traits = ProductTrait::toValues($identity->traits);
+        $this->cut = $identity->cut;
         $this->identityHash = $identity->hash();
     }
 
     public function identity(): VariantIdentity
     {
-        return VariantIdentity::of($this->ingredientKey, $this->unitFamily, $this->getTraits());
+        return VariantIdentity::of($this->ingredientKey, $this->unitFamily, $this->getTraits(), $this->cut);
     }
 
     public function getId(): Uuid
@@ -277,6 +296,26 @@ class HouseholdProductVariant
     public function getTraits(): array
     {
         return ProductTrait::fromValues($this->traits);
+    }
+
+    public function getCut(): ?FoodCut
+    {
+        return $this->cut;
+    }
+
+    public function getCutOrigin(): DataOrigin
+    {
+        return $this->cutOrigin;
+    }
+
+    /**
+     * La découpe elle-même passe par {@see applyIdentity()} — elle fait partie de
+     * l'identité, et changer l'un sans l'autre laisserait une empreinte fausse.
+     * Seule son origine se pose ici, comme pour les traits.
+     */
+    public function setCutOrigin(DataOrigin $origin): void
+    {
+        $this->cutOrigin = $origin;
     }
 
     public function getUnitFamily(): UnitFamily
@@ -403,15 +442,43 @@ class HouseholdProductVariant
     }
 
     /**
-     * Le libellé lu par le générateur de recettes : « Tomates (en conserve) ».
+     * Le libellé lu par le générateur de recettes : « Tomates (en conserve) »,
+     * « Blanc de poulet (émincé) ».
      *
      * La marque en est volontairement absente — elle n'apprend rien sur la cuisine
      * — mais l'état, lui, change la recette.
+     *
+     * Un état que le nom énonce déjà n'est pas répété : « Blanc de poulet en
+     * tranches » se suffit, « Blanc de poulet en tranches (en tranches) » ne dit
+     * rien de plus et se lit mal, y compris par le modèle.
      */
     public function getCulinaryLabel(): string
     {
-        $state = $this->identity()->stateLabel();
+        $said = mb_strtolower($this->name);
 
-        return null === $state ? $this->name : sprintf('%s (%s)', $this->name, $state);
+        $states = array_values(array_filter(
+            $this->identity()->stateLabels(),
+            static fn (string $state): bool => !self::isAlreadySaid($state, $said),
+        ));
+
+        return [] === $states ? $this->name : sprintf('%s (%s)', $this->name, implode(', ', $states));
+    }
+
+    /**
+     * Un état est déjà dit quand le nom porte l'un de ses mots pleins.
+     *
+     * Le mot, pas la locution : « Oignons émincés » contient « émincé », « Côte de
+     * porc » contient « côte » de « pavé / côte ». Les mots courts — « en », « de »,
+     * « à » — sont écartés, sinon tout nom français les contiendrait.
+     */
+    private static function isAlreadySaid(string $state, string $lowercaseName): bool
+    {
+        foreach (preg_split('/[^\p{L}]+/u', $state, -1, \PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+            if (mb_strlen($word) > 3 && str_contains($lowercaseName, $word)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

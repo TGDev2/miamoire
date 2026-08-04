@@ -8,6 +8,7 @@ import type {
   FoodNature,
   FoodProfile,
   Product,
+  ProductCutValue,
   ProductTraitValue,
   Reference,
   Unit,
@@ -70,6 +71,12 @@ export default function AddScreen() {
   const [unit, setUnit] = useState<Unit>('g');
   const [location, setLocation] = useState('pantry');
   const [traits, setTraits] = useState<ProductTraitValue[]>([]);
+  /**
+   * La forme de l'aliment, quand elle change quelque chose. `null` : rien n'a été
+   * choisi — le serveur la déduira du libellé plutôt que de la vider.
+   */
+  const [cut, setCut] = useState<ProductCutValue | null>(null);
+  const [cutTouched, setCutTouched] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([newBatch()]);
   const [pickerFor, setPickerFor] = useState<number | null>(null);
   const [note, setNote] = useState('');
@@ -170,7 +177,17 @@ export default function AddScreen() {
           traits,
           scanned: Boolean(product?.barcode),
         });
-        if (!cancelled) setProfile(found);
+        if (cancelled) return;
+
+        setProfile(found);
+        // « Escalopes de poulet » nomme déjà sa forme : la puce arrive cochée.
+        // Un choix fait à la main tient, sauf s'il n'a plus de sens pour
+        // l'aliment qu'on est en train de saisir.
+        setCut((current) => {
+          if (!cutTouched) return found.detectedCut;
+
+          return null !== current && found.plausibleCuts.includes(current) ? current : found.detectedCut;
+        });
       } catch {
         // Un profil indisponible ne bloque pas une saisie : on retombe sur le
         // formulaire du conditionné, qui est le comportement d'avant.
@@ -182,10 +199,16 @@ export default function AddScreen() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [effectiveName, product?.category, product?.barcode, location, traits]);
+  }, [effectiveName, product?.category, product?.barcode, location, traits, cutTouched]);
 
   const nature: FoodNature = natureOverride ?? profile?.nature ?? 'packaged';
   const isFresh = nature === 'fresh';
+
+  // Le serveur dit lesquelles ont un sens pour CET aliment ; la référence donne
+  // leurs libellés. Vide, aucune rubrique « Sous quelle forme ? » n'apparaît.
+  const cutOptions = (reference?.productCuts ?? []).filter((option) =>
+    (profile?.plausibleCuts ?? []).includes(option.value),
+  );
 
   // Un aliment frais adopte l'unité que le lexique lui connaît, tant que personne
   // n'en a choisi une autre. Faute de lexique, les grammes restent le repli.
@@ -315,6 +338,8 @@ export default function AddScreen() {
           // Envoyée seulement si quelqu'un a corrigé la nature détectée : sinon
           // le serveur la déduit lui-même, et retient sa propre déduction.
           nature: natureOverride ?? undefined,
+          // Même règle : omise, elle est déduite du libellé côté serveur.
+          cut: cut ?? undefined,
           note: note.trim() || undefined,
           // Une ligne par date : le serveur crée les lots en une seule transaction.
           batches: batches.map((batch) => ({
@@ -661,6 +686,32 @@ export default function AddScreen() {
           />
         ))}
       </View>
+
+      {/* Posée uniquement quand la réponse change une recette : un blanc de poulet
+          a quatre formes possibles, une farine n'en a aucune. Le serveur décide de
+          la liste (`plausibleCuts`), l'écran n'affiche rien s'il la renvoie vide. */}
+      {cutOptions.length > 0 ? (
+        <>
+          <SectionTitle>Sous quelle forme ?</SectionTitle>
+          <Text style={styles.help}>
+            C'est elle qui décide de la cuisson : une escalope se saisit trois minutes par
+            face, de l'émincé saute deux minutes à feu vif.
+          </Text>
+          <View style={styles.chips}>
+            {cutOptions.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={cut === option.value}
+                onPress={() => {
+                  setCutTouched(true);
+                  setCut(cut === option.value ? null : option.value);
+                }}
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
 
       <Field
         label="Note (facultatif)"

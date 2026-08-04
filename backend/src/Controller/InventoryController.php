@@ -61,6 +61,8 @@ class InventoryController extends AbstractApiController
                     'quantityIsEstimated' => $line->quantityIsEstimated,
                     'category' => $line->category,
                     'traits' => ProductTrait::toValues($line->traits),
+                    // `null` : forme inconnue, jamais « entière ».
+                    'cut' => $line->cut?->value,
                     'locations' => $line->locations,
                     'lotCount' => $line->lotCount,
                     // La même quantité ventilée par échéance effective — « 250 g

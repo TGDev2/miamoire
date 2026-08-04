@@ -91,6 +91,8 @@ export default function ShoppingReviewScreen() {
             unit: line.unit,
             storageLocation: line.storageLocation,
             traits: line.traits.length > 0 ? line.traits : undefined,
+            // Omise, la découpe est déduite du libellé par le serveur.
+            cut: line.cut ?? undefined,
             expirationDate: line.estimateExpiration || !line.expirationDate ? undefined : line.expirationDate,
             estimateExpiration: line.estimateExpiration || undefined,
             // Une entrée par date : plusieurs exemplaires identiques scannés

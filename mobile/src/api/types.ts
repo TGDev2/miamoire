@@ -15,9 +15,30 @@ export type ProductTraitValue =
   | 'precooked'
   | 'cooked'
   | 'ready_to_eat'
-  | 'sliced'
   | 'sweetened'
   | 'unsweetened';
+
+/**
+ * La FORME sous laquelle un aliment se présente — ce qui décide de sa cuisson.
+ *
+ * Une escalope se saisit trois minutes par face, de l'émincé saute deux minutes
+ * à feu vif, un blanc entier en cuit vingt. Sans cet axe, le générateur a écrit
+ * une recette d'escalopes sur du blanc de poulet en tranches.
+ *
+ * `null` veut dire « forme inconnue », jamais « entière ».
+ */
+export type ProductCutValue =
+  | 'whole'
+  | 'escalope'
+  | 'steak'
+  | 'bone_in'
+  | 'strips'
+  | 'slices'
+  | 'cubes'
+  | 'pieces'
+  | 'ground'
+  | 'grated'
+  | 'puree';
 
 export type StockStatus =
   | 'sealed'
@@ -115,6 +136,16 @@ export interface ProductVariant {
   brand: string | null;
   category: string | null;
   traits: ProductTraitValue[];
+  /** La forme physique de l'aliment. `null` : inconnue, jamais « entière ». */
+  cut: ProductCutValue | null;
+  cutLabel: string | null;
+  cutOrigin: DataOrigin;
+  /**
+   * Les seules découpes qu'on propose pour CET aliment : quatre puces pour un
+   * blanc de poulet, aucune pour une farine. La question n'est posée que
+   * lorsqu'elle change une recette.
+   */
+  plausibleCuts: ProductCutValue[];
   unitFamily: UnitFamily;
   nameOrigin: DataOrigin;
   traitsOrigin: DataOrigin;
@@ -311,6 +342,10 @@ export interface FoodProfile {
   naturalUnitLabel: string | null;
   /** Poids indicatif d'une pièce, transmis au générateur de recettes. */
   approxPieceWeight: number | null;
+  /** Vide quand la forme de cet aliment ne change rien : l'écran n'affiche alors aucune puce. */
+  plausibleCuts: ProductCutValue[];
+  /** Celle que le libellé nomme déjà, s'il en nomme une : la puce arrive pré-cochée. */
+  detectedCut: ProductCutValue | null;
   shelfLife: ShelfLifeEstimate;
 }
 
@@ -357,6 +392,8 @@ export interface Reference {
   storageLocations: ReferenceOption[];
   fillLevels: Array<ReferenceOption & { ratio: number | null }>;
   productTraits: Array<ReferenceOption & { value: ProductTraitValue }>;
+  /** La liste complète, pour l'écran de correction. */
+  productCuts: Array<ReferenceOption & { value: ProductCutValue }>;
   /**
    * Exclusions proposées à la sélection : choisir « Arachides » couvre aussi
    * « beurre de cacahuète » et « satay », ce qu'un texte libre ne peut pas faire.
@@ -391,6 +428,8 @@ export interface InventoryIngredient {
   quantityIsEstimated: boolean;
   category: string | null;
   traits: ProductTraitValue[];
+  /** La forme de l'aliment, quand elle est connue — elle décide de sa cuisson. */
+  cut: ProductCutValue | null;
   locations: StorageLocation[];
   lotCount: number;
   /**
@@ -420,6 +459,13 @@ export interface RecipeIngredient {
   quantity: number;
   unit: Unit;
   essential: boolean;
+  /**
+   * La forme que la recette a supposée, quand l'inventaire ne la donnait pas.
+   *
+   * `'none'` : rien n'a été supposé, la découpe était connue. Absent sur les
+   * recettes enregistrées avant ce champ, comme `utensils`.
+   */
+  assumedCut?: ProductCutValue | 'none';
 }
 
 export interface ConsumptionLine {

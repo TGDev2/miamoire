@@ -1,15 +1,17 @@
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { ApiError, api } from '../api/client';
+import { ApiError, api, generateOperationKey } from '../api/client';
 import type {
   ConfirmationResponse,
   ConsumptionLine,
   MealSlot,
+  ProductCutValue,
   Recipe,
   RecipeIngredient,
   RecipePlan,
+  Reference,
 } from '../api/types';
 import { Badge, Button, Card, Chip, DateField, ErrorBanner, SectionTitle } from '../components/ui';
 import { colors, feasibilityPresentation, font, mealSlotOptions, radius, spacing, text, thermal } from '../theme';
@@ -70,6 +72,90 @@ export function RecipeDetailView({
   // Une seule clé à la fois : évite qu'un double appui déclenche deux
   // résolutions concurrentes vers deux fiches différentes.
   const [resolvingKey, setResolvingKey] = useState<string | null>(null);
+
+  /**
+   * L'apprentissage par la recette.
+   *
+   * Quand l'inventaire ignore la forme d'un aliment, le modèle DÉCLARE celle
+   * qu'il a supposée (`assumedCut`). On l'affiche à l'endroit exact où elle se
+   * démentit — la fiche recette, là où le défaut « escalope au lieu de tranches »
+   * a été vu — et un appui l'enregistre sur la variante, pour toujours.
+   */
+  const [reference, setReference] = useState<Reference | null>(null);
+  const [correcting, setCorrecting] = useState<{
+    key: string;
+    itemId: string;
+    options: Array<{ value: ProductCutValue; label: string }>;
+  } | null>(null);
+  const [correctionBusy, setCorrectionBusy] = useState(false);
+  /** Clé d'inventaire → libellé retenu, pour dire ce qui vient d'être appris. */
+  const [learned, setLearned] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Les libellés des découpes viennent du serveur, jamais du client. Un échec
+    // n'a aucune conséquence : la ligne « supposé » ne s'affiche simplement pas.
+    api
+      .reference()
+      .then((found) => {
+        if (!cancelled) setReference(found);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const cutLabels = new Map((reference?.productCuts ?? []).map((option) => [option.value, option.label]));
+
+  /** Ouvre le choix : les découpes plausibles pour CET aliment, telles que le serveur les connaît. */
+  async function openCorrection(key: string) {
+    setCorrectionBusy(true);
+    try {
+      const { id } = await api.stockItemIdForIngredient(key);
+      const item = await api.stockItem(id);
+
+      setCorrecting({
+        key,
+        itemId: id,
+        options: (reference?.productCuts ?? []).filter(
+          (option) =>
+            item.variant.plausibleCuts.includes(option.value) || item.variant.cut === option.value,
+        ),
+      });
+    } catch (exception) {
+      Alert.alert(
+        'Correction impossible',
+        exception instanceof ApiError || exception instanceof Error
+          ? exception.message
+          : 'Impossible d\'ouvrir cet aliment.',
+      );
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }
+
+  async function applyCorrection(value: ProductCutValue, label: string) {
+    if (null === correcting) return;
+
+    setCorrectionBusy(true);
+    try {
+      await api.updateStockItem(correcting.itemId, { cut: value }, generateOperationKey());
+      setLearned((current) => ({ ...current, [correcting.key]: label }));
+      setCorrecting(null);
+    } catch (exception) {
+      Alert.alert(
+        'Correction impossible',
+        exception instanceof ApiError || exception instanceof Error
+          ? exception.message
+          : 'Impossible d\'enregistrer cette découpe.',
+      );
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }
 
   /**
    * Les quantités réellement utilisées, saisies par l'utilisateur.
@@ -329,14 +415,61 @@ export function RecipeDetailView({
       ) : null}
 
       <SectionTitle>Depuis votre stock</SectionTitle>
-      {recipe.ingredientsFromInventory.map((ingredient, position) => (
-        <IngredientRow
-          key={`inv-${position}`}
-          ingredient={ingredient}
-          onOpen={openIngredient}
-          resolving={ingredient.key !== undefined && ingredient.key === resolvingKey}
-        />
-      ))}
+      {recipe.ingredientsFromInventory.map((ingredient, position) => {
+        const key = ingredient.key;
+        const assumed =
+          undefined !== key && undefined !== ingredient.assumedCut && 'none' !== ingredient.assumedCut
+            ? cutLabels.get(ingredient.assumedCut)
+            : undefined;
+
+        return (
+          <View key={`inv-${position}`}>
+            <IngredientRow
+              ingredient={ingredient}
+              onOpen={openIngredient}
+              resolving={undefined !== key && key === resolvingKey}
+            />
+
+            {/* La supposition du modèle, montrée là où elle se dément. Une fois
+                corrigée, la variante s'en souvient et toutes les recettes
+                suivantes la connaîtront. */}
+            {undefined !== key && undefined !== learned[key] ? (
+              <Text style={styles.assumption}>Découpe enregistrée : {learned[key]}.</Text>
+            ) : undefined !== assumed && undefined !== key ? (
+              <Pressable
+                onPress={() => openCorrection(key)}
+                disabled={correctionBusy}
+                accessibilityRole="button"
+                accessibilityLabel={`Forme supposée : ${assumed}`}
+                accessibilityHint="Corrige la découpe de cet aliment, une fois pour toutes"
+              >
+                <Text style={styles.assumption}>
+                  Forme supposée : {assumed.toLowerCase()} — <Text style={styles.assumptionAction}>corriger</Text>
+                </Text>
+              </Pressable>
+            ) : null}
+
+            {undefined !== key && correcting?.key === key ? (
+              <Card style={styles.correctionCard}>
+                <Text style={text.small}>Sous quelle forme l'avez-vous réellement ?</Text>
+                <View style={styles.correctionChips}>
+                  {correcting.options.map((option) => (
+                    <Chip
+                      key={option.value}
+                      label={option.label}
+                      selected={false}
+                      onPress={() => applyCorrection(option.value, option.label)}
+                    />
+                  ))}
+                </View>
+                <Text style={[text.small, styles.correctionHint]}>
+                  L'application s'en souviendra : cet aliment gardera cette forme.
+                </Text>
+              </Card>
+            ) : null}
+          </View>
+        );
+      })}
 
       {recipe.missingIngredients.length > 0 ? (
         <>
@@ -548,6 +681,11 @@ const styles = StyleSheet.create({
   ingredientLabel: { ...text.body, flex: 1 },
   ingredientMissing: { color: thermal.soon.line },
   ingredientQuantity: { fontFamily: font.monoMedium, fontSize: 12, color: colors.ink },
+  assumption: { ...text.small, marginTop: -spacing.xs, marginBottom: spacing.sm },
+  assumptionAction: { fontFamily: font.monoMedium, color: colors.ink },
+  correctionCard: { marginBottom: spacing.md },
+  correctionChips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm },
+  correctionHint: { marginTop: spacing.xs },
   addToList: { marginTop: spacing.md },
   substitutionCard: { marginBottom: spacing.sm },
   substitutionReason: { marginTop: spacing.xs },

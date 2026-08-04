@@ -184,7 +184,13 @@ class InventoryAggregator
                 notes: array_keys($data['notes']),
                 buckets: $buckets,
                 perishable: $variant->isFresh(),
-                approxPieceWeight: $this->lexicon->find($variant->getName())?->approxPieceWeight,
+                // Quand un stock se compte en pièces, la pièce comptée EST la
+                // découpe : une escalope, une tranche. Le poids de la découpe
+                // prime donc sur celui du lexique, qui décrit l'aliment entier —
+                // sans quoi six tranches de poulet vaudraient six blancs.
+                approxPieceWeight: $variant->getCut()?->approxPieceWeight()
+                    ?? $this->lexicon->find($variant->getName())?->approxPieceWeight,
+                cut: $variant->getCut(),
             );
         }
 

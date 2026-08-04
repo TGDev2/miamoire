@@ -190,7 +190,7 @@ Des pommes de terre en conserve sont déjà pelées et cuites. Tant que le gén�
 de recettes ne recevait que le libellé, il répondait « Épluchez les pommes de terre ».
 
 Chaque `Product` porte donc une liste de **traits** — `canned`, `frozen`, `peeled`,
-`precooked`, `sliced`… Ils sont déduits du libellé et de la catégorie à la création
+`precooked`… Ils sont déduits du libellé et de la catégorie à la création
 (`ProductTraitDetector`), puis corrigeables d'un geste dans l'application.
 
 Chaque trait porte sa propre consigne, dans `App\Enum\ProductTrait` :
@@ -202,6 +202,53 @@ canned (En conserve) : déjà cuit, pelé et paré — ne demande ni épluchage,
 
 Le glossaire envoyé au modèle est construit depuis l'enum : ajouter un trait suffit
 à l'enseigner au générateur, sans toucher au prompt.
+
+### La forme, quatrième axe
+
+Un trait dit ce qu'on a **fait** à l'aliment ; il ne dit pas la **forme** qu'il a. Le
+générateur a écrit une recette d'escalopes avec du blanc de poulet en tranches :
+les deux portaient la clé `blanc-de-poulet` et le même libellé, et c'est pourtant
+la forme qui décide de la cuisson — une escalope se saisit trois minutes par face,
+un blanc entier en cuit vingt.
+
+`App\Enum\FoodCut` porte donc onze découpes — `escalope`, `strips`, `slices`,
+`ground`… — chacune avec sa consigne de cuisson, et **elle fait partie de
+l'identité de la variante** : « Blanc de poulet (escalopes) » et « Blanc de poulet
+(émincé) » sont deux clés, deux lignes d'inventaire, deux stocks.
+
+Trois mécanismes la renseignent, du plus automatique au plus humain :
+
+1. **`FoodCutDetector`** la déduit du libellé — « Escalopes de poulet » arrive
+   pré-cochée ;
+2. **`FoodCutLexicon`** dit, par famille d'aliment, quelles découpes sont
+   plausibles. L'écran d'ajout ne pose donc la question **que lorsqu'elle change
+   une recette** : quatre puces pour un blanc de poulet, aucune pour une farine ;
+3. **la fiche recette** : quand la découpe est inconnue, le modèle déclare celle
+   qu'il a supposée (`assumedCut`), l'écran l'affiche — « Forme supposée : pavé /
+   côte — corriger » — et un appui l'enregistre sur la variante, définitivement.
+
+`php bin/console app:variants:detect-cut --dry-run` reprend le parc existant et
+absorbe l'ancien trait `sliced`, qui disait qu'on avait coupé sans jamais dire en
+quoi. À passer en lecture seule d'abord, et à lire ligne à ligne.
+
+### La saison et la date du jour
+
+Le générateur ne recevait aucune date : il lisait `useBy: 2026-08-06` sans savoir
+si c'était demain. Le payload porte désormais `today`, `season` et
+`seasonalProduce` (`SeasonalContext`, `SeasonalProduceCalendar`) — de quoi situer
+les échéances, adapter le registre des plats, et ne jamais faire acheter une
+fraise en décembre.
+
+Un garde-fou explicite prime sur tout cela : **l'inventaire l'emporte toujours sur
+la saison.** Une courge encore en stock en juillet se cuisine ; la saison oriente
+le choix et les courses, jamais le gaspillage.
+
+### Les équipements
+
+`App\Enum\Equipment` — plaque, four, micro-ondes, mixeur, autocuiseur, air fryer,
+**barbecue, plancha, robot cuiseur**. Comme les traits et les découpes, chacun
+porte la consigne transmise au modèle : ce qu'il permet, ce qu'il interdit, son
+temps de chauffe. Seuls les équipements réellement cochés entrent dans le prompt.
 
 La détection reste volontairement conservatrice. `boîte` seul n'est pas une conserve
 (une « boîte de 6 œufs » n'en est pas une), `sucre` seul n'est pas un produit sucré,

@@ -6,6 +6,7 @@ namespace App\Controller;
 
 use App\Entity\Household;
 use App\Entity\SavedRecipe;
+use App\Enum\Equipment;
 use App\Enum\MealTemperature;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
@@ -52,7 +53,10 @@ class RecipeController extends AbstractApiController
             mealType: $payload->string('mealType'),
             mealTemperature: $payload->enum('mealTemperature', MealTemperature::class),
             maxMinutes: $payload->int('maxMinutes'),
-            equipment: $payload->stringList('equipment'),
+            // Réduits aux équipements connus : une chaîne inconnue était jusqu'ici
+            // recopiée telle quelle dans le prompt, autorisant le modèle à se
+            // servir d'un appareil qui n'existe pas.
+            equipment: Equipment::fromValues($payload->stringList('equipment')),
             exclusions: $exclusions,
             allowExtraIngredients: $payload->bool('allowExtraIngredients'),
             // Facultatif : demander des recettes sans rien imposer reste le cas

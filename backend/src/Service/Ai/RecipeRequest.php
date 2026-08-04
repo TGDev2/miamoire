@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace App\Service\Ai;
 
+use App\Enum\Equipment;
 use App\Enum\MealTemperature;
 
 /** Les contraintes saisies dans l'écran « Que cuisiner ? ». */
 final readonly class RecipeRequest
 {
     /**
-     * @param list<string> $equipment  four, poele, casserole, micro-ondes...
-     * @param list<string> $exclusions allergies et régimes
+     * @param list<Equipment> $equipment  ce dont le foyer dispose réellement ;
+     *                                    une valeur inconnue est écartée au bord
+     * @param list<string>    $exclusions allergies et régimes
      */
     public function __construct(
         public int $people = 2,

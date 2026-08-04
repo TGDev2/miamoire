@@ -34,9 +34,19 @@ class ProductTraitDetectorTest extends TestCase
     public function testExplicitPreparationIsRecognised(): void
     {
         self::assertContains(ProductTrait::Peeled, $this->detector->detect('Pommes de terre épluchées'));
-        self::assertContains(ProductTrait::Sliced, $this->detector->detect('Emmental râpé'));
         self::assertContains(ProductTrait::Frozen, $this->detector->detect('Haricots verts surgelés'));
         self::assertContains(ProductTrait::Dried, $this->detector->detect('Abricots séchés'));
+    }
+
+    /**
+     * La forme n'est plus un trait : « râpé » ne dit pas ce qu'on a fait à
+     * l'aliment mais la forme qu'il a, et c'est {@see \App\Service\Food\FoodCutDetector}
+     * qui la nomme — précisément, au lieu du « coupé » indistinct d'avant.
+     */
+    public function testFormIsNoLongerATrait(): void
+    {
+        self::assertSame([], $this->detector->detect('Emmental râpé'));
+        self::assertSame([], $this->detector->detect('Blanc de poulet en tranches'));
     }
 
     /** « biscuit » contient « cuit » : sans frontière de mot, tout gâteau serait « déjà cuit ». */

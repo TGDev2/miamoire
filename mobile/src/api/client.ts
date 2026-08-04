@@ -13,6 +13,7 @@ import type {
   MealSlot,
   Member,
   Product,
+  ProductCutValue,
   ProductTraitValue,
   ProductVariant,
   QuickConsumeCandidate,
@@ -191,6 +192,12 @@ export interface CreateStockItemInput {
    * alors retenue par la variante et ne sera plus jamais redéduite.
    */
   nature?: FoodNature;
+  /**
+   * La forme sous laquelle l'aliment se présente. Omise, elle est déduite du
+   * libellé. Contrairement à la nature, elle fait partie de l'identité de
+   * l'aliment : « escalopes » et « émincé » sont deux stocks distincts.
+   */
+  cut?: ProductCutValue;
   /** Une entrée par date de péremption. Omis, un seul lot est créé. */
   batches?: StockBatchInput[];
 }

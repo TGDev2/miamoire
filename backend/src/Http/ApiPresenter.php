@@ -12,9 +12,11 @@ use App\Entity\SavedRecipe;
 use App\Entity\ShoppingListItem;
 use App\Entity\StockItem;
 use App\Entity\StockMovement;
+use App\Enum\FoodCut;
 use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Service\Ai\RecipePlan;
+use App\Service\Food\FoodCutLexicon;
 use App\Service\Food\FreshFood;
 use App\Service\Freshness\EffectiveUseBy;
 use App\Service\Freshness\EffectiveUseByCalculator;
@@ -32,6 +34,7 @@ class ApiPresenter
     public function __construct(
         private readonly UnitConverter $converter,
         private readonly EffectiveUseByCalculator $effectiveUseBy,
+        private readonly FoodCutLexicon $cuts,
     ) {
     }
 
@@ -110,6 +113,14 @@ class ApiPresenter
             'brand' => $variant->getBrand(),
             'category' => $variant->getCategory(),
             'traits' => ProductTrait::toValues($variant->getTraits()),
+            // La forme physique — ce qui décide de la cuisson. `null` veut dire
+            // « inconnue », jamais « entière ». Voir App\Enum\FoodCut.
+            'cut' => $variant->getCut()?->value,
+            'cutLabel' => $variant->getCut()?->label(),
+            'cutOrigin' => $variant->getCutOrigin()->value,
+            // Les seules découpes qu'on propose pour CET aliment : quatre puces
+            // pour un blanc de poulet, aucune pour une farine.
+            'plausibleCuts' => FoodCut::toValues($this->cuts->plausibleCuts($variant->getName()) ?? []),
             'unitFamily' => $variant->getUnitFamily()->value,
             'nameOrigin' => $variant->getNameOrigin()->value,
             'traitsOrigin' => $variant->getTraitsOrigin()->value,
@@ -442,19 +453,32 @@ class ApiPresenter
      * seule situation où l'application a mieux à proposer que « grammes ». Pour le
      * reste, elle se tait plutôt que d'inventer.
      *
-     * @param FreshFood|null $fresh ce que le lexique sait de l'aliment, s'il le connaît
+     * `plausibleCuts` obéit à la même retenue : vide pour un aliment dont la forme
+     * ne change rien, l'écran n'affiche alors aucune puce plutôt qu'une liste de
+     * onze réponses à une question qui ne se pose pas.
+     *
+     * @param FreshFood|null $fresh         ce que le lexique sait de l'aliment, s'il le connaît
+     * @param list<FoodCut>  $plausibleCuts les découpes qu'on peut proposer pour cet aliment
+     * @param FoodCut|null   $detectedCut   celle que son libellé nomme déjà, s'il en nomme une
      *
      * @return array<string, mixed>
      */
-    public function foodProfile(FoodNature $nature, ?FreshFood $fresh, ShelfLifeEstimate $shelfLife): array
-    {
+    public function foodProfile(
+        FoodNature $nature,
+        ?FreshFood $fresh,
+        ShelfLifeEstimate $shelfLife,
+        array $plausibleCuts = [],
+        ?FoodCut $detectedCut = null,
+    ): array {
         return [
             'nature' => $nature->value,
             'natureLabel' => $nature->label(),
             'naturalUnit' => $fresh?->naturalUnit->value,
             'naturalUnitLabel' => $fresh?->naturalUnit->label(),
             // Sert au générateur de recettes, jamais à convertir : voir FreshFood.
-            'approxPieceWeight' => $fresh?->approxPieceWeight,
+            'approxPieceWeight' => $detectedCut?->approxPieceWeight() ?? $fresh?->approxPieceWeight,
+            'plausibleCuts' => FoodCut::toValues($plausibleCuts),
+            'detectedCut' => $detectedCut?->value,
             'shelfLife' => $this->shelfLife($shelfLife),
         ];
     }

@@ -13,6 +13,8 @@ use App\Http\RequestContext;
 use App\Repository\HouseholdProductVariantRepository;
 use App\Repository\ShoppingListItemRepository;
 use App\Repository\StockItemRepository;
+use App\Service\Food\FoodCutDetector;
+use App\Service\Food\FoodCutLexicon;
 use App\Service\Food\FoodNatureDetector;
 use App\Service\Food\FreshFoodLexicon;
 use App\Service\Freshness\ShelfLifeEstimator;
@@ -105,6 +107,8 @@ class ProductController extends AbstractApiController
         RequestContext $context,
         FoodNatureDetector $natureDetector,
         FreshFoodLexicon $lexicon,
+        FoodCutDetector $cutDetector,
+        FoodCutLexicon $cutLexicon,
         ShelfLifeEstimator $estimator,
         ApiPresenter $presenter,
     ): JsonResponse {
@@ -133,6 +137,11 @@ class ProductController extends AbstractApiController
             $natureDetector->detect($name, $category, $traits, $request->query->getBoolean('scanned')),
             $lexicon->find($name),
             $estimator->estimate($name, $category, $traits, $location),
+            // La question n'est posée que lorsqu'elle change une recette : trois ou
+            // quatre puces pour un blanc de poulet, aucune pour une farine. Et
+            // quand le libellé nomme déjà la forme, elle arrive pré-cochée.
+            $cutLexicon->plausibleCuts($name) ?? [],
+            $cutDetector->detect($name, $category),
         ));
     }
 

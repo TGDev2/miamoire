@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service\Inventory;
 
+use App\Enum\FoodCut;
 use App\Enum\ProductTrait;
 use App\Enum\Unit;
 
@@ -60,6 +61,12 @@ final readonly class InventoryLine
          * d'unité, et ce refus protège l'inventaire.
          */
         public ?int $approxPieceWeight = null,
+        /**
+         * La forme sous laquelle l'aliment se présente — ce qui décide de sa
+         * cuisson. Sans elle, une recette d'escalopes a été écrite sur du blanc
+         * de poulet en tranches.
+         */
+        public ?FoodCut $cut = null,
     ) {
     }
 
@@ -88,6 +95,13 @@ final readonly class InventoryLine
 
         if (null !== $this->approxPieceWeight && Unit::Piece === $this->unit) {
             $payload['approxWeightPerPiece'] = sprintf('%d g', $this->approxPieceWeight);
+        }
+
+        // Émise seulement quand elle est connue : `null` veut dire « on ignore la
+        // forme », jamais « entière ». Le modèle ne doit pas avoir à distinguer
+        // une absence d'information d'une pièce entière.
+        if (null !== $this->cut) {
+            $payload['cut'] = $this->cut->value;
         }
 
         // Ces trois champs décrivent l'aliment lui-même : sans eux, le modèle

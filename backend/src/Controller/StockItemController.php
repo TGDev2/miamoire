@@ -9,6 +9,7 @@ use App\Entity\Product;
 use App\Entity\StockItem;
 use App\Entity\StockOperation;
 use App\Enum\FillLevel;
+use App\Enum\FoodCut;
 use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Enum\StockOperationType;
@@ -148,6 +149,9 @@ class StockItemController extends AbstractApiController
             // Envoyée seulement quand quelqu'un a corrigé la nature détectée ;
             // elle est alors retenue et ne sera plus jamais redéduite.
             explicitNature: $payload->enum('nature', FoodNature::class),
+            // Même règle pour la découpe — mais elle, fait partie de l'identité :
+            // « escalopes » et « émincé » sont deux stocks, pas deux états d'un seul.
+            explicitCut: $payload->enum('cut', FoodCut::class),
         );
 
         $defaults = [
@@ -299,6 +303,17 @@ class StockItemController extends AbstractApiController
                     $item->setVariant($variants->changeTraits(
                         $item->getVariant(),
                         ProductTrait::fromValues($payload->stringList('traits')),
+                    ));
+                }
+
+                // « Ce n'est pas une escalope, c'est de l'émincé. » Comme les traits
+                // et contrairement à la nature, la découpe fait partie de l'identité :
+                // la corriger réécrit la clé que lit le générateur de recettes.
+                // `cut: null` efface la découpe plutôt que d'être ignoré.
+                if ($payload->has('cut')) {
+                    $item->setVariant($variants->changeCut(
+                        $item->getVariant(),
+                        $payload->enum('cut', FoodCut::class),
                     ));
                 }
 

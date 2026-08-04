@@ -11,6 +11,11 @@ namespace App\Enum;
  * information, le générateur de recettes commence par « Épluchez les pommes de
  * terre ». Chaque trait porte donc, en plus de son libellé, la consigne exacte
  * transmise au modèle — la connaissance culinaire reste à un seul endroit.
+ *
+ * Un trait dit ce qu'on a FAIT à l'aliment, jamais la forme qu'il a : celle-ci a
+ * son propre axe, {@see FoodCut}. C'est pour cela que `sliced` a disparu d'ici —
+ * il disait qu'on avait coupé, jamais en quoi, et confondait donc une escalope,
+ * un émincé et des rondelles sous un seul mot.
  */
 enum ProductTrait: string
 {
@@ -21,7 +26,6 @@ enum ProductTrait: string
     case Precooked = 'precooked';
     case Cooked = 'cooked';
     case ReadyToEat = 'ready_to_eat';
-    case Sliced = 'sliced';
     case Sweetened = 'sweetened';
     case Unsweetened = 'unsweetened';
 
@@ -35,7 +39,6 @@ enum ProductTrait: string
             self::Precooked => 'Précuit',
             self::Cooked => 'Déjà cuit',
             self::ReadyToEat => 'Prêt à consommer',
-            self::Sliced => 'Coupé / en morceaux',
             self::Sweetened => 'Sucré',
             self::Unsweetened => 'Nature, non sucré',
         };
@@ -47,15 +50,15 @@ enum ProductTrait: string
      * deux états d'un même stock, ce sont deux ingrédients.
      *
      * Ce sont eux qui nomment la variante — « tomate-conserve » — et qui rendent
-     * l'inventaire lisible pour le générateur de recettes. « Épluché » ou « coupé »
-     * décrivent un travail déjà fait, pas un aliment différent.
+     * l'inventaire lisible pour le générateur de recettes. « Épluché » décrit un
+     * travail déjà fait, pas un aliment différent.
      */
     public function isForm(): bool
     {
         return match ($this) {
             self::Canned, self::Frozen, self::Dried,
             self::Precooked, self::Cooked, self::ReadyToEat => true,
-            self::Peeled, self::Sliced, self::Sweetened, self::Unsweetened => false,
+            self::Peeled, self::Sweetened, self::Unsweetened => false,
         };
     }
 
@@ -70,7 +73,6 @@ enum ProductTrait: string
             self::Precooked => 'precuit',
             self::Cooked => 'cuit',
             self::ReadyToEat => 'pret',
-            self::Sliced => 'coupe',
             self::Sweetened => 'sucre',
             self::Unsweetened => 'nature',
         };
@@ -87,7 +89,6 @@ enum ProductTrait: string
             self::Precooked => 'déjà précuit : un réchauffage ou une finition suffit, pas de cuisson depuis cru',
             self::Cooked => 'déjà cuit : ne le fais pas cuire une seconde fois depuis cru',
             self::ReadyToEat => 'consommable tel quel, sans préparation',
-            self::Sliced => 'déjà coupé : ne demande pas de le détailler',
             self::Sweetened => 'déjà sucré : n\'ajoute pas de sucre sans raison',
             self::Unsweetened => 'non sucré : sucre-le si la recette l\'exige',
         };

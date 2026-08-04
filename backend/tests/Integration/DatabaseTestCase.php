@@ -100,11 +100,13 @@ abstract class DatabaseTestCase extends KernelTestCase
         string $name,
         Unit $unit,
         array $traits = [],
+        ?\App\Enum\FoodCut $cut = null,
     ): HouseholdProductVariant {
         $identity = VariantIdentity::of(
             preg_replace('/[^a-z0-9]+/', '-', mb_strtolower($name)) ?? $name,
             $unit->family(),
             $traits,
+            $cut,
         );
 
         $variant = new HouseholdProductVariant($household, $name, $identity, $identity->slugBase());

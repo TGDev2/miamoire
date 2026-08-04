@@ -4,6 +4,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { generateOperationKey } from '../api/client';
 import type {
   Product,
+  ProductCutValue,
   ProductTraitValue,
   ProductVariant,
   ShoppingListItem,
@@ -60,6 +61,13 @@ export interface ShoppingSessionLine {
   numberOfPackages: number;
   storageLocation: StorageLocation;
   traits: ProductTraitValue[];
+  /**
+   * La forme de l'aliment, reprise de la variante du foyer quand elle existe.
+   *
+   * Voyage sans interface dédiée, comme les traits : ce que le foyer a déjà
+   * corrigé une fois ne doit pas être reperdu au retour de courses suivant.
+   */
+  cut: ProductCutValue | null;
   /** Aucune habitude d'achat connue pour ce produit : à confirmer. */
   isNew: boolean;
   /** Code-barres inconnu du catalogue partagé : le nom reste à saisir. */
@@ -197,6 +205,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             numberOfPackages: 1,
             storageLocation: householdVariant.usualStorageLocation ?? 'pantry',
             traits: householdVariant.traits,
+            cut: householdVariant.cut,
             isNew: false,
             isUnknown: false,
             usualPackageSize: householdVariant.usualPackageSize,
@@ -224,6 +233,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             numberOfPackages: 1,
             storageLocation: 'pantry',
             traits: product.traits,
+            cut: null,
             isNew: true,
             isUnknown: false,
             usualPackageSize: null,
@@ -251,6 +261,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
           numberOfPackages: 1,
           storageLocation: 'pantry',
           traits: [],
+          cut: null,
           isNew: true,
           isUnknown: true,
           usualPackageSize: null,
@@ -279,6 +290,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         numberOfPackages: 1,
         storageLocation: 'pantry',
         traits: [],
+        cut: null,
         isNew: true,
         isUnknown: true,
         usualPackageSize: null,

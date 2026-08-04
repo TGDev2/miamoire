@@ -34,7 +34,9 @@ class ProductTraitDetector
         // « rôti » est écarté : un rôti de porc cru en porte le nom.
         'cooked' => ['\bcuit\b', '\bcuits\b', '\bcuite\b', '\bcuites\b', '\bcuisine\b', '\bcuisines\b'],
         'ready_to_eat' => ['\bpret a consommer\b', '\bpret a l emploi\b', '\ba rechauffer\b'],
-        'sliced' => ['\ben morceaux\b', '\ben des\b', '\ben rondelles\b', '\ben tranches\b', '\bemince', '\brape\b', '\brapes\b', '\bconcasse'],
+        // « en morceaux », « émincé », « râpé » ne sont plus ici : ils décrivent
+        // une FORME, et {@see \App\Service\Food\FoodCutDetector} la nomme
+        // précisément au lieu de la réduire à « coupé ».
         // « sucre » seul est écarté : un paquet de sucre n'est pas un produit sucré.
         'sweetened' => ['\bsucree', '\bau sirop\b', '\bsucres ajoutes\b'],
         'unsweetened' => ['\bsans sucre', '\bnon sucre'],

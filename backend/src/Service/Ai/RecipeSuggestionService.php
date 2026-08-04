@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Service\Ai;
 
 use App\Entity\Household;
+use App\Enum\Equipment;
+use App\Enum\FoodCut;
 use App\Enum\ProductTrait;
+use App\Enum\Season;
 use App\Exception\StockException;
 use App\Service\Ai\Generator\RecipeGeneratorFactory;
 use App\Service\Ai\Safety\DietaryGuardFactory;
@@ -42,6 +45,7 @@ class RecipeSuggestionService
         private readonly RecipeSafetyFilter $safetyFilter,
         private readonly RequiredIngredientFilter $requiredFilter,
         private readonly RecipePlanService $planner,
+        private readonly SeasonalContextFactory $seasons,
         private readonly EntityManagerInterface $entityManager,
     ) {
     }
@@ -64,12 +68,24 @@ class RecipeSuggestionService
         ['required' => $required, 'desired' => $desired] = $this->resolvePriorities($inventory, $request->priorityKeys);
         $inventoryPayload = array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory);
 
+        // Le seul endroit où l'heure est lue : le reste du service la reçoit, ce
+        // qui rend la saison — et donc le registre des plats — testable.
+        $season = $this->seasons->for(new \DateTimeImmutable('today'));
+
         $payload = [
+            ...$season->toAiPayload(),
             'people' => $request->people,
             'mealType' => $request->mealType,
             'mealTemperature' => $request->mealTemperature?->value,
             'maxPreparationMinutes' => $request->maxMinutes,
-            'availableEquipment' => $request->equipment,
+            // Les libellés, pas les valeurs techniques : la règle 12 impose que
+            // chaque `utensils` appartienne à cette liste, et le modèle la recopie
+            // telle quelle. « stovetop » s'affichait alors en anglais sur la fiche
+            // d'une recette française.
+            'availableEquipment' => array_map(
+                static fn (Equipment $case): string => $case->label(),
+                $request->equipment,
+            ),
             'dietaryExclusions' => $guard->exclusions(),
             'allowExtraIngredients' => $request->allowExtraIngredients,
             'mustUseIngredient' => null !== $required
@@ -83,7 +99,14 @@ class RecipeSuggestionService
         ];
 
         $raw = $generator->generate(
-            $this->systemPrompt($guard->exclusions(), $required, $desired, $household->getRecentRecipeSuggestions()),
+            $this->systemPrompt(
+                $guard->exclusions(),
+                $required,
+                $desired,
+                $household->getRecentRecipeSuggestions(),
+                $season,
+                $request->equipment,
+            ),
             json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
             RecipeSchema::definition(),
         );
@@ -237,6 +260,67 @@ class RecipeSuggestionService
         ));
     }
 
+    /** Même principe pour les découpes : la cuisson de chaque forme est dans l'enum. */
+    private function cutGlossary(): string
+    {
+        return implode("\n", array_map(
+            static fn (FoodCut $cut) => sprintf('- `%s` (%s) : %s.', $cut->value, $cut->label(), $cut->instruction()),
+            FoodCut::cases(),
+        ));
+    }
+
+    /**
+     * Ce que permet chaque équipement coché — et lui seul.
+     *
+     * Décrire les neuf appareils quand le foyer n'en a coché aucun allongerait la
+     * consigne sans rien apprendre : un bloc vide est la bonne réponse.
+     *
+     * @param list<Equipment> $equipment
+     */
+    private function equipmentGlossary(array $equipment): string
+    {
+        if ([] === $equipment) {
+            return '';
+        }
+
+        return sprintf(
+            "\n            ÉQUIPEMENTS DISPONIBLES — ce que chacun permet, et ce qu'il interdit :\n\n%s\n",
+            implode("\n", array_map(
+                // Nommés par leur libellé, comme dans `availableEquipment` : c'est
+                // ce mot-là que `utensils` doit reprendre.
+                static fn (Equipment $case): string => sprintf(
+                    '            - %s : %s.',
+                    $case->label(),
+                    $case->instruction(),
+                ),
+                $equipment,
+            )),
+        );
+    }
+
+    /**
+     * L'invitation à sortir le barbecue, quand la saison s'y prête.
+     *
+     * Une incitation, jamais une interdiction symétrique : un foyer qui coche le
+     * barbecue en janvier sait ce qu'il fait, et rien ici ne le lui refuse.
+     *
+     * @param list<Equipment> $equipment
+     */
+    private function outdoorInvitation(array $equipment, SeasonalContext $season): string
+    {
+        $outdoor = array_values(array_filter($equipment, static fn (Equipment $case) => $case->isOutdoor()));
+
+        if ([] === $outdoor || Season::Summer !== $season->season) {
+            return '';
+        }
+
+        return sprintf(
+            "\n            Nous sommes en été et le foyer dispose de : %s. Au moins une des trois\n"
+            ."            propositions peut s'en servir, si l'inventaire s'y prête.\n",
+            implode(', ', array_map(static fn (Equipment $case) => $case->label(), $outdoor)),
+        );
+    }
+
     /** Certains modèles encadrent le JSON par ```json malgré la consigne. */
     private function stripCodeFence(string $raw): string
     {
@@ -252,12 +336,24 @@ class RecipeSuggestionService
     /**
      * @param list<string>        $exclusions
      * @param list<InventoryLine> $desired
+     * @param list<string>        $recentNames
+     * @param list<Equipment>     $equipment
      */
-    /** @param list<string> $recentNames */
-    private function systemPrompt(array $exclusions, ?InventoryLine $required, array $desired = [], array $recentNames = []): string
-    {
+    private function systemPrompt(
+        array $exclusions,
+        ?InventoryLine $required,
+        array $desired,
+        array $recentNames,
+        SeasonalContext $season,
+        array $equipment,
+    ): string {
         $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
         $traits = $this->traitGlossary();
+        $cuts = $this->cutGlossary();
+        $today = $season->todayLabel();
+        $seasonLabel = $season->season->label();
+        $seasonGuidance = $season->season->guidance();
+        $gear = $this->equipmentGlossary($equipment).$this->outdoorInvitation($equipment, $season);
 
         $imposed = null === $required
             ? ''
@@ -314,10 +410,14 @@ class RecipeSuggestionService
             Tu es un assistant culinaire intégré à une application de gestion de stock alimentaire.
             Tu proposes exactement 3 recettes réalisables à partir d'un inventaire réel, en français.
 
-            Données reçues : le nombre de personnes, le type de repas, une préférence chaude
-            ou froide, le temps disponible, les équipements utilisables, les exclusions
-            alimentaires, l'autorisation ou non d'ajouter des ingrédients manquants, et
-            l'inventaire du foyer.
+            Données reçues : la date du jour et la saison qu'elle désigne, le nombre de
+            personnes, le type de repas, une préférence chaude ou froide, le temps
+            disponible, les équipements utilisables, les exclusions alimentaires,
+            l'autorisation ou non d'ajouter des ingrédients manquants, et l'inventaire
+            du foyer.
+
+            Nous sommes le {$today}, donc en {$seasonLabel}. C'est la référence de toutes
+            les dates que tu liras : une échéance `useBy` ne veut rien dire sans elle.
 
             Chaque ligne d'inventaire porte une clé stable `key`, un libellé, une quantité,
             une unité et `deadlines` : la même quantité ventilée par échéance effective,
@@ -337,9 +437,17 @@ class RecipeSuggestionService
             rester exprimée dans l'unité de l'inventaire, ici en pièces. Ne convertis
             JAMAIS une masse en pièces dans la proposition de déduction.
 
+            `cut` donne la FORME sous laquelle l'aliment se présente, et c'est elle qui
+            décide de la cuisson : une escalope se saisit trois minutes par face quand un
+            blanc entier en cuit vingt. Absente, la forme est INCONNUE — jamais « entière ».
+
             Signification des `traits` :
 
             {$traits}
+
+            Signification des `cut` :
+
+            {$cuts}
 
             Règles impératives :
 
@@ -405,7 +513,32 @@ class RecipeSuggestionService
                 durée de cuisson ou de repos, taille de découpe, indice visuel de cuisson.
                 Une étape comme « faites cuire » sans aucune de ces précisions n'est pas
                 assez concrète.
-            {$imposed}{$wished}{$safety}{$recentAvoidance}
+            15. La forme d'un aliment ne s'invente JAMAIS. Quand `cut` est présent, il
+                fait loi : `strips` ne devient pas une escalope, `slices` ne se retaille
+                pas, `ground` ne se grille pas en pièce. Quand `cut` est absent, tu as
+                deux issues, et une seule interdiction — supposer en silence :
+                - écrire l'étape de façon valable pour toute forme (« faites cuire le
+                  blanc de poulet jusqu'à ce qu'il ne soit plus rosé à cœur ») ;
+                - ou bâtir la recette sur une forme précise, et la DÉCLARER dans le champ
+                  `assumedCut` de cet ingrédient. L'utilisateur la verra et pourra la
+                  corriger en un geste ; l'application s'en souviendra pour toujours.
+                `assumedCut` vaut "none" dès que la ligne porte un `cut` : tu n'as alors
+                rien supposé.
+            16. `today` est la date du jour. Toutes les dates `useBy` s'y rapportent :
+                une échéance d'aujourd'hui ou de demain est urgente même sans
+                `expiresSoon`, une échéance dépassée doit être signalée plutôt qu'ignorée.
+            17. `season` donne la saison, et c'est le REGISTRE des plats qu'elle règle,
+                jamais leur contenu : en {$seasonLabel}, privilégie {$seasonGuidance}.
+                `seasonalProduce` liste les fruits et légumes réellement de saison ce
+                mois-ci : quand `allowExtraIngredients` est vrai, les `missingIngredients`
+                en viennent en priorité. On ne fait pas acheter une fraise en décembre.
+            18. GARDE-FOU, qui prime sur la règle 17 : l'inventaire l'emporte TOUJOURS sur
+                la saison. Une courge encore en stock en juillet se cuisine, une salade
+                achetée en janvier se mange. La saison oriente ce qu'on choisit parmi
+                plusieurs possibilités et ce qu'on ajoute à la liste de courses ; elle ne
+                justifie jamais de laisser périmer un aliment déjà là. La règle 1
+                l'emporte sur la 17 chaque fois que les deux se contredisent.
+            {$gear}{$imposed}{$wished}{$safety}{$recentAvoidance}
             À propos de `stockConsumptionProposal` :
 
             - C'est une PROPOSITION de retrait de stock, soumise ensuite à validation humaine.

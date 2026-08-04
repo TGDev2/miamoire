@@ -28,6 +28,7 @@ services:
             - '../src/Service/Ai/Safety/DietaryGuard.php'
             - '../src/Service/Ai/Safety/DietaryViolation.php'
             - '../src/Service/Ai/RecipeRequest.php'
+            - '../src/Service/Ai/SeasonalContext.php'
             - '../src/Service/Freshness/ShelfLifeEstimate.php'
             - '../src/Service/Inventory/InventoryLine.php'
             - '../src/Service/Inventory/ReviewCandidate.php'
