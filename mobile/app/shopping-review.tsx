@@ -8,7 +8,7 @@ import type { Reference } from '../src/api/types';
 import { Badge, Button, Card, Chip, EmptyState, ErrorBanner, Field, Loader } from '../src/components/ui';
 import type { ShoppingSessionBatch, ShoppingSessionLine } from '../src/shopping/ShoppingSessionContext';
 import { useShoppingSession } from '../src/shopping/ShoppingSessionContext';
-import { colors, radius, spacing } from '../src/theme';
+import { colors, font, radius, spacing, text, thermal } from '../src/theme';
 
 type LineStatus = 'idle' | 'busy' | 'error';
 
@@ -262,13 +262,11 @@ function ShoppingLineCard({
       <View style={styles.headerRow}>
         <View style={styles.badges}>
           {line.isNew ? (
-            <Badge label="Nouveau produit" color={colors.info} background={colors.infoSoft} />
+            <Badge label="Nouveau produit" level="calm" />
           ) : (
-            <Badge label="Déjà connu" color={colors.primary} background={colors.primarySoft} />
+            <Badge label="Déjà connu" level="safe" />
           )}
-          {line.shoppingListItemId ? (
-            <Badge label="Sur la liste de courses" color={colors.primary} background={colors.primarySoft} />
-          ) : null}
+          {line.shoppingListItemId ? <Badge label="Sur votre liste" level="safe" /> : null}
         </View>
         <Pressable onPress={onRemove} accessibilityRole="button" accessibilityLabel="Retirer cette ligne">
           <Text style={styles.removeText}>Retirer</Text>
@@ -484,15 +482,15 @@ function formatNumber(value: number): string {
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
   spaced: { marginTop: spacing.lg },
-  card: { marginBottom: spacing.lg },
+  card: { marginBottom: spacing.md },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  removeText: { color: colors.danger, fontSize: 14, fontWeight: '600' },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: colors.inkMuted, marginBottom: spacing.sm },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, flex: 1 },
+  removeText: { ...text.small, color: thermal.critical.line, fontFamily: font.sansMedium },
+  fieldLabel: { ...text.label, marginBottom: spacing.sm },
   pair: { flexDirection: 'row', gap: spacing.md },
   pairInput: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  hint: { fontSize: 13, color: colors.accent, marginTop: -spacing.sm, marginBottom: spacing.md },
+  hint: { ...text.small, color: thermal.soon.line, marginTop: -spacing.sm, marginBottom: spacing.md },
   batchRow: {
     borderTopWidth: 1,
     borderTopColor: colors.border,
@@ -505,34 +503,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.sm,
   },
-  batchTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },
+  batchTitle: text.label,
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.sm,
-    paddingVertical: 8,
+    paddingVertical: 5,
   },
   stepperButton: {
     width: 40,
     height: 36,
     borderRadius: radius.sm,
-    backgroundColor: colors.primarySoft,
+    backgroundColor: colors.surfaceSunk,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepperGlyph: { fontSize: 15, fontWeight: '700', color: colors.primary },
-  stepperValue: { fontSize: 16, fontWeight: '700', color: colors.ink },
+  stepperGlyph: { fontFamily: font.monoMedium, fontSize: 12, color: colors.ink },
+  stepperValue: { fontFamily: font.monoSemiBold, fontSize: 15, color: colors.ink },
   dateButton: {
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 12,
+    justifyContent: 'center',
+    minHeight: 48,
     marginBottom: spacing.sm,
   },
-  dateText: { fontSize: 15, color: colors.ink },
-  statusBusy: { fontSize: 13, color: colors.info, marginTop: spacing.sm },
-  statusError: { fontSize: 13, color: colors.danger, marginTop: spacing.sm, fontWeight: '600' },
+  dateText: text.body,
+  statusBusy: { ...text.small, marginTop: spacing.sm },
+  statusError: { ...text.small, color: thermal.critical.line, marginTop: spacing.sm },
 });

@@ -5,7 +5,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { api } from '../src/api/client';
 import type { ProductVariant, ShoppingAdvisorCandidate } from '../src/api/types';
 import { Badge, Button, Card, EmptyState, ErrorBanner, Loader } from '../src/components/ui';
-import { colors, shoppingAdviceKindPresentation, spacing } from '../src/theme';
+import { colors, shoppingAdviceKindPresentation, spacing, text } from '../src/theme';
 
 /**
  * « Qu'est-ce que je ne dois surtout pas racheter ? » — avant les courses, pas
@@ -97,7 +97,7 @@ export default function ShoppingAdvisorScreen() {
   let body: React.ReactNode;
 
   if (null === items && !loadError) {
-    body = <Loader label="Recherche de ce qui ne vaut pas la peine d'être racheté…" />;
+    body = <Loader label="Recherche de ce qui ne vaut pas la peine d'être racheté" />;
   } else if (loadError) {
     body = (
       <View style={styles.container}>
@@ -108,6 +108,7 @@ export default function ShoppingAdvisorScreen() {
     body = (
       <View style={styles.container}>
         <EmptyState
+          icon="cart-outline"
           title="Rien à signaler"
           description="Ni le stock actuel, ni l'historique, ni les repas prévus ne justifient une suggestion pour l'instant."
         />
@@ -138,6 +139,7 @@ export default function ShoppingAdvisorScreen() {
         <Button
           label="Vérifier un produit en magasin"
           variant="secondary"
+          icon="barcode-scan"
           onPress={() => router.push('/shopping-check')}
         />
       </View>
@@ -185,24 +187,22 @@ function AdvisorCard({
   onIgnore: () => void;
   onDisable: () => void;
 }) {
-  const presentation = shoppingAdviceKindPresentation[candidate.kind] ?? {
-    color: colors.ink,
-    background: colors.surfaceMuted,
-  };
+  const level = shoppingAdviceKindPresentation[candidate.kind] ?? 'calm';
 
   const canAccept = 'running_out' === candidate.kind || null !== candidate.existingShoppingListItemId;
   const acceptLabel = 'running_out' === candidate.kind ? 'Ajouter à la liste' : 'Retirer de ma liste';
 
   return (
-    <Card style={styles.card}>
-      <Text style={styles.headline}>{candidate.headline}</Text>
-
+    <Card level={level} style={styles.card}>
+      {/* La nature du conseil prend la couleur ; la confiance, jamais — elle
+          qualifie le raisonnement, elle ne dit pas l'urgence. */}
       <View style={styles.badges}>
-        <Badge label={candidate.kindLabel} color={presentation.color} background={presentation.background} />
-        <Badge label={candidate.confidenceLabel} color={colors.info} background={colors.infoSoft} />
+        <Badge label={candidate.kindLabel} level={level} />
+        <Badge label={candidate.confidenceLabel} level="calm" />
       </View>
 
-      <Text style={styles.reasoning}>{candidate.reasoning}</Text>
+      <Text style={[text.heading, styles.headline]}>{candidate.headline}</Text>
+      <Text style={[text.small, styles.reasoning]}>{candidate.reasoning}</Text>
 
       <View style={styles.row}>
         {canAccept ? (
@@ -225,11 +225,11 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   entryPoint: { paddingHorizontal: spacing.xl, paddingTop: spacing.xl },
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
-  card: { marginBottom: spacing.lg },
-  headline: { fontSize: 17, fontWeight: '800', color: colors.ink },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.md },
-  reasoning: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.md, lineHeight: 20 },
-  row: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+  card: { marginBottom: spacing.md },
+  headline: { marginTop: spacing.md },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  reasoning: { marginTop: spacing.sm },
+  row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
   rowItem: { flex: 1 },
   spacedSmall: { marginTop: spacing.sm },
   mutedSection: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xl },
@@ -242,5 +242,5 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  mutedLabel: { fontSize: 14, color: colors.ink },
+  mutedLabel: text.body,
 });

@@ -4,8 +4,9 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
 import type { QuickConsumeCandidate } from '../src/api/types';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loader } from '../src/components/ui';
-import { colors, radius, spacing } from '../src/theme';
+import { Badge, Button, Card, EmptyState, ErrorBanner, Loader, Stamp } from '../src/components/ui';
+import { deadlineOf } from '../src/deadline';
+import { colors, radius, spacing, text, thermalFor } from '../src/theme';
 
 /**
  * Le parcours permanent pour une consommation ordinaire — un yaourt, un peu de
@@ -86,7 +87,7 @@ export default function QuickConsumeScreen() {
   }
 
   if (null === items && !loadError) {
-    return <Loader label="Recherche de ce qui a pu être utilisé…" />;
+    return <Loader label="Recherche de ce qui a pu être utilisé" />;
   }
 
   if (loadError) {
@@ -101,8 +102,9 @@ export default function QuickConsumeScreen() {
     return (
       <View style={styles.container}>
         <EmptyState
+          icon="silverware-fork-knife"
           title="Rien à signaler pour l'instant"
-          description="Aucun produit entamé, consulté ou consommé récemment ne ressort. Ouvrez une fiche produit depuis le stock pour la retrouver ici."
+          description="Aucun produit entamé, consulté ou consommé récemment ne ressort. Ouvrez une fiche depuis le stock pour la retrouver ici."
         />
       </View>
     );
@@ -171,21 +173,28 @@ function QuickConsumeCard({
   onFinished: () => void;
 }) {
   const item = candidate.stockItem;
+  const deadline = deadlineOf(item);
 
   return (
-    <Card style={styles.card}>
-      <Text style={styles.name}>{item.variant.culinaryLabel}</Text>
-      {item.variant.brand ? <Text style={styles.brand}>{item.variant.brand}</Text> : null}
+    <Card level={thermalFor(deadline.days)} style={styles.card}>
+      <View style={styles.headerRow}>
+        <View style={styles.flex}>
+          <Text style={text.heading}>{item.variant.culinaryLabel}</Text>
+          {item.variant.brand ? <Text style={[text.small, styles.brand]}>{item.variant.brand}</Text> : null}
+        </View>
+        <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+      </View>
+
+      <Text style={[text.data, styles.meta]}>
+        {item.quantityIsEstimated ? '~' : ''}
+        {item.displayQuantity} {item.displayUnit} · {item.storageLocationLabel}
+      </Text>
 
       <View style={styles.reasons}>
         {candidate.reasons.map((reason) => (
-          <Badge key={reason.code} label={reason.label} color={colors.info} background={colors.infoSoft} />
+          <Badge key={reason.code} label={reason.label} level="calm" />
         ))}
       </View>
-
-      <Text style={styles.meta}>
-        {item.displayQuantity} {item.displayUnit} · {item.storageLocationLabel}
-      </Text>
 
       <View style={styles.row}>
         {/* Un produit frais n'a pas d'exemplaire : on en retire un — une courgette,
@@ -211,7 +220,7 @@ function QuickConsumeCard({
         />
       </View>
       <View style={styles.row}>
-        <Button label="Terminé" variant="danger" onPress={onFinished} disabled={busy} style={styles.rowItem} />
+        <Button label="Terminé" variant="secondary" onPress={onFinished} disabled={busy} style={styles.rowItem} />
         <Button
           label="Autre quantité"
           variant="ghost"
@@ -240,14 +249,15 @@ function QuickConsumeCard({
 
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
-  card: { marginBottom: spacing.lg },
-  name: { fontSize: 19, fontWeight: '800', color: colors.ink },
-  brand: { fontSize: 14, color: colors.inkMuted, marginTop: 2 },
-  reasons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.md },
-  meta: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.md },
-  row: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+  card: { marginBottom: spacing.md },
+  flex: { flex: 1 },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  brand: { marginTop: 2 },
+  reasons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.sm },
+  meta: { marginTop: spacing.sm },
+  row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
   rowItem: { flex: 1 },
-  amountRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md, alignItems: 'center' },
+  amountRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md, alignItems: 'center' },
   amountInput: {
     flex: 1,
     backgroundColor: colors.surface,
@@ -255,9 +265,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: colors.ink,
+    minHeight: 48,
+    ...text.body,
   },
   amountButton: { flexShrink: 0 },
 });

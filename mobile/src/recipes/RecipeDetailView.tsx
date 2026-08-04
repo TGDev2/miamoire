@@ -12,7 +12,7 @@ import type {
   RecipePlan,
 } from '../api/types';
 import { Badge, Button, Card, Chip, DateField, ErrorBanner, SectionTitle } from '../components/ui';
-import { colors, feasibilityPresentation, mealSlotOptions, radius, spacing } from '../theme';
+import { colors, feasibilityPresentation, font, mealSlotOptions, radius, spacing, text, thermal } from '../theme';
 
 /**
  * L'écran d'une recette, qu'elle vienne d'une génération ou des enregistrées.
@@ -258,23 +258,21 @@ export function RecipeDetailView({
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
 
-      <Badge
-        label={presentation.label}
-        color={presentation.color}
-        background={presentation.background}
-      />
-      <Text style={styles.title}>{recipe.recipeName}</Text>
-      <Text style={styles.summary}>{recipe.summary}</Text>
-      <Text style={styles.meta}>
-        {recipe.preparationTime} min · {recipe.servings}{' '}
-        {recipe.servings > 1 ? 'personnes' : 'personne'}
-        {recipe.includesSideDish ? ' · avec accompagnement' : ''}
-      </Text>
+      <Badge label={presentation.label} level={presentation.level} />
+      <Text style={[text.display, styles.title]}>{recipe.recipeName}</Text>
+      <Text style={[text.bodyMuted, styles.summary]}>{recipe.summary}</Text>
+      <View style={styles.metaRow}>
+        <Text style={styles.meta}>{recipe.preparationTime} min</Text>
+        <Text style={styles.meta}>
+          {recipe.servings} {recipe.servings > 1 ? 'personnes' : 'personne'}
+        </Text>
+        {recipe.includesSideDish ? <Text style={styles.meta}>avec accompagnement</Text> : null}
+      </View>
 
       {recipe.utensils && recipe.utensils.length > 0 ? (
         <>
           <SectionTitle>Ustensiles</SectionTitle>
-          <Text style={styles.utensils}>{recipe.utensils.join(' · ')}</Text>
+          <Text style={text.small}>{recipe.utensils.join(' · ')}</Text>
         </>
       ) : null}
 
@@ -282,8 +280,9 @@ export function RecipeDetailView({
           fond, il se lisait comme une phrase et non comme un bouton, si bien que
           rien ne distinguait une recette conservée d'une qui ne l'était pas. */}
       <Button
-        label={savedId === null ? 'Enregistrer cette recette' : '✓ Enregistrée — toucher pour retirer'}
+        label={savedId === null ? 'Enregistrer cette recette' : 'Enregistrée — retirer'}
         variant="secondary"
+        icon={savedId === null ? 'content-save-outline' : 'check'}
         onPress={toggleSaved}
         loading={saving}
         style={[styles.save, savedId !== null && styles.saved]}
@@ -297,8 +296,9 @@ export function RecipeDetailView({
       {undefined === mealPlanEntryId ? (
         <>
           <Button
-            label={addedToPlan ? '✓ Ajoutée à votre plan de repas' : 'Ajouter à mon plan de repas'}
+            label={addedToPlan ? 'Ajoutée à votre plan de repas' : 'Ajouter à mon plan de repas'}
             variant="secondary"
+            icon={addedToPlan ? 'check' : 'calendar-blank-outline'}
             onPress={() => setPlanningOpen((current) => !current)}
             disabled={addedToPlan}
             style={styles.save}
@@ -345,8 +345,9 @@ export function RecipeDetailView({
             <IngredientRow key={`missing-${position}`} ingredient={ingredient} missing />
           ))}
           <Button
-            label={addedToList ? '✓ Ajoutés à la liste de courses' : 'Ajouter à la liste de courses'}
+            label={addedToList ? 'Ajoutés à la liste de courses' : 'Ajouter à la liste de courses'}
             variant="secondary"
+            icon={addedToList ? 'check' : 'format-list-checks'}
             onPress={addMissingToList}
             loading={addingToList}
             disabled={addedToList}
@@ -360,22 +361,23 @@ export function RecipeDetailView({
           <SectionTitle>Adaptations</SectionTitle>
           {recipe.substitutions.map((substitution, position) => (
             <Card key={`sub-${position}`} style={styles.substitutionCard}>
-              <Text style={styles.substitutionTitle}>
+              <Text style={text.subheading}>
                 {substitution.original} → {substitution.replacedBy}
               </Text>
-              <Text style={styles.substitutionReason}>{substitution.reason}</Text>
+              <Text style={[text.small, styles.substitutionReason]}>{substitution.reason}</Text>
             </Card>
           ))}
         </>
       ) : null}
 
+      {/* Une préparation est une vraie séquence : le numéro y porte une
+          information — l'ordre — et non une décoration. Il est composé dans la
+          voix machine, en retrait, pour ne pas concurrencer l'instruction. */}
       <SectionTitle>Préparation</SectionTitle>
       {recipe.steps.map((step, position) => (
         <View key={`step-${position}`} style={styles.step}>
-          <View style={styles.stepNumber}>
-            <Text style={styles.stepNumberText}>{position + 1}</Text>
-          </View>
-          <Text style={styles.stepText}>{step}</Text>
+          <Text style={styles.stepNumber}>{String(position + 1).padStart(2, '0')}</Text>
+          <Text style={[text.body, styles.flex]}>{step}</Text>
         </View>
       ))}
 
@@ -404,9 +406,9 @@ export function RecipeDetailView({
                 accessibilityLabel={line.label}
                 accessibilityHint="Ouvre la fiche de cet aliment"
               >
-                <Text style={styles.proposalLabel}>{line.label}</Text>
+                <Text style={text.body}>{line.label}</Text>
                 {parseQuantity(amounts[line.key]) !== line.quantity ? (
-                  <Text style={styles.proposalOriginal}>
+                  <Text style={[text.data, styles.proposalOriginal]}>
                     recette : {line.quantity} {line.unit}
                   </Text>
                 ) : null}
@@ -516,42 +518,47 @@ function IngredientRow({
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   flex: { flex: 1 },
-  title: { fontSize: 24, fontWeight: '800', color: colors.ink, marginTop: spacing.md },
-  summary: { fontSize: 15, color: colors.inkMuted, marginTop: spacing.sm, lineHeight: 21 },
-  meta: { fontSize: 14, color: colors.ink, marginTop: spacing.md, fontWeight: '600' },
-  utensils: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 19 },
+  title: { marginTop: spacing.md },
+  summary: { marginTop: spacing.sm },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.lg,
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  meta: { fontFamily: font.monoMedium, fontSize: 11, lineHeight: 15, color: colors.ink },
   save: { marginTop: spacing.lg },
-  saved: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
+  saved: { backgroundColor: colors.surfaceSunk },
   planCard: { marginTop: spacing.md },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: colors.inkMuted, marginTop: spacing.md },
+  fieldLabel: { ...text.label, marginTop: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm },
   spaced: { marginTop: spacing.md },
   ingredient: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.sm + 2,
+    gap: spacing.md,
+    paddingVertical: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  ingredientLabel: { fontSize: 15, color: colors.ink, flex: 1 },
-  ingredientMissing: { color: colors.accent },
-  ingredientQuantity: { fontSize: 15, color: colors.inkMuted, fontWeight: '600' },
+  ingredientLabel: { ...text.body, flex: 1 },
+  ingredientMissing: { color: thermal.soon.line },
+  ingredientQuantity: { fontFamily: font.monoMedium, fontSize: 12, color: colors.ink },
   addToList: { marginTop: spacing.md },
   substitutionCard: { marginBottom: spacing.sm },
-  substitutionTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  substitutionReason: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 19 },
-  step: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
+  substitutionReason: { marginTop: spacing.xs },
+  step: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
   stepNumber: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+    fontFamily: font.monoMedium,
+    fontSize: 12,
+    lineHeight: 22,
+    color: colors.inkMuted,
+    width: 22,
   },
-  stepNumberText: { fontSize: 13, fontWeight: '700', color: colors.primary },
-  stepText: { flex: 1, fontSize: 15, color: colors.ink, lineHeight: 22 },
   proposalRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -560,25 +567,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  proposalLabel: { fontSize: 15, color: colors.ink },
-  proposalOriginal: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },
-  proposalUnit: { fontSize: 14, color: colors.inkMuted, width: 36 },
+  proposalOriginal: { marginTop: 2 },
+  proposalUnit: { ...text.data, width: 36 },
   amountInput: {
     width: 76,
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.surfaceSunk,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
     paddingVertical: 8,
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.danger,
+    fontFamily: font.monoMedium,
+    fontSize: 14,
+    color: colors.ink,
     textAlign: 'right',
   },
   amountLocked: { color: colors.inkMuted, opacity: 0.7 },
   reset: { marginTop: spacing.xs },
-  help: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.md, lineHeight: 19 },
-  warning: { fontSize: 13, color: colors.accent, marginTop: spacing.md, lineHeight: 19 },
+  help: { ...text.small, marginTop: spacing.md },
+  warning: { ...text.small, color: thermal.soon.line, marginTop: spacing.md },
   confirm: { marginTop: spacing.lg },
 });

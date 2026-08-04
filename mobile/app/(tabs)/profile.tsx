@@ -1,14 +1,26 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
 import type { ExclusionSeverity, Reference } from '../../src/api/types';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
-import { Button, Card, Chip, ErrorBanner, Field, Loader, SectionTitle } from '../../src/components/ui';
+import {
+  Button,
+  Card,
+  Chip,
+  ErrorBanner,
+  Field,
+  IconButton,
+  Loader,
+  Row,
+  ScreenHeader,
+  SectionTitle,
+  useTopInset,
+} from '../../src/components/ui';
 import { clearExpiryNotifications, ensureExpiryAlerts } from '../../src/notifications/expiry';
 import { useSession } from '../../src/session/SessionContext';
-import { colors, radius, spacing } from '../../src/theme';
+import { colors, font, radius, spacing, text } from '../../src/theme';
 
 function severityLabel(severity: ExclusionSeverity): string {
   return severity === 'allergy' ? 'Allergie stricte' : severity === 'diet' ? 'Régime' : 'Préférence';
@@ -36,6 +48,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { household, member, accessKey, updateAccessKey, selectMember, refresh, leave } =
     useSession();
+  const topInset = useTopInset();
 
   const [householdName, setHouseholdName] = useState(household?.name ?? '');
   const [exclusion, setExclusion] = useState('');
@@ -121,93 +134,94 @@ export default function ProfileScreen() {
     );
   }
 
+  function setExclusions(next: Array<{ label: string; severity: ExclusionSeverity }>) {
+    return run(() => api.updateHousehold(household!.id, { dietaryExclusions: next }));
+  }
+
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <ScrollView style={topInset} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScreenHeader
+        eyebrow={`${household.members.length} membre${household.members.length > 1 ? 's' : ''}`}
+        title={household.name}
+        description={
+          member
+            ? `Vos ajouts et vos consommations sont signés « ${member.firstName} ».`
+            : 'Aucun prénom sélectionné : vos ajouts ne sont signés de personne.'
+        }
+      />
+
       <ErrorBanner message={error} />
 
-      <Card>
-        <Text style={styles.label}>Foyer</Text>
-        <Text style={styles.name}>{household.name}</Text>
-        <Text style={styles.label}>Vous êtes</Text>
-        <Text style={styles.name}>{member?.firstName ?? 'personne'}</Text>
-      </Card>
-
-      <SectionTitle>Qui utilise l'application ?</SectionTitle>
-      <Text style={styles.help}>
-        Le prénom sélectionné signe les produits que vous ajoutez et consommez.
-      </Text>
-
-      <View style={styles.chips}>
-        {household.members.map((entry) => (
-          <Chip
+      <SectionTitle>Qui utilise l'application</SectionTitle>
+      <Card style={styles.rowCard}>
+        {household.members.map((entry, index) => (
+          <Row
             key={entry.id}
+            icon={member?.id === entry.id ? 'check' : 'account-outline'}
             label={entry.firstName}
-            selected={member?.id === entry.id}
+            subtitle={member?.id === entry.id ? 'Signe ce que vous enregistrez' : undefined}
             onPress={() => selectMember(entry)}
+            last={index === household.members.length - 1}
+            trailing={
+              <IconButton
+                icon="close"
+                label={`Retirer ${entry.firstName} du foyer`}
+                tone="critical"
+                onPress={() => confirmRemoveMember(entry.id, entry.firstName)}
+              />
+            }
           />
         ))}
-      </View>
+      </Card>
 
-      {household.members.map((entry) => (
-        <Pressable
-          key={`remove-${entry.id}`}
-          onPress={() => confirmRemoveMember(entry.id, entry.firstName)}
-          accessibilityRole="button"
-          accessibilityLabel={`Retirer ${entry.firstName} du foyer`}
-          style={styles.removeRow}
-        >
-          <Text style={styles.removeText}>Retirer {entry.firstName} du foyer</Text>
-        </Pressable>
-      ))}
-
-      <Field
-        label="Ajouter une personne"
-        value={newMember}
-        onChangeText={setNewMember}
-        placeholder="Prénom"
-        returnKeyType="done"
-        onSubmitEditing={() => {
-          if (newMember.trim()) {
+      <View style={styles.inlineForm}>
+        <Field
+          label="Ajouter une personne"
+          value={newMember}
+          onChangeText={setNewMember}
+          placeholder="Prénom"
+          returnKeyType="done"
+          containerStyle={styles.inlineField}
+          onSubmitEditing={() => {
+            if (newMember.trim()) {
+              run(() => api.addMember(household.id, newMember.trim()));
+              setNewMember('');
+            }
+          }}
+        />
+        <Button
+          label="Ajouter"
+          variant="secondary"
+          loading={busy}
+          disabled={!newMember.trim()}
+          onPress={() => {
+            if (!newMember.trim()) return;
             run(() => api.addMember(household.id, newMember.trim()));
             setNewMember('');
-          }
-        }}
-      />
-      <Button
-        label="Ajouter"
-        variant="secondary"
-        loading={busy}
-        onPress={() => {
-          if (!newMember.trim()) return;
-          run(() => api.addMember(household.id, newMember.trim()));
-          setNewMember('');
-        }}
-      />
+          }}
+          style={styles.inlineButton}
+        />
+      </View>
 
       <SectionTitle>Nom du foyer</SectionTitle>
-      <Field label="Nom" value={householdName} onChangeText={setHouseholdName} />
+      <Field label="Nom du foyer" hideLabel value={householdName} onChangeText={setHouseholdName} />
       <Button
-        label="Enregistrer"
+        label="Enregistrer le nom"
         variant="secondary"
         loading={busy}
         onPress={() => run(() => api.updateHousehold(household.id, { name: householdName }))}
       />
 
       <SectionTitle>Exclusions alimentaires</SectionTitle>
-      <Text style={styles.help}>
-        Ces aliments sont retirés de l'inventaire envoyé au générateur, et toute recette
-        qui les nomme — jusque dans ses étapes — est écartée avant de vous être montrée.
-        Le contrôle est automatique : il ne dépend pas de la bonne volonté du modèle.
-      </Text>
-      <Text style={styles.help}>
-        Pour une allergie stricte, un produit dont la fiche ne précise pas les allergènes
-        est en plus signalé « sécurité non vérifiable » plutôt que présenté comme sûr — un
-        régime ou une simple préférence ne déclenchent pas ce contrôle-là.
+      <Text style={[text.small, styles.help]}>
+        Ces aliments sont retirés de l'inventaire envoyé au générateur, et toute recette qui les
+        nomme — jusque dans ses étapes — est écartée avant de vous être montrée. Le contrôle est
+        automatique : il ne dépend pas de la bonne volonté du modèle.
       </Text>
 
       {/* Choisir « Arachides » dans cette liste couvre aussi « beurre de cacahuète »
           et « satay ». Un texte libre ne cherche que le mot écrit. */}
-      <Text style={styles.help}>Allergènes reconnus, avec tous leurs dérivés :</Text>
+      <Text style={[text.label, styles.groupLabel]}>Allergènes reconnus, dérivés compris</Text>
       <View style={styles.chips}>
         {(reference?.allergens ?? []).map((allergen) => {
           const active = household.dietaryExclusions.some((entry) => entry.label === allergen.label);
@@ -218,15 +232,13 @@ export default function ProfileScreen() {
               label={allergen.label}
               selected={active}
               onPress={() =>
-                run(() =>
-                  api.updateHousehold(household.id, {
-                    dietaryExclusions: active
-                      ? household.dietaryExclusions.filter((entry) => entry.label !== allergen.label)
-                      : [
-                          ...household.dietaryExclusions,
-                          { label: allergen.label, severity: allergen.defaultSeverity },
-                        ],
-                  }),
+                setExclusions(
+                  active
+                    ? household.dietaryExclusions.filter((entry) => entry.label !== allergen.label)
+                    : [
+                        ...household.dietaryExclusions,
+                        { label: allergen.label, severity: allergen.defaultSeverity },
+                      ],
                 )
               }
             />
@@ -234,76 +246,69 @@ export default function ProfileScreen() {
         })}
       </View>
 
-      <Text style={styles.help}>
-        Exclusions actives — toucher une exclusion change son type :
-      </Text>
-      <View style={styles.chips}>
-        {household.dietaryExclusions.map((entry) => (
-          <Chip
-            key={entry.label}
-            label={`${entry.label} · ${severityLabel(entry.severity)}`}
-            selected
-            onPress={() =>
-              pickSeverity(entry.label, (severity) =>
-                run(() =>
-                  api.updateHousehold(household.id, {
-                    dietaryExclusions: household.dietaryExclusions.map((e) =>
-                      e.label === entry.label ? { ...e, severity } : e,
+      <Text style={[text.label, styles.groupLabel]}>Exclusions actives</Text>
+      {household.dietaryExclusions.length > 0 ? (
+        <Card style={styles.rowCard}>
+          {household.dietaryExclusions.map((entry, index) => (
+            <Row
+              key={entry.label}
+              label={entry.label}
+              subtitle={`${severityLabel(entry.severity)} · toucher pour changer`}
+              onPress={() =>
+                pickSeverity(entry.label, (severity) =>
+                  setExclusions(
+                    household.dietaryExclusions.map((current) =>
+                      current.label === entry.label ? { ...current, severity } : current,
                     ),
-                  }),
-                ),
-              )
-            }
-          />
-        ))}
-        {household.dietaryExclusions.length === 0 ? (
-          <Text style={styles.help}>Aucune exclusion enregistrée.</Text>
-        ) : null}
+                  ),
+                )
+              }
+              last={index === household.dietaryExclusions.length - 1}
+              trailing={
+                <IconButton
+                  icon="close"
+                  label={`Retirer ${entry.label} de mes exclusions`}
+                  tone="critical"
+                  onPress={() =>
+                    setExclusions(
+                      household.dietaryExclusions.filter((current) => current.label !== entry.label),
+                    )
+                  }
+                />
+              }
+            />
+          ))}
+        </Card>
+      ) : (
+        <Text style={[text.small, styles.help]}>
+          Aucune exclusion enregistrée. Une allergie stricte déclenche en plus le contrôle
+          « sécurité non vérifiable » sur les produits dont la composition est inconnue.
+        </Text>
+      )}
+
+      <View style={styles.spaced}>
+        <Field
+          label="Ajouter une autre exclusion"
+          value={exclusion}
+          onChangeText={setExclusion}
+          placeholder="brocoli, coriandre…"
+          hint="Un terme libre est cherché tel quel, en allergie stricte par défaut. Ajustez son type ensuite."
+          returnKeyType="done"
+          onSubmitEditing={() => {
+            if (!exclusion.trim()) return;
+            setExclusions([
+              ...household.dietaryExclusions,
+              { label: exclusion.trim(), severity: 'allergy' },
+            ]);
+            setExclusion('');
+          }}
+        />
       </View>
 
-      {household.dietaryExclusions.map((entry) => (
-        <Pressable
-          key={`remove-excl-${entry.label}`}
-          onPress={() =>
-            run(() =>
-              api.updateHousehold(household.id, {
-                dietaryExclusions: household.dietaryExclusions.filter((e) => e.label !== entry.label),
-              }),
-            )
-          }
-          accessibilityRole="button"
-          accessibilityLabel={`Retirer ${entry.label} de mes exclusions`}
-          style={styles.removeRow}
-        >
-          <Text style={styles.removeText}>Retirer {entry.label} de mes exclusions</Text>
-        </Pressable>
-      ))}
-
-      <Field
-        label="Ajouter une autre exclusion"
-        value={exclusion}
-        onChangeText={setExclusion}
-        placeholder="brocoli, coriandre…"
-        hint="Un terme libre est cherché tel quel, en allergie stricte par défaut : ajustez son type ensuite si besoin."
-        returnKeyType="done"
-        onSubmitEditing={() => {
-          if (!exclusion.trim()) return;
-          run(() =>
-            api.updateHousehold(household.id, {
-              dietaryExclusions: [
-                ...household.dietaryExclusions,
-                { label: exclusion.trim(), severity: 'allergy' },
-              ],
-            }),
-          );
-          setExclusion('');
-        }}
-      />
-
       <SectionTitle>Code du foyer</SectionTitle>
-      <Text style={styles.help}>
-        C'est ce code, et lui seul, qui donne accès au stock de ce foyer. Transmettez-le
-        aux personnes qui y vivent, à personne d'autre.
+      <Text style={[text.small, styles.help]}>
+        Ce code, et lui seul, donne accès au stock du foyer. Transmettez-le aux personnes qui y
+        vivent, à personne d'autre.
       </Text>
 
       {accessKey ? (
@@ -316,33 +321,33 @@ export default function ProfileScreen() {
           <Button
             label="Partager le code"
             variant="secondary"
+            icon="share-variant-outline"
             onPress={() =>
               Share.share({
                 message: `Rejoins notre foyer « ${household!.name} » dans l'application Food avec ce code : ${issuedKey ?? accessKey}`,
               })
             }
           />
-          <Button
-            label="Régénérer le code"
-            variant="ghost"
-            onPress={confirmRotateKey}
-            style={styles.spaced}
-          />
+          <Button label="Régénérer le code" variant="ghost" onPress={confirmRotateKey} style={styles.spaced} />
         </>
       ) : (
-        <Text style={styles.help}>Aucun code enregistré sur ce téléphone.</Text>
+        <Text style={[text.small, styles.help]}>Aucun code enregistré sur ce téléphone.</Text>
       )}
 
       <SectionTitle>Alertes de péremption</SectionTitle>
-      <Text style={styles.help}>
+      <Text style={[text.small, styles.help]}>
         Trois jours avant la date limite, à 9 h, ce téléphone vous prévient de ce qu'il faut
-        consommer. Les alertes sont programmées sur l'appareil : chaque membre du foyer
-        autorise les siennes.
+        consommer. Les alertes sont programmées sur l'appareil : chaque membre autorise les siennes.
       </Text>
-      <Text style={styles.help}>{alertStatus}</Text>
+      <Card style={styles.statusCard}>
+        {/* Une phrase, donc la voix humaine : le monospace ne porte jamais de
+            phrase, seulement des chiffres et des rubriques. */}
+        <Text style={text.body}>{alertStatus}</Text>
+      </Card>
       <Button
         label="Vérifier l'autorisation"
         variant="secondary"
+        icon="bell-ring-outline"
         onPress={async () => {
           const granted = await ensureExpiryAlerts();
           setAlertStatus(
@@ -357,7 +362,7 @@ export default function ProfileScreen() {
       <ServerAddressField />
 
       <SectionTitle>Changer de foyer</SectionTitle>
-      <Text style={styles.help}>
+      <Text style={[text.small, styles.help]}>
         Le stock de chaque foyer reste strictement séparé. Changer de foyer ne supprime rien.
       </Text>
       <Button
@@ -376,32 +381,35 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.inkMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginTop: spacing.sm,
-  },
-  name: { fontSize: 20, fontWeight: '800', color: colors.ink },
-  help: { fontSize: 13, color: colors.inkMuted, lineHeight: 19, marginBottom: spacing.md },
+  rowCard: { padding: 0 },
+  help: { marginBottom: spacing.md },
+  groupLabel: { marginTop: spacing.lg, marginBottom: spacing.sm },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  removeRow: { paddingVertical: spacing.xs },
-  removeText: { fontSize: 13, color: colors.danger },
-  spaced: { marginTop: spacing.sm },
+  inlineForm: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, marginTop: spacing.lg },
+  inlineField: { flex: 1, marginBottom: 0 },
+  inlineButton: { minWidth: 104 },
+  spaced: { marginTop: spacing.md },
+  statusCard: { paddingVertical: spacing.md, marginBottom: spacing.md },
+
+  /**
+   * Le code est une donnée machine : il se lit caractère par caractère, sans
+   * ambiguïté entre un zéro et un O. C'est exactement ce que la voix monospacée
+   * est là pour faire.
+   */
   codeBox: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSunk,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
     paddingVertical: spacing.lg,
     paddingHorizontal: spacing.md,
     marginBottom: spacing.md,
     alignItems: 'center',
   },
   codeText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: colors.primary,
+    fontFamily: font.monoSemiBold,
+    fontSize: 16,
+    color: colors.ink,
     letterSpacing: 1,
     textAlign: 'center',
   },

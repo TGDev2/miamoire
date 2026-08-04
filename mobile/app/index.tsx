@@ -8,7 +8,7 @@ export default function Entry() {
   const { isReady, isLoading } = useSession();
 
   if (isLoading) {
-    return <Loader label="Chargement de votre stock…" />;
+    return <Loader label="Chargement de votre stock" />;
   }
 
   return <Redirect href={isReady ? '/(tabs)' : '/setup'} />;

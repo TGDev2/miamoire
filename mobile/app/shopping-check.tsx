@@ -6,7 +6,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { api } from '../src/api/client';
 import type { CurrentStockSummary, Product } from '../src/api/types';
 import { Button, Card } from '../src/components/ui';
-import { colors, radius, spacing } from '../src/theme';
+import { colors, spacing, text, thermal } from '../src/theme';
 
 /** Codes-barres réellement utilisés sur les emballages alimentaires. */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39'] as const;
@@ -100,14 +100,19 @@ export default function ShoppingCheckScreen() {
       <View style={styles.overlay} pointerEvents="box-none">
         {active ? (
           <>
-            <View style={styles.reticle} />
-            <Text style={styles.hint}>Cadrez le code-barres du produit à vérifier</Text>
+            <View style={styles.reticle}>
+              <View style={[styles.corner, styles.cornerTopLeft]} />
+              <View style={[styles.corner, styles.cornerTopRight]} />
+              <View style={[styles.corner, styles.cornerBottomLeft]} />
+              <View style={[styles.corner, styles.cornerBottomRight]} />
+            </View>
+            <Text style={styles.hint}>Cadrez le code-barres du produit</Text>
           </>
         ) : null}
 
         {loading ? (
           <Card style={styles.card}>
-            <Text style={styles.loadingText}>Vérification…</Text>
+            <Text style={styles.loadingText}>Vérification en cours</Text>
           </Card>
         ) : null}
 
@@ -173,33 +178,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.xl,
-    backgroundColor: colors.background,
+    backgroundColor: colors.ground,
   },
-  title: { fontSize: 20, fontWeight: '700', color: colors.ink, marginBottom: spacing.sm },
-  description: { fontSize: 15, color: colors.inkMuted, textAlign: 'center', lineHeight: 21 },
+  title: { ...text.title, marginBottom: spacing.sm, textAlign: 'center' },
+  description: { ...text.small, textAlign: 'center' },
   action: { alignSelf: 'stretch', marginTop: spacing.xl },
   overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
-  reticle: {
-    width: '80%',
-    height: 170,
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-    borderRadius: radius.lg,
-    opacity: 0.9,
-  },
+  reticle: { width: '82%', maxWidth: 320, height: 170 },
+  corner: { position: 'absolute', width: 26, height: 26, borderColor: '#FFFFFF' },
+  cornerTopLeft: { top: 0, left: 0, borderTopWidth: 2, borderLeftWidth: 2 },
+  cornerTopRight: { top: 0, right: 0, borderTopWidth: 2, borderRightWidth: 2 },
+  cornerBottomLeft: { bottom: 0, left: 0, borderBottomWidth: 2, borderLeftWidth: 2 },
+  cornerBottomRight: { bottom: 0, right: 0, borderBottomWidth: 2, borderRightWidth: 2 },
   hint: {
+    ...text.label,
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
-    marginTop: spacing.lg,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowRadius: 4,
+    marginTop: spacing.xl,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowRadius: 6,
   },
   card: { width: '100%' },
-  loadingText: { fontSize: 15, color: colors.ink, textAlign: 'center' },
-  errorText: { fontSize: 15, color: colors.danger },
-  productName: { fontSize: 19, fontWeight: '800', color: colors.ink },
-  stockText: { fontSize: 15, color: colors.inkMuted, marginTop: spacing.md, lineHeight: 21 },
+  loadingText: { ...text.body, textAlign: 'center' },
+  errorText: { ...text.body, color: thermal.critical.line },
+  productName: text.heading,
+  stockText: { ...text.small, marginTop: spacing.md },
   spaced: { marginTop: spacing.lg },
   footer: { position: 'absolute', bottom: spacing.xl, left: spacing.xl, right: spacing.xl },
 });

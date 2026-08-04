@@ -15,7 +15,16 @@ import {
   Loader,
   SectionTitle,
 } from '../src/components/ui';
-import { colors, feasibilityPresentation, mealSlotOptions, radius, spacing } from '../src/theme';
+import {
+  colors,
+  feasibilityPresentation,
+  font,
+  mealSlotOptions,
+  radius,
+  spacing,
+  text,
+  thermal,
+} from '../src/theme';
 
 const MAX_ACTIVE_ENTRIES = 4;
 
@@ -129,7 +138,7 @@ export default function MealPlanScreen() {
   }
 
   if (null === overview && !loadError) {
-    return <Loader label="Chargement de votre plan de repas…" />;
+    return <Loader label="Chargement de votre plan de repas" />;
   }
 
   if (loadError) {
@@ -148,6 +157,7 @@ export default function MealPlanScreen() {
 
       {0 === overview?.entries.length ? (
         <EmptyState
+          icon="calendar-blank-outline"
           title="Rien de planifié pour l'instant"
           description="Ajoutez jusqu'à quatre repas à venir : une recette enregistrée, une proposition de Cuisiner, ou simplement un repas libre."
         />
@@ -164,40 +174,50 @@ export default function MealPlanScreen() {
       )}
 
       {overview && overview.shortfallSummary.length > 0 ? (
-        <Card style={styles.card}>
+        <>
           <SectionTitle>Ce qu'il manque au total</SectionTitle>
-          {overview.shortfallSummary.map((line, position) => (
-            <Text key={position} style={styles.shortfallLine}>
-              • {line.label} : {line.quantity} {line.unit}
-            </Text>
-          ))}
-          <Button
-            label="Ajouter tout à la liste de courses"
-            onPress={addShortfallToShoppingList}
-            disabled={busy}
-            style={styles.spaced}
-          />
-        </Card>
+          <Card style={styles.card}>
+            {overview.shortfallSummary.map((line, position) => (
+              <View key={position} style={styles.shortfallLine}>
+                <Text style={styles.shortfallLabel}>{line.label}</Text>
+                <Text style={styles.shortfallQuantity}>
+                  {line.quantity} {line.unit}
+                </Text>
+              </View>
+            ))}
+            <Button
+              label="Ajouter tout à la liste de courses"
+              onPress={addShortfallToShoppingList}
+              disabled={busy}
+              style={styles.spaced}
+            />
+          </Card>
+        </>
       ) : null}
 
       {overview && overview.unclaimedUrgentItems.length > 0 ? (
-        <Card style={styles.card}>
+        <>
           <SectionTitle>Urgents, mais pas encore prévus</SectionTitle>
-          {overview.unclaimedUrgentItems.map((candidate) => (
-            <View key={candidate.stockItem.id} style={styles.urgentRow}>
-              <Text style={styles.urgentLabel}>{candidate.stockItem.variant.culinaryLabel}</Text>
-              <View style={styles.reasons}>
-                {candidate.reasons.map((reason) => (
-                  <Badge key={reason.code} label={reason.label} color={colors.accent} background={colors.accentSoft} />
-                ))}
+          <Card style={styles.card}>
+            {overview.unclaimedUrgentItems.map((candidate, position) => (
+              <View
+                key={candidate.stockItem.id}
+                style={[styles.urgentRow, 0 === position && styles.urgentRowFirst]}
+              >
+                <Text style={styles.urgentLabel}>{candidate.stockItem.variant.culinaryLabel}</Text>
+                <View style={styles.reasons}>
+                  {candidate.reasons.map((reason) => (
+                    <Badge key={reason.code} label={reason.label} level="soon" />
+                  ))}
+                </View>
               </View>
-            </View>
-          ))}
-        </Card>
+            ))}
+          </Card>
+        </>
       ) : null}
 
+      <SectionTitle>Ajouter un repas</SectionTitle>
       <Card style={styles.card}>
-        <SectionTitle>Ajouter un repas</SectionTitle>
         {atCapacity ? (
           <Text style={styles.help}>
             Votre plan est complet ({MAX_ACTIVE_ENTRIES} repas). Retirez-en un avant d'en ajouter un autre.
@@ -221,7 +241,7 @@ export default function MealPlanScreen() {
               <>
                 <Text style={styles.fieldLabel}>Choisir une recette enregistrée</Text>
                 {null === savedRecipes ? (
-                  <Loader label="Chargement de vos recettes…" />
+                  <Loader label="Chargement de vos recettes" />
                 ) : 0 === savedRecipes.length ? (
                   <Text style={styles.help}>
                     Aucune recette enregistrée. Enregistrez-en une depuis Cuisiner, ou ajoutez un repas libre.
@@ -303,7 +323,9 @@ function MealPlanEntryCard({
       </Text>
       <Text style={styles.title}>{entry.displayName}</Text>
       {presentation ? (
-        <Badge label={presentation.label} color={presentation.color} background={presentation.background} />
+        <View style={styles.badgeRow}>
+          <Badge label={presentation.label} level={presentation.level} />
+        </View>
       ) : null}
 
       {entry.lines.map((line) => (
@@ -341,19 +363,32 @@ function formatDisplayDate(iso: string): string {
 
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
-  card: { marginBottom: spacing.lg },
-  dateLine: { fontSize: 13, fontWeight: '700', color: colors.inkMuted, textTransform: 'capitalize' },
-  title: { fontSize: 19, fontWeight: '800', color: colors.ink, marginTop: 2 },
+  card: { marginBottom: spacing.md },
+  /** La date est une donnée : elle prend la voix machine, en tête de carte. */
+  dateLine: { ...text.label, textTransform: 'uppercase' },
+  title: { ...text.title, marginTop: spacing.sm },
+  badgeRow: { flexDirection: 'row', marginTop: spacing.sm },
   lineRow: { marginTop: spacing.md },
-  lineLabel: { fontSize: 14, color: colors.ink },
-  crossReference: { fontSize: 12, color: colors.accent, marginTop: 2 },
-  row: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+  lineLabel: text.body,
+  crossReference: { ...text.small, color: thermal.soon.line, marginTop: 2 },
+  row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
   rowItem: { flex: 1 },
-  shortfallLine: { fontSize: 14, color: colors.ink, marginTop: spacing.xs },
-  urgentRow: { marginTop: spacing.sm },
-  urgentLabel: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  shortfallLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  shortfallLabel: { ...text.body, flex: 1 },
+  shortfallQuantity: { fontFamily: font.monoMedium, fontSize: 12, color: colors.ink },
+  urgentRow: { marginTop: spacing.md },
+  urgentRowFirst: { marginTop: 0 },
+  urgentLabel: text.subheading,
   reasons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.xs },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: colors.inkMuted, marginTop: spacing.md },
+  fieldLabel: { ...text.label, marginTop: spacing.lg },
   chips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm },
   input: {
     backgroundColor: colors.surface,
@@ -361,19 +396,12 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: colors.ink,
+    minHeight: 48,
     marginTop: spacing.sm,
+    ...text.body,
   },
   spaced: { marginTop: spacing.md },
   spacedSmall: { marginTop: spacing.sm },
-  help: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.sm, lineHeight: 19 },
-  disclaimer: {
-    fontSize: 12,
-    color: colors.inkMuted,
-    textAlign: 'center',
-    marginTop: spacing.md,
-    lineHeight: 18,
-  },
+  help: { ...text.small, marginTop: spacing.sm },
+  disclaimer: { ...text.small, textAlign: 'center', marginTop: spacing.md },
 });

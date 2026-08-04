@@ -15,7 +15,7 @@ import { ApiError, api } from '../src/api/client';
 import { ServerAddressField } from '../src/components/ServerAddressField';
 import { Button, Card, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
 import { useSession } from '../src/session/SessionContext';
-import { colors, radius, spacing } from '../src/theme';
+import { colors, font, radius, spacing, text } from '../src/theme';
 
 /**
  * Mise en route : ouvrir un foyer, puis dire qui l'on est.
@@ -146,10 +146,13 @@ export default function SetupScreen() {
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        {/* La promesse en grand, le nom en petit : c'est ce que l'application
+            fait qui doit ouvrir l'écran, pas la marque. */}
         <Text style={styles.logo}>Food</Text>
         <Text style={styles.tagline}>
           Ce que vous avez, ce qui va périmer, ce que vous pouvez cuisiner.
         </Text>
+        <View style={styles.rule} />
 
         <ErrorBanner message={error} />
 
@@ -272,45 +275,45 @@ export default function SetupScreen() {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: colors.background },
+  flex: { flex: 1, backgroundColor: colors.ground },
   container: { padding: spacing.xl, paddingTop: spacing.xxl * 2, paddingBottom: spacing.xxl },
-  logo: { fontSize: 40, fontWeight: '800', color: colors.primary, letterSpacing: -1 },
-  tagline: { fontSize: 15, color: colors.inkMuted, marginTop: spacing.sm, lineHeight: 22 },
-  help: { fontSize: 13, color: colors.inkMuted, lineHeight: 19, marginBottom: spacing.md },
+  logo: { ...text.label, fontSize: 11, letterSpacing: 3 },
+  tagline: { ...text.title, marginTop: spacing.md },
+  rule: { height: 1, backgroundColor: colors.border, marginTop: spacing.xl, marginBottom: spacing.sm },
+  help: { ...text.small, marginBottom: spacing.md },
   tabs: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   tab: {
     flex: 1,
-    paddingVertical: spacing.md,
+    minHeight: 48,
+    justifyContent: 'center',
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
     alignItems: 'center',
   },
-  tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  tabText: { fontSize: 14, fontWeight: '600', color: colors.ink },
-  tabTextActive: { color: '#FFFFFF' },
+  tabActive: { backgroundColor: colors.ink, borderColor: colors.ink },
+  tabText: { ...text.button, color: colors.ink },
+  tabTextActive: { color: colors.onInk },
+  /** Un code se relit caractère par caractère : c'est la voix machine qui le porte. */
   codeBox: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSunk,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
     paddingVertical: spacing.xl,
     paddingHorizontal: spacing.md,
     marginBottom: spacing.lg,
     alignItems: 'center',
   },
   codeText: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: colors.primary,
-    letterSpacing: 0.5,
+    fontFamily: font.monoSemiBold,
+    fontSize: 17,
+    color: colors.ink,
+    letterSpacing: 1,
     textAlign: 'center',
   },
-  codeReminder: {
-    marginTop: spacing.lg,
-    fontSize: 12,
-    color: colors.inkMuted,
-    textAlign: 'center',
-  },
+  codeReminder: { ...text.data, marginTop: spacing.lg, textAlign: 'center' },
   choice: {
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -318,15 +321,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     padding: spacing.lg,
     marginBottom: spacing.sm,
+    minHeight: 56,
+    justifyContent: 'center',
   },
-  pressed: { opacity: 0.7 },
-  choiceName: { fontSize: 17, fontWeight: '700', color: colors.ink },
+  pressed: { backgroundColor: colors.surfaceSunk },
+  choiceName: text.heading,
   spaced: { marginTop: spacing.md },
   serverBlock: { marginTop: spacing.xxl },
   server: {
+    ...text.small,
     marginTop: spacing.xxl,
-    fontSize: 13,
-    color: colors.inkMuted,
     textAlign: 'center',
     textDecorationLine: 'underline',
   },

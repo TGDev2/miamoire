@@ -13,14 +13,38 @@ import {
 
 import { api } from '../../src/api/client';
 import type { Reference, StockItem } from '../../src/api/types';
-import { Badge, Button, Chip, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  ErrorBanner,
+  Icon,
+  Loader,
+  ScreenHeader,
+  Stamp,
+  useTopInset,
+} from '../../src/components/ui';
+import { deadlineOf } from '../../src/deadline';
 import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
-import { colors, radius, spacing, statusPresentation } from '../../src/theme';
+import {
+  colors,
+  deadlineSentence,
+  radius,
+  spacing,
+  statusPresentation,
+  text,
+  thermal,
+  thermalFor,
+} from '../../src/theme';
 
 const EXPIRY_FILTER_DAYS = 3;
 
+/** Les états qui décrivent l'emballage, et que le cachet ne dit pas. */
+const PACKAGE_STATES = new Set(['opened', 'resealed', 'running_low', 'empty', 'archived']);
+
 export default function StockScreen() {
   const router = useRouter();
+  const topInset = useTopInset();
 
   const [items, setItems] = useState<StockItem[]>([]);
   const [reference, setReference] = useState<Reference | null>(null);
@@ -75,7 +99,7 @@ export default function StockScreen() {
     }, []),
   );
 
-  if (loading) return <Loader label="Chargement du stock…" />;
+  if (loading) return <Loader label="Chargement du stock" />;
 
   const urgentCount = items.filter(
     (item) => item.status === 'expiring_soon' || item.status === 'expired',
@@ -85,63 +109,7 @@ export default function StockScreen() {
   const filtering = Boolean(search) || location !== null || category !== null || urgentOnly;
 
   return (
-    <View style={styles.flex}>
-      <View style={styles.toolbar}>
-        <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Rechercher un aliment…"
-          placeholderTextColor={colors.inkMuted}
-          style={styles.search}
-          returnKeyType="search"
-        />
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters}>
-          <Chip
-            label={`Bientôt périmés${urgentCount ? ` (${urgentCount})` : ''}`}
-            selected={urgentOnly}
-            onPress={() => setUrgentOnly((value) => !value)}
-          />
-          {/* Les archives n'étaient atteignables par aucun écran : le geste
-              s'annonçait réversible sans que rien ne permette de le défaire. */}
-          <Chip
-            label="Archivés"
-            selected={archived}
-            onPress={() => setArchived((value) => !value)}
-          />
-          {reference?.storageLocations.map((option) => (
-            <Chip
-              key={option.value}
-              label={option.label}
-              selected={location === option.value}
-              onPress={() => setLocation(location === option.value ? null : option.value)}
-            />
-          ))}
-          {reference?.categories.map((name) => (
-            <Chip
-              key={name}
-              label={name}
-              selected={category === name}
-              onPress={() => setCategory(category === name ? null : name)}
-            />
-          ))}
-        </ScrollView>
-
-        <View style={styles.toolbarButtons}>
-          <Button
-            label="J'ai utilisé quelque chose"
-            onPress={() => router.push('/quick-consume')}
-            style={styles.toolbarButton}
-          />
-          <Button
-            label="Vérifier mon stock"
-            variant="secondary"
-            onPress={() => router.push('/review')}
-            style={styles.toolbarButton}
-          />
-        </View>
-      </View>
-
+    <View style={[styles.flex, topInset]}>
       <FlatList
         data={items}
         keyExtractor={(item) => item.id}
@@ -153,10 +121,90 @@ export default function StockScreen() {
               setRefreshing(true);
               load();
             }}
-            tintColor={colors.primary}
+            tintColor={colors.ink}
           />
         }
-        ListHeaderComponent={<ErrorBanner message={error} />}
+        ListHeaderComponent={
+          <View>
+            <ScreenHeader
+              eyebrow={inventoryLabel(items.length, urgentCount, archived)}
+              title={archived ? 'Archives' : 'Mon stock'}
+            />
+
+            <View style={styles.search}>
+              <Icon name="magnify" size={18} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Rechercher un aliment"
+                placeholderTextColor={colors.inkMuted}
+                style={styles.searchInput}
+                returnKeyType="search"
+                accessibilityLabel="Rechercher un aliment"
+              />
+              {search ? (
+                <Pressable
+                  onPress={() => setSearch('')}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Effacer la recherche"
+                >
+                  <Icon name="close" size={18} />
+                </Pressable>
+              ) : null}
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters}>
+              <Chip
+                label={`À consommer vite${urgentCount ? ` (${urgentCount})` : ''}`}
+                selected={urgentOnly}
+                onPress={() => setUrgentOnly((value) => !value)}
+              />
+              {reference?.storageLocations.map((option) => (
+                <Chip
+                  key={option.value}
+                  label={option.label}
+                  selected={location === option.value}
+                  onPress={() => setLocation(location === option.value ? null : option.value)}
+                />
+              ))}
+              {reference?.categories.map((name) => (
+                <Chip
+                  key={name}
+                  label={name}
+                  selected={category === name}
+                  onPress={() => setCategory(category === name ? null : name)}
+                />
+              ))}
+              {/* Les archives n'étaient atteignables par aucun écran : le geste
+                  s'annonçait réversible sans que rien ne permette de le défaire.
+                  Placées en dernier, elles ne s'ajoutent pas aux filtres — elles
+                  ouvrent un autre inventaire. */}
+              <Chip label="Archives" selected={archived} onPress={() => setArchived((value) => !value)} />
+            </ScrollView>
+
+            <View style={styles.quickActions}>
+              <Button
+                label="J'ai utilisé…"
+                variant="secondary"
+                icon="silverware-fork-knife"
+                onPress={() => router.push('/quick-consume')}
+                hint="Retirer une quantité du stock"
+                style={styles.quickAction}
+              />
+              <Button
+                label="Vérifier"
+                variant="secondary"
+                icon="clipboard-check-outline"
+                onPress={() => router.push('/review')}
+                hint="Confirmer les lots dont l'état est incertain"
+                style={styles.quickAction}
+              />
+            </View>
+
+            <ErrorBanner message={error} />
+          </View>
+        }
         ListEmptyComponent={
           // « Votre stock est vide » sous une recherche active est faux, et c'est
           // la seule lecture qui décourage : on croit avoir perdu son inventaire
@@ -165,11 +213,13 @@ export default function StockScreen() {
           // que les deux autres : « rien n'a été rangé ici », pas « rien à voir ».
           archived && !filtering ? (
             <EmptyState
+              icon="archive-outline"
               title="Aucun lot archivé"
-              description="Archiver un aliment le sort de l'inventaire sans rien lui retirer, et il revient ici en attendant d'être restauré."
+              description="Archiver un aliment le sort de l'inventaire sans rien lui retirer. Il attend ici d'être restauré."
             />
           ) : filtering || archived ? (
             <EmptyState
+              icon="magnify"
               title="Aucun résultat"
               description={
                 search
@@ -179,8 +229,10 @@ export default function StockScreen() {
             />
           ) : (
             <EmptyState
+              icon="basket-outline"
               title="Votre stock est vide"
-              description="Scannez un code-barres ou saisissez un aliment manuellement pour commencer."
+              description="Scannez un code-barres, ou saisissez un premier aliment à la main."
+              action={<Button label="Ajouter un aliment" onPress={() => router.push('/add')} />}
             />
           )
         }
@@ -190,19 +242,40 @@ export default function StockScreen() {
       />
 
       <Pressable
-        style={styles.fab}
+        style={({ pressed }) => [styles.add, pressed && styles.addPressed]}
         onPress={() => router.push('/add')}
         accessibilityRole="button"
         accessibilityLabel="Ajouter un aliment au stock"
       >
-        <Text style={styles.fabLabel}>+</Text>
+        <Icon name="plus" size={26} color={colors.onInk} />
       </Pressable>
     </View>
   );
 }
 
+/** La rubrique du titre porte le compte réel — pas un mot de remplissage. */
+function inventoryLabel(count: number, urgent: number, archived: boolean): string {
+  if (archived) return `${count} lot${count > 1 ? 's' : ''} archivé${count > 1 ? 's' : ''}`;
+  if (0 === count) return 'Aucun lot';
+
+  const lots = `${count} lot${count > 1 ? 's' : ''}`;
+
+  return urgent > 0 ? `${lots} · ${urgent} à traiter` : lots;
+}
+
 function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
+  const deadline = deadlineOf(item);
+  const level = thermalFor(deadline.days);
+
+  // Le cachet dit déjà l'échéance : la pastille d'état ne se répète que pour ce
+  // qu'il ne dit pas — l'emballage. Le reste passe en note discrète.
+  const note = [
+    PACKAGE_STATES.has(item.status) ? presentation.label.toLowerCase() : null,
+    item.addedBy ? `ajouté par ${item.addedBy}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     <Pressable
@@ -211,116 +284,81 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
       accessibilityRole="button"
       // Sans cela, le lecteur d'écran énumère cinq textes séparés puis un badge,
       // sans dire qu'ils forment une ligne ni qu'elle s'ouvre.
-      accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${formatExpiry(item)}`}
+      accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${deadlineSentence(deadline.days, deadline.estimated)}`}
       accessibilityHint="Ouvre la fiche de l'aliment"
     >
+      <View style={[styles.rowRail, { backgroundColor: thermal[level].line }]} />
+
       <View style={styles.rowMain}>
-        {/* Le libellé culinaire distingue « Tomates » de « Tomates (en conserve) » :
-            ce sont deux stocks, et la liste doit le montrer. */}
-        <Text style={styles.rowTitle} numberOfLines={1}>
-          {item.variant.culinaryLabel}
-        </Text>
-        {item.variant.brand ? (
-          <Text style={styles.rowBrand} numberOfLines={1}>
-            {item.variant.brand}
+        <View style={styles.rowTop}>
+          {/* Le libellé culinaire distingue « Tomates » de « Tomates (en conserve) » :
+              ce sont deux stocks, et la liste doit le montrer. */}
+          <Text style={[text.heading, styles.rowTitle]} numberOfLines={2}>
+            {item.variant.culinaryLabel}
           </Text>
-        ) : null}
+          <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} decorative />
+        </View>
 
-        <Text style={styles.rowMeta}>
+        {/* Le tilde dit « la machine suppose » — le même signe que sur le cachet. */}
+        <Text style={[text.data, styles.rowMeta]}>
+          {item.quantityIsEstimated ? '~' : ''}
           {item.displayQuantity} {item.displayUnit} · {item.storageLocationLabel}
-          {item.quantityIsEstimated ? ' · estimé' : ''}
+          {item.variant.brand ? ` · ${item.variant.brand}` : ''}
         </Text>
 
-        <Text style={styles.rowExpiry}>
-          {formatExpiry(item)}
-          {item.addedBy ? ` · ajouté par ${item.addedBy}` : ''}
-        </Text>
+        {note ? <Text style={[text.small, styles.rowNote]}>{note}</Text> : null}
       </View>
-
-      <Badge
-        label={presentation.label}
-        color={presentation.color}
-        background={presentation.background}
-      />
     </Pressable>
   );
 }
 
-/**
- * Une date estimée ne se dit pas comme une date lue.
- *
- * « Périmé depuis 2 jours » sur une salade dont la date a été déduite ferait jeter
- * un aliment parfaitement bon. « À vérifier » demande de regarder, ce qui est
- * exactement ce qu'une estimation permet de conclure.
- */
-function formatExpiry(item: StockItem): string {
-  if (item.expirationDate === null) return 'Aucune date limite renseignée';
-
-  const days = item.daysUntilExpiration;
-  if (days === null) return 'Aucune date limite renseignée';
-
-  if (item.expirationIsEstimated) {
-    if (days < 0) return `À vérifier — estimé il y a ${Math.abs(days)} j`;
-    if (days === 0) return 'À vérifier aujourd\'hui (estimé)';
-    return `À consommer sous ${days} j environ (estimé)`;
-  }
-
-  if (days < 0) return `Périmé depuis ${Math.abs(days)} j`;
-  if (days === 0) return "Périme aujourd'hui";
-  if (days === 1) return 'Périme demain';
-
-  return `Périme dans ${days} jours`;
-}
-
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: colors.background },
-  toolbar: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  flex: { flex: 1, backgroundColor: colors.ground },
+  list: { paddingHorizontal: spacing.xl, paddingBottom: 112 },
+
   search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: colors.ink,
+    minHeight: 48,
   },
-  filters: { marginTop: spacing.md },
-  toolbarButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
-  toolbarButton: { flex: 1 },
-  list: { padding: spacing.lg, paddingBottom: 96 },
+  searchInput: { flex: 1, ...text.body, paddingVertical: 12 },
+  filters: { marginTop: spacing.md, marginHorizontal: -spacing.xl, paddingHorizontal: spacing.xl },
+  quickActions: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
+  quickAction: { flex: 1 },
+
   row: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.lg,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.md,
+    overflow: 'hidden',
   },
-  rowPressed: { opacity: 0.7 },
-  rowMain: { flex: 1 },
-  rowTitle: { fontSize: 16, fontWeight: '700', color: colors.ink },
-  rowBrand: { fontSize: 13, color: colors.inkMuted, marginTop: 1 },
-  rowMeta: { fontSize: 14, color: colors.ink, marginTop: spacing.sm },
-  rowExpiry: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
-  fab: {
+  rowPressed: { backgroundColor: colors.surfaceSunk },
+  rowRail: { width: 3 },
+  rowMain: { flex: 1, padding: spacing.lg, paddingLeft: spacing.lg - 3 + spacing.xs },
+  rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  rowTitle: { flex: 1 },
+  rowMeta: { marginTop: spacing.sm },
+  rowNote: { marginTop: 2 },
+
+  add: {
     position: 'absolute',
     right: spacing.xl,
     bottom: spacing.xl,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: colors.primary,
+    width: 56,
+    height: 56,
+    borderRadius: radius.lg,
+    backgroundColor: colors.ink,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
   },
-  fabLabel: { color: '#FFFFFF', fontSize: 32, lineHeight: 36, fontWeight: '300' },
+  addPressed: { backgroundColor: '#28353D' },
 });

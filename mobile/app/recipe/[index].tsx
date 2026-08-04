@@ -34,6 +34,7 @@ export default function RecipeDetailScreen() {
   if (!recipe) {
     return (
       <EmptyState
+        icon="pot-steam-outline"
         title="Recette introuvable"
         description="Générez de nouvelles propositions depuis l'onglet Cuisiner."
       />

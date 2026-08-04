@@ -11,7 +11,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { InventoryIngredient } from '../api/types';
-import { colors, radius, spacing } from '../theme';
+import { colors, font, radius, spacing, text, thermal } from '../theme';
+import { Icon } from './ui';
 
 /**
  * Choisir jusqu'à `max` aliments parmi tout l'inventaire, sans dérouler tout
@@ -144,9 +145,7 @@ export function IngredientPicker({
             <Text style={styles.clearLabel}>Retirer</Text>
           </Pressable>
         ) : (
-          <Text style={styles.chevron} importantForAccessibility="no">
-            ›
-          </Text>
+          <Icon name="chevron-right" size={20} color={colors.border} />
         )}
       </Pressable>
 
@@ -234,11 +233,7 @@ export function IngredientPicker({
                     </Text>
                     <Text style={styles.rowMeta}>{meta}</Text>
                   </View>
-                  {isSelected ? (
-                    <Text style={styles.check} importantForAccessibility="no">
-                      ✓
-                    </Text>
-                  ) : null}
+                  {isSelected ? <Icon name="check" size={18} color={colors.ink} /> : null}
                 </Pressable>
               );
             }}
@@ -303,7 +298,7 @@ function formatShortDate(value: string): string {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  pressed: { opacity: 0.7 },
+  pressed: { backgroundColor: colors.surfaceSunk },
   trigger: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -314,13 +309,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     padding: spacing.lg,
   },
-  triggerValue: { fontSize: 16, fontWeight: '700', color: colors.primary },
-  triggerEmpty: { fontSize: 16, fontWeight: '600', color: colors.ink },
-  triggerHint: { fontSize: 13, color: colors.inkMuted, marginTop: 2, lineHeight: 18 },
+  triggerValue: text.subheading,
+  triggerEmpty: { ...text.body, color: colors.inkMuted },
+  triggerHint: { ...text.small, marginTop: 2 },
   clear: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
-  clearLabel: { fontSize: 14, fontWeight: '600', color: colors.danger },
-  chevron: { fontSize: 26, color: colors.inkMuted, lineHeight: 28 },
-  sheet: { flex: 1, backgroundColor: colors.background },
+  clearLabel: { ...text.small, color: thermal.critical.line, fontFamily: font.sansMedium },
+  sheet: { flex: 1, backgroundColor: colors.ground },
   sheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -329,8 +323,8 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl,
     paddingBottom: spacing.md,
   },
-  sheetTitle: { fontSize: 20, fontWeight: '800', color: colors.ink },
-  close: { fontSize: 15, fontWeight: '600', color: colors.primary },
+  sheetTitle: text.title,
+  close: { ...text.button, color: colors.ink },
   search: {
     marginHorizontal: spacing.xl,
     backgroundColor: colors.surface,
@@ -338,38 +332,24 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: colors.ink,
+    minHeight: 48,
+    ...text.body,
   },
   listContent: { padding: spacing.xl, paddingBottom: spacing.xxl },
-  sectionHeader: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.inkMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginTop: spacing.lg,
-    marginBottom: spacing.xs,
-  },
+  sectionHeader: { ...text.label, marginTop: spacing.xl, marginBottom: spacing.sm },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     paddingVertical: spacing.md,
+    minHeight: 56,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   rowDisabled: { opacity: 0.4 },
-  rowLabel: { fontSize: 15, color: colors.ink },
-  rowLabelSelected: { fontWeight: '700', color: colors.primary },
-  rowMeta: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
-  check: { fontSize: 17, fontWeight: '700', color: colors.primary },
-  empty: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.xl, textAlign: 'center' },
-  limitNote: {
-    fontSize: 13,
-    color: colors.inkMuted,
-    textAlign: 'center',
-    marginTop: spacing.lg,
-  },
+  rowLabel: text.body,
+  rowLabelSelected: { fontFamily: font.sansSemiBold },
+  rowMeta: { ...text.data, marginTop: 2 },
+  empty: { ...text.small, marginTop: spacing.xl, textAlign: 'center' },
+  limitNote: { ...text.small, textAlign: 'center', marginTop: spacing.lg },
 });

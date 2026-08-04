@@ -4,9 +4,10 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
 import type { ReviewCandidate, StockItem } from '../src/api/types';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loader } from '../src/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorBanner, Loader, Stamp } from '../src/components/ui';
+import { deadlineOf } from '../src/deadline';
 import { useSession } from '../src/session/SessionContext';
-import { colors, spacing } from '../src/theme';
+import { colors, deadlineSentence, radius, spacing, text, thermalFor } from '../src/theme';
 
 /**
  * Une session courte : la file entière est chargée une seule fois, puis on
@@ -115,7 +116,7 @@ export default function ReviewScreen() {
   }
 
   if (null === initialCount && !loadError) {
-    return <Loader label="Recherche des lots à vérifier…" />;
+    return <Loader label="Recherche des lots à vérifier" />;
   }
 
   if (loadError) {
@@ -130,42 +131,68 @@ export default function ReviewScreen() {
     return (
       <View style={styles.container}>
         <EmptyState
+          icon="check-decagram-outline"
           title="Stock à jour"
           description={
             0 === initialCount
               ? 'Aucun lot ne mérite une vérification pour le moment.'
               : 'Vous avez fait le tour des lots à vérifier.'
           }
+          action={<Button label="Retour au stock" variant="secondary" onPress={() => router.back()} />}
         />
-        <Button label="Retour au stock" variant="secondary" onPress={() => router.back()} />
       </View>
     );
   }
 
   const current = queue[0];
   const item = current.stockItem;
+  const deadline = deadlineOf(item);
   const resolvedCount = (initialCount ?? queue.length) - queue.length;
+  const position = resolvedCount + 1;
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <Text style={styles.progress}>
-        Lot {resolvedCount + 1} sur {initialCount}
-      </Text>
+      {/* La file a une longueur connue : la montrer transforme une corvée sans
+          fin en une tâche qui se termine. */}
+      <View
+        style={styles.progress}
+        accessible
+        accessibilityLabel={`Lot ${position} sur ${initialCount}`}
+      >
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { flex: resolvedCount }]} />
+          <View style={{ flex: (initialCount ?? 1) - resolvedCount }} />
+        </View>
+        <Text style={text.label}>
+          {position} / {initialCount}
+        </Text>
+      </View>
 
       <ErrorBanner message={actionError} />
 
-      <Card>
-        <Text style={styles.name}>{item.variant.culinaryLabel}</Text>
-        {item.variant.brand ? <Text style={styles.brand}>{item.variant.brand}</Text> : null}
+      <Card level={thermalFor(deadline.days)}>
+        <View style={styles.headerRow}>
+          <View style={styles.flex}>
+            <Text style={text.title}>{item.variant.culinaryLabel}</Text>
+            {item.variant.brand ? (
+              <Text style={[text.small, styles.brand]}>{item.variant.brand}</Text>
+            ) : null}
+          </View>
+          <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+        </View>
 
         <View style={styles.reasons}>
           {current.reasons.map((reason) => (
-            <Badge key={reason.code} label={reason.label} color={colors.info} background={colors.infoSoft} />
+            <Badge key={reason.code} label={reason.label} level="soon" />
           ))}
         </View>
 
-        <Text style={styles.question}>{questionFor(item)}</Text>
-        <Text style={styles.meta}>{item.storageLocationLabel}</Text>
+        <Text style={[text.heading, styles.question]}>{questionFor(item)}</Text>
+        {/* Une phrase, donc la voix humaine — le cachet, juste au-dessus, dit
+            déjà la même échéance dans la voix machine. */}
+        <Text style={[text.small, styles.meta]}>
+          {item.storageLocationLabel} · {deadlineSentence(deadline.days, deadline.estimated).toLowerCase()}
+        </Text>
       </Card>
 
       <Button
@@ -201,22 +228,22 @@ export default function ReviewScreen() {
       </View>
 
       <Button
-        label="Terminé"
+        label="Terminé, il n'en reste rien"
         variant="secondary"
         onPress={() => run(item.id, 'finished', (operationKey) => api.consume(item.id, { mode: 'all' }, operationKey))}
         disabled={busy}
         style={styles.spaced}
       />
 
-      <Button
-        label="Corriger précisément"
-        variant="ghost"
-        onPress={() => goToDetail(item.id)}
-        disabled={busy}
-        style={styles.spaced}
-      />
-
-      <Button label="Passer" variant="ghost" onPress={advance} disabled={busy} />
+      <View style={styles.minorRow}>
+        <Button label="Passer" variant="ghost" onPress={advance} disabled={busy} />
+        <Button
+          label="Corriger précisément"
+          variant="ghost"
+          onPress={() => goToDetail(item.id)}
+          disabled={busy}
+        />
+      </View>
 
       {item.variant.category ? (
         <Button
@@ -224,7 +251,6 @@ export default function ReviewScreen() {
           variant="ghost"
           onPress={() => muteCategory(item.variant.category as string)}
           disabled={busy}
-          style={styles.spaced}
         />
       ) : null}
     </ScrollView>
@@ -242,19 +268,24 @@ function questionFor(item: StockItem): string {
 
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
-  progress: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.inkMuted,
-    textAlign: 'center',
-    marginBottom: spacing.md,
+  flex: { flex: 1 },
+  progress: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg },
+  progressTrack: {
+    flex: 1,
+    flexDirection: 'row',
+    height: 3,
+    borderRadius: radius.pill,
+    backgroundColor: colors.border,
+    overflow: 'hidden',
   },
-  name: { fontSize: 20, fontWeight: '800', color: colors.ink },
-  brand: { fontSize: 14, color: colors.inkMuted, marginTop: 2 },
+  progressFill: { backgroundColor: colors.ink },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  brand: { marginTop: 2 },
   reasons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.md },
-  question: { fontSize: 17, fontWeight: '600', color: colors.ink, marginTop: spacing.lg, lineHeight: 24 },
-  meta: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.sm },
+  question: { marginTop: spacing.lg },
+  meta: { marginTop: spacing.sm },
   spaced: { marginTop: spacing.md },
-  row: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+  row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   rowItem: { flex: 1 },
+  minorRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.sm },
 });

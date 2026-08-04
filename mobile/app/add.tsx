@@ -18,11 +18,12 @@ import {
   Chip,
   ErrorBanner,
   Field,
+  Icon,
   Loader,
   SectionTitle,
   Stepper,
 } from '../src/components/ui';
-import { colors, radius, spacing } from '../src/theme';
+import { colors, font, radius, spacing, text, thermal } from '../src/theme';
 
 /**
  * Un lot à créer : une date de péremption et le nombre d'exemplaires qui la portent.
@@ -337,7 +338,7 @@ export default function AddScreen() {
     }
   }
 
-  if (loading) return <Loader label="Recherche du produit…" />;
+  if (loading) return <Loader label="Recherche du produit" />;
 
   const compatibleUnits = reference?.units ?? [];
 
@@ -352,19 +353,19 @@ export default function AddScreen() {
               <Image source={{ uri: product.imageUrl }} style={styles.thumb} />
             ) : (
               <View style={[styles.thumb, styles.thumbEmpty]}>
-                <Text style={styles.thumbGlyph}>{isFresh ? '🥬' : '🥫'}</Text>
+                <Icon name={isFresh ? 'sprout-outline' : 'package-variant-closed'} size={24} />
               </View>
             )}
             <View style={styles.flex}>
-              <Text style={styles.productName}>{product.name}</Text>
-              {product.brand ? <Text style={styles.productBrand}>{product.brand}</Text> : null}
-              <Text style={styles.productMeta}>
+              <Text style={text.heading}>{product.name}</Text>
+              {product.brand ? <Text style={[text.small, styles.productBrand]}>{product.brand}</Text> : null}
+              <Text style={[text.data, styles.productMeta]}>
                 {product.packageQuantity
-                  ? `Conditionnement : ${product.packageQuantity} ${product.packageUnit ?? ''}`
+                  ? `${product.packageQuantity} ${product.packageUnit ?? ''} par exemplaire`
                   : 'Conditionnement non renseigné'}
               </Text>
               {product.category ? (
-                <Text style={styles.productMeta}>{product.category}</Text>
+                <Text style={[text.small, styles.productMeta]}>{product.category}</Text>
               ) : null}
             </View>
           </View>
@@ -373,6 +374,7 @@ export default function AddScreen() {
         <>
           {lookupMessage ? (
             <View style={styles.notice}>
+              <Icon name="information-outline" size={18} color={thermal.soon.line} />
               <Text style={styles.noticeText}>{lookupMessage}</Text>
             </View>
           ) : null}
@@ -703,35 +705,33 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   productCard: { marginBottom: spacing.lg },
   productRow: { flexDirection: 'row', gap: spacing.md },
-  thumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
+  thumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: colors.surfaceSunk },
   thumbEmpty: { alignItems: 'center', justifyContent: 'center' },
-  thumbGlyph: { fontSize: 28 },
-  productName: { fontSize: 17, fontWeight: '700', color: colors.ink },
-  productBrand: { fontSize: 14, color: colors.inkMuted, marginTop: 1 },
-  productMeta: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs },
+  productBrand: { marginTop: 1 },
+  productMeta: { marginTop: spacing.xs },
   notice: {
-    backgroundColor: colors.accentSoft,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: thermal.soon.wash,
     borderRadius: radius.md,
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
-  noticeText: { color: colors.accent, fontSize: 14, lineHeight: 20 },
+  noticeText: { ...text.small, flex: 1, color: thermal.soon.line },
   pair: { flexDirection: 'row', gap: spacing.md },
   pairInput: { flex: 1 },
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.inkMuted,
-    marginBottom: spacing.sm,
-  },
+  fieldLabel: { ...text.label, marginBottom: spacing.sm },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
-  help: { fontSize: 13, color: colors.inkMuted, lineHeight: 19, marginBottom: spacing.md },
-  switchLink: { alignSelf: 'flex-end', paddingVertical: spacing.xs, marginBottom: spacing.md },
-  switchLinkText: { fontSize: 14, fontWeight: '600', color: colors.primary },
+  help: { ...text.small, marginBottom: spacing.md },
+  switchLink: { alignSelf: 'flex-end', paddingVertical: spacing.sm, marginBottom: spacing.md },
+  switchLinkText: { ...text.small, color: colors.ink, fontFamily: font.sansMedium },
+  /** Le total est une donnée calculée : c'est la voix machine qui la porte. */
   total: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.primary,
+    fontFamily: font.monoMedium,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.ink,
     marginTop: spacing.xs,
     marginBottom: spacing.sm,
   },
@@ -740,23 +740,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
-  batchTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  estimateHint: {
-    fontSize: 13,
-    color: colors.accent,
-    lineHeight: 19,
-    marginTop: spacing.sm,
-  },
+  batchTitle: text.label,
+  estimateHint: { ...text.small, color: thermal.soon.line, marginTop: spacing.sm },
   dateButton: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 13,
+    justifyContent: 'center',
+    minHeight: 48,
   },
-  dateText: { fontSize: 15, color: colors.ink },
-  clearDateText: { color: colors.danger, fontSize: 14, fontWeight: '600' },
+  dateText: text.body,
+  clearDateText: { ...text.small, color: thermal.critical.line, fontFamily: font.sansMedium },
 });

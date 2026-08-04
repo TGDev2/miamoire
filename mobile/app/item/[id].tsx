@@ -16,8 +16,13 @@ import {
   Field,
   Loader,
   SectionTitle,
+  Stamp,
+  StampHero,
+  formatDisplayDate,
+  toIsoDate,
 } from '../../src/components/ui';
-import { colors, radius, spacing, statusPresentation } from '../../src/theme';
+import { deadlineOf, deadlineOfSibling } from '../../src/deadline';
+import { colors, font, radius, spacing, statusPresentation, text, thermal, thermalFor } from '../../src/theme';
 
 export default function StockItemScreen() {
   const router = useRouter();
@@ -132,7 +137,7 @@ export default function StockItemScreen() {
   function confirmArchive() {
     Alert.alert(
       'Archiver cet aliment ?',
-      'Il quitte votre inventaire sans rien perdre : sa quantité et son historique sont conservés, et vous pourrez le restaurer depuis le filtre « Archivés ».',
+      'Il quitte votre inventaire sans rien perdre : sa quantité et son historique sont conservés, et vous pourrez le restaurer depuis le filtre « Archives ».',
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -154,11 +159,13 @@ export default function StockItemScreen() {
         <ErrorBanner message={error} />
       </View>
     ) : (
-      <Loader />
+      <Loader label="Chargement de la fiche" />
     );
   }
 
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
+  const deadline = deadlineOf(item);
+  const level = thermalFor(deadline.days);
 
   /**
    * Un produit frais n'a pas d'emballage, donc pas d'exemplaire à entamer ni à
@@ -178,38 +185,50 @@ export default function StockItemScreen() {
     .filter((option) => item.variant.traits.includes(option.value))
     .map((option) => option.label);
 
+  const facts = [
+    item.storageLocationLabel,
+    item.addedBy ? `enregistré par ${item.addedBy}` : null,
+    ...traitLabels,
+  ].filter(Boolean);
+
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
 
-      <Card>
+      <Card level={level}>
         <View style={styles.headerRow}>
           <View style={styles.flex}>
-            <Text style={styles.name}>{item.variant.name}</Text>
-            {item.variant.brand ? <Text style={styles.brand}>{item.variant.brand}</Text> : null}
+            <Text style={text.title}>{item.variant.name}</Text>
+            {item.variant.brand ? (
+              <Text style={[text.small, styles.brand]}>{item.variant.brand}</Text>
+            ) : null}
           </View>
-          <Badge
-            label={presentation.label}
-            color={presentation.color}
-            background={presentation.background}
-          />
+          <Badge label={presentation.label} level={presentation.level} />
         </View>
 
-        <Text style={styles.quantity}>
-          {item.displayQuantity} {item.displayUnit} disponibles
-        </Text>
-        <Text style={styles.meta}>{item.storageLocationLabel}</Text>
-        <Text style={styles.meta}>{effectiveUseByText(item)}</Text>
-        {item.addedBy ? (
-          <Text style={styles.meta}>Enregistré par {item.addedBy}</Text>
-        ) : null}
-        {traitLabels.length > 0 ? (
-          <Text style={styles.meta}>{traitLabels.join(' · ')}</Text>
-        ) : null}
-        {item.quantityIsEstimated ? (
-          <Text style={styles.meta}>Quantité estimée, pas mesurée</Text>
-        ) : null}
-        {item.note ? <Text style={styles.note}>{item.note}</Text> : null}
+        {/* Deux mesures du même lot, côte à côte : ce qu'il en reste, et ce
+            qu'il reste de temps pour l'utiliser. */}
+        <View style={styles.gauges}>
+          <View style={styles.gauge}>
+            <Text style={styles.gaugeValue}>
+              {item.quantityIsEstimated ? '~' : ''}
+              {item.displayQuantity} {item.displayUnit}
+            </Text>
+            {/* Même voix que la légende du cachet, en face : deux mesures
+                lues côte à côte ne doivent pas parler deux langues. */}
+            <Text style={[text.small, styles.gaugeCaption]}>
+              {item.quantityIsEstimated ? 'Quantité estimée' : 'Disponible'}
+            </Text>
+          </View>
+          <View style={styles.gaugeRule} />
+          <View style={styles.gauge}>
+            <StampHero days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+          </View>
+        </View>
+
+        <Text style={[text.small, styles.facts]}>{facts.join(' · ')}</Text>
+        <Text style={[text.small, styles.facts]}>{effectiveUseByText(item)}</Text>
+        {item.note ? <Text style={[text.body, styles.note]}>{item.note}</Text> : null}
       </Card>
 
       {/* Un lot n'est pas un tas : trois sachets de 500 g dont un entamé ne
@@ -224,7 +243,7 @@ export default function StockItemScreen() {
                 key={`package-${entry.position}`}
                 style={[styles.package, entry.opened && styles.packageOpened]}
               >
-                <Text style={[styles.packageState, entry.opened && styles.packageStateOpened]}>
+                <Text style={[text.label, entry.opened && styles.packageStateOpened]}>
                   {entry.opened ? 'Entamé' : 'Fermé'}
                 </Text>
                 <Text style={styles.packageQuantity}>
@@ -233,7 +252,7 @@ export default function StockItemScreen() {
               </View>
             ))}
           </View>
-          <Text style={styles.help}>{packagingHint(item)}</Text>
+          <Text style={[text.small, styles.help]}>{packagingHint(item)}</Text>
         </>
       ) : null}
 
@@ -242,43 +261,55 @@ export default function StockItemScreen() {
       {item.siblings && item.siblings.length > 0 ? (
         <>
           <SectionTitle>Autres lots de cet aliment</SectionTitle>
-          <Text style={styles.help}>
-            Le lot qui périme le plus tôt est consommé en premier. Pour un achat avec
-            une autre date, ajoutez un lot plutôt que d'augmenter celui-ci.
+          <Text style={[text.small, styles.help]}>
+            Le lot qui périme le plus tôt est consommé en premier. Pour un achat avec une autre
+            date, ajoutez un lot plutôt que d'augmenter celui-ci.
           </Text>
-          {item.siblings.map((sibling) => (
-            <Pressable
-              key={sibling.id}
-              style={styles.sibling}
-              onPress={() => router.push(`/item/${sibling.id}`)}
-              accessibilityRole="button"
-              accessibilityLabel={`Autre lot : ${sibling.displayQuantity} ${sibling.displayUnit}, ${
-                sibling.expirationDate
-                  ? `${sibling.expirationIsEstimated ? 'estimé' : 'à consommer avant'} le ${formatDate(sibling.expirationDate)}`
-                  : 'sans date'
-              }, ${sibling.storageLocationLabel}`}
-              accessibilityHint="Ouvre la fiche de ce lot"
-            >
-              <Text style={styles.siblingQuantity}>
-                {sibling.displayQuantity} {sibling.displayUnit}
-              </Text>
-              <Text style={styles.siblingMeta}>
-                {sibling.expirationDate
-                  ? `${sibling.expirationIsEstimated ? 'estimé' : 'avant'} le ${formatDate(sibling.expirationDate)}`
-                  : 'sans date'}{' '}
-                · {sibling.storageLocationLabel}
-              </Text>
-            </Pressable>
-          ))}
+          {item.siblings.map((sibling) => {
+            const siblingDeadline = deadlineOfSibling(sibling);
+
+            return (
+              <Pressable
+                key={sibling.id}
+                style={({ pressed }) => [styles.sibling, pressed && styles.siblingPressed]}
+                onPress={() => router.push(`/item/${sibling.id}`)}
+                accessibilityRole="button"
+                accessibilityLabel={`Autre lot : ${sibling.displayQuantity} ${sibling.displayUnit}, ${
+                  sibling.expirationDate
+                    ? `${sibling.expirationIsEstimated ? 'estimé' : 'à consommer avant'} le ${formatDisplayDate(sibling.expirationDate)}`
+                    : 'sans date'
+                }, ${sibling.storageLocationLabel}`}
+                accessibilityHint="Ouvre la fiche de ce lot"
+              >
+                <View style={styles.flex}>
+                  <Text style={styles.siblingQuantity}>
+                    {sibling.displayQuantity} {sibling.displayUnit}
+                  </Text>
+                  <Text style={[text.small, styles.siblingMeta]}>
+                    {sibling.expirationDate
+                      ? `${sibling.expirationIsEstimated ? 'estimé' : 'avant'} le ${formatDisplayDate(sibling.expirationDate)}`
+                      : 'sans date'}{' '}
+                    · {sibling.storageLocationLabel}
+                  </Text>
+                </View>
+                <Stamp
+                  days={siblingDeadline.days}
+                  date={siblingDeadline.date}
+                  estimated={siblingDeadline.estimated}
+                  decorative
+                />
+              </Pressable>
+            );
+          })}
         </>
       ) : null}
 
       <SectionTitle>Consommer</SectionTitle>
 
       {item.isDiscreteUnit ? (
-        <View style={styles.stepper}>
+        <View style={styles.unitStepper}>
           <Pressable
-            style={styles.stepperButton}
+            style={({ pressed }) => [styles.unitButton, pressed && styles.unitButtonPressed]}
             onPress={() =>
               run('consume-units', (operationKey) => api.consume(id, { mode: 'units', delta: -1 }, operationKey))
             }
@@ -287,18 +318,18 @@ export default function StockItemScreen() {
             accessibilityLabel={`Consommer un ${item.unitLabel}`}
             accessibilityState={{ disabled: busy }}
           >
-            <Text style={styles.stepperGlyph} importantForAccessibility="no">
+            <Text style={styles.unitGlyph} importantForAccessibility="no">
               −1
             </Text>
           </Pressable>
           <Text
-            style={styles.stepperValue}
+            style={styles.unitValue}
             accessibilityLabel={`Il reste ${item.remainingQuantity} ${item.unitLabel}`}
           >
             {item.remainingQuantity} {item.unitLabel}
           </Text>
           <Pressable
-            style={styles.stepperButton}
+            style={({ pressed }) => [styles.unitButton, pressed && styles.unitButtonPressed]}
             onPress={() =>
               run('add-unit', (operationKey) => api.addQuantity(id, { quantity: 1 }, operationKey))
             }
@@ -307,7 +338,7 @@ export default function StockItemScreen() {
             accessibilityLabel={`Ajouter un ${item.unitLabel}`}
             accessibilityState={{ disabled: busy }}
           >
-            <Text style={styles.stepperGlyph} importantForAccessibility="no">
+            <Text style={styles.unitGlyph} importantForAccessibility="no">
               +1
             </Text>
           </Pressable>
@@ -321,6 +352,7 @@ export default function StockItemScreen() {
           keyboardType="decimal-pad"
           placeholder={`Quantité en ${item.unitLabel}`}
           placeholderTextColor={colors.inkMuted}
+          accessibilityLabel={`Quantité en ${item.unitLabel}`}
           style={styles.amountInput}
         />
         <Button
@@ -336,7 +368,6 @@ export default function StockItemScreen() {
             );
           }}
           disabled={busy}
-          style={styles.amountButton}
         />
       </View>
 
@@ -348,7 +379,6 @@ export default function StockItemScreen() {
             run('consume-all', (operationKey) => api.consume(id, { mode: 'all' }, operationKey))
           }
           disabled={busy}
-          style={styles.gridItem}
         />
         {/* Un produit frais compté se retire déjà à l'unité par le −1 ci-dessus :
             « retirer un exemplaire » ferait deux boutons pour un seul geste. */}
@@ -360,7 +390,6 @@ export default function StockItemScreen() {
               run('consume-package', (operationKey) => api.consume(id, { mode: 'package' }, operationKey))
             }
             disabled={busy}
-            style={styles.gridItem}
           />
         )}
         {/* Le geste porte sur UN exemplaire : ouvrir un lot de trois sachets
@@ -374,7 +403,6 @@ export default function StockItemScreen() {
               run('toggle-opened', (operationKey) => api.setOpened(id, !item.isOpened, operationKey))
             }
             disabled={busy}
-            style={styles.gridItem}
           />
         )}
         <Button
@@ -395,7 +423,6 @@ export default function StockItemScreen() {
             );
           }}
           disabled={busy}
-          style={styles.gridItem}
         />
       </View>
 
@@ -432,16 +459,25 @@ export default function StockItemScreen() {
       <Pressable
         onPress={() => setShowAddDatePicker(true)}
         accessibilityRole="button"
+        accessibilityLabel={
+          addPurchaseDate
+            ? `Date d'achat de cet ajout : ${formatDisplayDate(addPurchaseDate)}`
+            : 'Préciser la date d\'achat de cet ajout'
+        }
         style={styles.addDateTrigger}
       >
-        <Text style={styles.addDateText}>
+        <Text style={text.small}>
           {addPurchaseDate
-            ? `Date d'achat de cet ajout : ${formatDate(addPurchaseDate)}`
+            ? `Date d'achat de cet ajout : ${formatDisplayDate(addPurchaseDate)}`
             : 'Cet ajout vient d\'un autre achat ? Préciser sa date'}
         </Text>
       </Pressable>
       {addPurchaseDate ? (
-        <Pressable onPress={() => setAddPurchaseDate(null)} accessibilityRole="button">
+        <Pressable
+          onPress={() => setAddPurchaseDate(null)}
+          accessibilityRole="button"
+          accessibilityLabel="Retirer cette date d'achat"
+        >
           <Text style={styles.clearText}>Retirer cette date</Text>
         </Pressable>
       ) : null}
@@ -459,18 +495,18 @@ export default function StockItemScreen() {
       ) : null}
 
       <SectionTitle>Corriger la quantité</SectionTitle>
-      <Text style={styles.help}>
+      <Text style={[text.small, styles.help]}>
         Vous ne savez pas exactement ce qu'il reste ? Choisissez une estimation.
       </Text>
       <View style={styles.chips}>
-        {reference?.fillLevels.map((level) => (
+        {reference?.fillLevels.map((fillLevel) => (
           <Chip
-            key={level.value}
-            label={level.label}
+            key={fillLevel.value}
+            label={fillLevel.label}
             selected={false}
             onPress={() =>
-              run(`correct-fill-${level.value}`, (operationKey) =>
-                api.correct(id, { fillLevel: level.value }, operationKey, item.revision),
+              run(`correct-fill-${fillLevel.value}`, (operationKey) =>
+                api.correct(id, { fillLevel: fillLevel.value }, operationKey, item.revision),
               )
             }
           />
@@ -506,7 +542,7 @@ export default function StockItemScreen() {
             }
           />
 
-          <Text style={styles.label}>Emplacement</Text>
+          <Text style={[text.label, styles.editLabel]}>Emplacement</Text>
           <View style={styles.chips}>
             {reference?.storageLocations.map((option) => (
               <Chip
@@ -522,10 +558,10 @@ export default function StockItemScreen() {
             ))}
           </View>
 
-          <Text style={styles.label}>Unité</Text>
-          <Text style={styles.help}>
-            Une unité choisie par erreur se répare ici. Passer d'une masse à des unités
-            n'a pas d'équivalence : la quantité restante doit alors être redonnée.
+          <Text style={[text.label, styles.editLabel]}>Unité</Text>
+          <Text style={[text.small, styles.help]}>
+            Une unité choisie par erreur se répare ici. Passer d'une masse à des unités n'a pas
+            d'équivalence : la quantité restante doit alors être redonnée.
           </Text>
           <View style={styles.chips}>
             {reference?.units.map((option) => (
@@ -576,7 +612,7 @@ export default function StockItemScreen() {
                     );
                   }}
                   disabled={busy}
-                  style={styles.grow}
+                  style={styles.flex}
                 />
                 <Button label="Annuler" variant="ghost" onPress={() => setPendingUnit(null)} />
               </View>
@@ -586,10 +622,10 @@ export default function StockItemScreen() {
           {/* La nature décide de ce que cette fiche montre — exemplaires ou non —
               et du rang de l'aliment quand on demande une recette : un légume frais
               passe devant une conserve. La corriger ici la fixe définitivement. */}
-          <Text style={styles.label}>Nature de l'aliment</Text>
-          <Text style={styles.help}>
-            Un produit frais se dégrade dès l'achat et n'a pas d'emballage à entamer ; les
-            recettes le proposent en priorité.
+          <Text style={[text.label, styles.editLabel]}>Nature de l'aliment</Text>
+          <Text style={[text.small, styles.help]}>
+            Un produit frais se dégrade dès l'achat et n'a pas d'emballage à entamer ; les recettes
+            le proposent en priorité.
           </Text>
           <View style={styles.chips}>
             {(['fresh', 'packaged'] as const).map((option) => (
@@ -606,10 +642,10 @@ export default function StockItemScreen() {
             ))}
           </View>
 
-          <Text style={styles.label}>État du produit</Text>
-          <Text style={styles.help}>
-            Ce que les recettes doivent savoir : une conserve ne s'épluche pas, un surgelé
-            se décongèle.
+          <Text style={[text.label, styles.editLabel]}>État du produit</Text>
+          <Text style={[text.small, styles.help]}>
+            Ce que les recettes doivent savoir : une conserve ne s'épluche pas, un surgelé se
+            décongèle.
           </Text>
           <View style={styles.chips}>
             {reference?.productTraits.map((option) => {
@@ -638,21 +674,21 @@ export default function StockItemScreen() {
             })}
           </View>
 
-          <Text style={styles.label}>Date de péremption</Text>
+          <Text style={[text.label, styles.editLabel]}>Date de péremption</Text>
           <View style={styles.dateRow}>
             <Pressable
-              style={styles.dateButton}
+              style={({ pressed }) => [styles.dateButton, pressed && styles.dateButtonPressed]}
               onPress={() => setShowPicker(true)}
               accessibilityRole="button"
               accessibilityLabel={
                 item.expirationDate
-                  ? `Date de péremption : ${formatDate(item.expirationDate)}`
+                  ? `Date de péremption : ${formatDisplayDate(item.expirationDate)}`
                   : 'Aucune date de péremption'
               }
               accessibilityHint="Ouvre le sélecteur de date"
             >
-              <Text style={styles.dateText}>
-                {item.expirationDate ? formatDate(item.expirationDate) : 'Aucune date'}
+              <Text style={text.body}>
+                {item.expirationDate ? formatDisplayDate(item.expirationDate) : 'Aucune date'}
               </Text>
             </Pressable>
             {item.expirationDate ? (
@@ -705,16 +741,17 @@ export default function StockItemScreen() {
               run('rename', (operationKey) => api.updateStockItem(id, { name: editName }, operationKey))
             }
             disabled={busy}
-          />
-          <Button
-            label="Fermer"
-            variant="ghost"
-            onPress={() => setEditing(false)}
             style={styles.spaced}
           />
+          <Button label="Fermer" variant="ghost" onPress={() => setEditing(false)} style={styles.spaced} />
         </Card>
       ) : (
-        <Button label="Modifier cet aliment" variant="secondary" onPress={() => setEditing(true)} />
+        <Button
+          label="Modifier cet aliment"
+          variant="secondary"
+          icon="pencil-outline"
+          onPress={() => setEditing(true)}
+        />
       )}
 
       <SectionTitle>Retirer</SectionTitle>
@@ -732,12 +769,7 @@ export default function StockItemScreen() {
           style={styles.spaced}
         />
       ) : (
-        <Button
-          label="Archiver la ligne"
-          variant="ghost"
-          onPress={confirmArchive}
-          style={styles.spaced}
-        />
+        <Button label="Archiver la ligne" variant="ghost" onPress={confirmArchive} style={styles.spaced} />
       )}
 
       <SectionTitle>Historique</SectionTitle>
@@ -749,32 +781,27 @@ export default function StockItemScreen() {
           accessibilityLabel={describeMovement(movement)}
         >
           <View style={styles.flex}>
-            <Text style={styles.movementLabel}>{movement.typeLabel}</Text>
+            <Text style={text.subheading}>{movement.typeLabel}</Text>
             {movement.reason ? (
-              <Text style={styles.movementReason}>{movement.reason}</Text>
+              <Text style={[text.small, styles.movementReason]}>{movement.reason}</Text>
             ) : null}
-            <Text style={styles.movementDate}>
+            <Text style={[text.data, styles.movementDate]}>
               {formatDateTime(movement.createdAt)}
-              {movement.author ? ` · par ${movement.author}` : ''}
+              {movement.author ? ` · ${movement.author}` : ''}
             </Text>
             {/* Deux lots débités par la même recette portent le même identifiant :
                 c'est ce qui permet de les rapprocher d'une fiche à l'autre. */}
             {movement.operationId ? (
-              <Text style={styles.movementOperation}>
-                Opération {shortOperation(movement.operationId)}
+              <Text style={[text.data, styles.movementOperation]}>
+                op. {shortOperation(movement.operationId)}
               </Text>
             ) : null}
           </View>
           <View style={styles.movementRight}>
-            <Text
-              style={[
-                styles.movementQuantity,
-                { color: movementColor(movement.quantity) },
-              ]}
-            >
-              {formatDelta(movement)}
-            </Text>
-            <Text style={styles.movementAfter}>
+            {/* Le signe suffit à dire le sens : colorer une consommation en rouge
+                ferait passer un geste normal pour un incident. */}
+            <Text style={styles.movementQuantity}>{formatDelta(movement)}</Text>
+            <Text style={[text.data, styles.movementAfter]}>
               reste {formatNumber(movement.remainingAfter)} {movement.unit}
             </Text>
           </View>
@@ -795,13 +822,7 @@ export default function StockItemScreen() {
 function formatDelta(movement: StockMovement): string {
   if (movement.quantity === 0) return '—';
 
-  return `${movement.quantity > 0 ? '+' : ''}${formatNumber(movement.quantity)} ${movement.unit}`;
-}
-
-function movementColor(quantity: number): string {
-  if (quantity === 0) return colors.inkMuted;
-
-  return quantity < 0 ? colors.danger : colors.primary;
+  return `${movement.quantity > 0 ? '+' : '−'}${formatNumber(Math.abs(movement.quantity))} ${movement.unit}`;
 }
 
 /** Assez pour rapprocher deux lignes à l'œil, trop court pour être lu comme une donnée. */
@@ -856,7 +877,7 @@ function effectiveUseByText(item: StockItem): string {
       : 'Aucune date limite renseignée';
   }
 
-  const date = formatDate(item.effectiveUseBy);
+  const date = formatDisplayDate(item.effectiveUseBy);
 
   switch (item.effectiveUseByBasis) {
     case 'after_opening':
@@ -866,20 +887,6 @@ function effectiveUseByText(item: StockItem): string {
     default:
       return `À consommer avant le ${date}`;
   }
-}
-
-function toIsoDate(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString('fr-FR', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
 }
 
 function formatDateTime(value: string): string {
@@ -899,35 +906,43 @@ const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   flex: { flex: 1 },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
-  name: { fontSize: 22, fontWeight: '800', color: colors.ink },
-  brand: { fontSize: 15, color: colors.inkMuted, marginTop: 2 },
-  quantity: { fontSize: 26, fontWeight: '700', color: colors.primary, marginTop: spacing.lg },
-  meta: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.xs },
-  note: { fontSize: 14, color: colors.ink, marginTop: spacing.md, fontStyle: 'italic' },
-  help: { fontSize: 13, color: colors.inkMuted, marginBottom: spacing.md, lineHeight: 19 },
-  label: { fontSize: 13, fontWeight: '600', color: colors.inkMuted, marginBottom: spacing.sm },
-  stepper: {
+  brand: { marginTop: 2 },
+
+  gauges: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.lg, marginTop: spacing.lg },
+  gauge: { flex: 1 },
+  gaugeRule: { width: 1, alignSelf: 'stretch', backgroundColor: colors.border },
+  gaugeValue: { fontFamily: font.monoSemiBold, fontSize: 24, lineHeight: 30, letterSpacing: -0.8, color: colors.ink },
+  gaugeCaption: { marginTop: spacing.xs },
+
+  facts: { marginTop: spacing.md },
+  note: { marginTop: spacing.md, fontStyle: 'italic' },
+  help: { marginBottom: spacing.md },
+  editLabel: { marginTop: spacing.md, marginBottom: spacing.sm },
+
+  unitStepper: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.md,
+    borderRadius: radius.md,
+    padding: spacing.sm,
     marginBottom: spacing.md,
   },
-  stepperButton: {
-    width: 56,
+  unitButton: {
+    minWidth: 56,
     height: 44,
-    borderRadius: radius.md,
-    backgroundColor: colors.primarySoft,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSunk,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepperGlyph: { fontSize: 18, fontWeight: '700', color: colors.primary },
-  stepperValue: { fontSize: 18, fontWeight: '700', color: colors.ink },
-  amountRow: { flexDirection: 'row', gap: spacing.md, alignItems: 'center' },
+  unitButtonPressed: { backgroundColor: colors.border },
+  unitGlyph: { fontFamily: font.monoMedium, fontSize: 14, color: colors.ink },
+  unitValue: { fontFamily: font.monoMedium, fontSize: 15, color: colors.ink },
+
+  amountRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
   amountInput: {
     flex: 1,
     backgroundColor: colors.surface,
@@ -935,18 +950,15 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 13,
-    fontSize: 16,
-    color: colors.ink,
+    minHeight: 48,
+    ...text.body,
   },
-  amountButton: { paddingHorizontal: spacing.lg },
-  actionGrid: { marginTop: spacing.md, gap: spacing.sm },
-  gridItem: {},
-  addDateTrigger: { marginTop: spacing.sm },
-  addDateText: { fontSize: 13, color: colors.inkMuted },
+  actionGrid: { marginTop: spacing.sm, gap: spacing.sm },
+  addDateTrigger: { marginTop: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   spaced: { marginTop: spacing.sm },
-  packages: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+
+  packages: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
   package: {
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -954,13 +966,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    minWidth: 92,
+    minWidth: 96,
   },
-  packageOpened: { borderColor: colors.info, backgroundColor: colors.infoSoft },
-  packageState: { fontSize: 12, fontWeight: '700', color: colors.inkMuted },
-  packageStateOpened: { color: colors.info },
-  packageQuantity: { fontSize: 15, fontWeight: '700', color: colors.ink, marginTop: 2 },
+  packageOpened: { borderColor: thermal.soon.line, backgroundColor: thermal.soon.wash },
+  packageStateOpened: { color: thermal.soon.line },
+  packageQuantity: { fontFamily: font.monoMedium, fontSize: 14, color: colors.ink, marginTop: 4 },
+
   sibling: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
@@ -968,27 +983,33 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  siblingQuantity: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  siblingMeta: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
-  grow: { flex: 1 },
+  siblingPressed: { backgroundColor: colors.surfaceSunk },
+  siblingQuantity: { fontFamily: font.monoMedium, fontSize: 14, color: colors.ink },
+  siblingMeta: { marginTop: 2 },
+
   pendingUnit: {
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.surfaceSunk,
     borderRadius: radius.md,
     padding: spacing.md,
     marginTop: spacing.sm,
     marginBottom: spacing.md,
   },
   pendingRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg },
+
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
   dateButton: {
     flex: 1,
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 12,
+    justifyContent: 'center',
+    minHeight: 48,
   },
-  dateText: { fontSize: 15, color: colors.ink },
-  clearText: { color: colors.danger, fontSize: 14, fontWeight: '600' },
+  dateButtonPressed: { backgroundColor: colors.surfaceSunk },
+  clearText: { ...text.small, color: thermal.critical.line, fontFamily: font.sansMedium },
+
   movement: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
@@ -999,11 +1020,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     gap: spacing.md,
   },
-  movementLabel: { fontSize: 15, fontWeight: '600', color: colors.ink },
-  movementReason: { fontSize: 13, color: colors.inkMuted, marginTop: 1 },
-  movementDate: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },
-  movementOperation: { fontSize: 11, color: colors.inkMuted, marginTop: 2, fontVariant: ['tabular-nums'] },
+  movementReason: { marginTop: 1 },
+  movementDate: { marginTop: 4 },
+  movementOperation: { marginTop: 2 },
   movementRight: { alignItems: 'flex-end' },
-  movementQuantity: { fontSize: 15, fontWeight: '700' },
-  movementAfter: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },
+  movementQuantity: { fontFamily: font.monoSemiBold, fontSize: 13, color: colors.ink },
+  movementAfter: { marginTop: 4 },
 });

@@ -1,12 +1,13 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../../src/api/client';
-import { Button } from '../../src/components/ui';
+import { Button, Icon } from '../../src/components/ui';
 import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
-import { colors, radius, spacing } from '../../src/theme';
+import { colors, font, radius, spacing, text } from '../../src/theme';
 
 /** Codes-barres réellement utilisés sur les emballages alimentaires. */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39'] as const;
@@ -21,7 +22,7 @@ const REAPPEAR_GAP_MS = 1200;
 
 export default function ScanScreen() {
   const router = useRouter();
-  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [active, setActive] = useState(true);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -44,21 +45,11 @@ export default function ScanScreen() {
     }, []),
   );
 
-  // C'est là que la liste reprend son sens : juste avant ou après le scan.
   useEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <Pressable
-          onPress={() => router.push('/shopping-list')}
-          accessibilityRole="button"
-          accessibilityLabel={`Liste de courses, ${listCount} article${listCount > 1 ? 's' : ''}`}
-          style={styles.listButton}
-        >
-          <Text style={styles.listButtonText}>Liste{listCount > 0 ? ` (${listCount})` : ''}</Text>
-        </Pressable>
-      ),
-    });
-  }, [navigation, router, listCount]);
+    return () => {
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    };
+  }, []);
 
   function showFeedback(message: string) {
     setFeedback(message);
@@ -106,22 +97,26 @@ export default function ScanScreen() {
   }
 
   if (!permission) {
-    return <View style={styles.centered} />;
+    return <View style={styles.permission} />;
   }
 
   if (!permission.granted) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.title}>Accès à la caméra</Text>
-        <Text style={styles.description}>
-          La caméra sert uniquement à lire les codes-barres des produits que vous ajoutez.
+      <View style={[styles.permission, { paddingTop: insets.top + spacing.xxl }]}>
+        <View style={styles.permissionIcon}>
+          <Icon name="camera-outline" size={22} color={colors.inkMuted} />
+        </View>
+        <Text style={[text.title, styles.permissionTitle]}>Autoriser la caméra</Text>
+        <Text style={[text.small, styles.permissionText]}>
+          Elle ne sert qu'à lire les codes-barres des produits que vous ajoutez. Aucune image n'est
+          enregistrée ni envoyée.
         </Text>
-        <Button label="Autoriser la caméra" onPress={requestPermission} style={styles.action} />
+        <Button label="Autoriser la caméra" onPress={requestPermission} style={styles.permissionAction} />
         <Button
           label="Saisir un aliment à la main"
           variant="secondary"
           onPress={() => router.push('/add')}
-          style={styles.action}
+          style={styles.permissionAction}
         />
       </View>
     );
@@ -140,38 +135,63 @@ export default function ScanScreen() {
         <View style={[StyleSheet.absoluteFill, styles.paused]} />
       )}
 
+      <View style={[styles.topBar, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
+        <Text style={styles.topLabel}>Retour de courses</Text>
+        <Pressable
+          onPress={() => router.push('/shopping-list')}
+          accessibilityRole="button"
+          accessibilityLabel={`Liste de courses, ${listCount} article${listCount > 1 ? 's' : ''}`}
+          style={({ pressed }) => [styles.listButton, pressed && styles.listButtonPressed]}
+        >
+          <Icon name="format-list-checks" size={16} color={colors.ink} />
+          <Text style={styles.listButtonText}>{listCount > 0 ? `Liste · ${listCount}` : 'Liste'}</Text>
+        </Pressable>
+      </View>
+
       <View style={styles.overlay} pointerEvents="box-none">
-        <View style={styles.reticle} />
-        <Text style={styles.hint}>Cadrez le code-barres du produit</Text>
+        {/* Quatre équerres plutôt qu'un cadre plein : le code reste entièrement
+            visible pendant qu'on le cadre. */}
+        <View style={styles.reticle}>
+          <View style={[styles.corner, styles.cornerTopLeft]} />
+          <View style={[styles.corner, styles.cornerTopRight]} />
+          <View style={[styles.corner, styles.cornerBottomLeft]} />
+          <View style={[styles.corner, styles.cornerBottomRight]} />
+        </View>
+
+        <Text style={styles.hint}>Cadrez le code-barres</Text>
+
         {feedback ? (
-          <View style={styles.feedback}>
-            <Text style={styles.feedbackText}>✓ {feedback}</Text>
+          <View style={styles.feedback} accessibilityLiveRegion="polite">
+            <Icon name="check" size={16} color={colors.ink} />
+            <Text style={styles.feedbackText} numberOfLines={1}>
+              {feedback}
+            </Text>
           </View>
         ) : null}
+      </View>
 
-        <View style={styles.footer}>
-          {lines.length > 0 ? (
-            <Text style={styles.count}>
-              {lines.length} produit{lines.length > 1 ? 's' : ''} scanné{lines.length > 1 ? 's' : ''}
-            </Text>
-          ) : null}
-          <View style={styles.footerRow}>
-            <Button
-              label="Saisie manuelle"
-              variant="secondary"
-              onPress={() => {
-                addManualLine();
-                showFeedback('Ligne à compléter');
-              }}
-              style={styles.footerButton}
-            />
-            <Button
-              label="Terminer"
-              onPress={() => router.push('/shopping-review')}
-              disabled={0 === lines.length}
-              style={styles.footerButton}
-            />
-          </View>
+      <View style={[styles.footer, { paddingBottom: spacing.lg + insets.bottom }]}>
+        <Text style={styles.count}>
+          {0 === lines.length
+            ? 'Aucun produit scanné'
+            : `${lines.length} produit${lines.length > 1 ? 's' : ''} dans le panier`}
+        </Text>
+        <View style={styles.footerRow}>
+          <Button
+            label="Saisie manuelle"
+            variant="secondary"
+            onPress={() => {
+              addManualLine();
+              showFeedback('Ligne à compléter');
+            }}
+            style={styles.footerButton}
+          />
+          <Button
+            label="Terminer"
+            onPress={() => router.push('/shopping-review')}
+            disabled={0 === lines.length}
+            style={styles.footerButton}
+          />
         </View>
       </View>
     </View>
@@ -181,59 +201,93 @@ export default function ScanScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#000000' },
   paused: { backgroundColor: '#000000' },
-  centered: {
+
+  permission: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
     padding: spacing.xl,
-    backgroundColor: colors.background,
+    backgroundColor: colors.ground,
   },
-  title: { fontSize: 20, fontWeight: '700', color: colors.ink, marginBottom: spacing.sm },
-  description: {
-    fontSize: 15,
-    color: colors.inkMuted,
-    textAlign: 'center',
-    lineHeight: 21,
-    marginBottom: spacing.xl,
+  permissionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  action: { alignSelf: 'stretch', marginBottom: spacing.md },
-  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
-  reticle: {
-    width: '80%',
-    height: 170,
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-    borderRadius: radius.lg,
-    opacity: 0.9,
+  permissionTitle: { marginTop: spacing.lg, textAlign: 'center' },
+  permissionText: { marginTop: spacing.sm, textAlign: 'center', maxWidth: 320 },
+  permissionAction: { alignSelf: 'stretch', marginTop: spacing.md },
+
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
   },
-  hint: {
+  topLabel: {
+    ...text.label,
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
-    marginTop: spacing.lg,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowRadius: 4,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowRadius: 6,
+  },
+  listButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs + 2,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    minHeight: 36,
+  },
+  listButtonPressed: { backgroundColor: colors.surfaceSunk },
+  listButtonText: { fontFamily: font.monoMedium, fontSize: 11, color: colors.ink },
+
+  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+  reticle: { width: '82%', maxWidth: 320, height: 170 },
+  corner: { position: 'absolute', width: 26, height: 26, borderColor: '#FFFFFF' },
+  cornerTopLeft: { top: 0, left: 0, borderTopWidth: 2, borderLeftWidth: 2 },
+  cornerTopRight: { top: 0, right: 0, borderTopWidth: 2, borderRightWidth: 2 },
+  cornerBottomLeft: { bottom: 0, left: 0, borderBottomWidth: 2, borderLeftWidth: 2 },
+  cornerBottomRight: { bottom: 0, right: 0, borderBottomWidth: 2, borderRightWidth: 2 },
+
+  hint: {
+    ...text.label,
+    color: '#FFFFFF',
+    marginTop: spacing.xl,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowRadius: 6,
   },
   feedback: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     marginTop: spacing.lg,
-    backgroundColor: 'rgba(47,107,79,0.9)',
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
+    maxWidth: '90%',
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  feedbackText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
-  footer: { position: 'absolute', bottom: spacing.xl, left: spacing.xl, right: spacing.xl },
-  count: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: spacing.md,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowRadius: 4,
+  feedbackText: { ...text.subheading, flexShrink: 1 },
+
+  /**
+   * La barre de commande est une surface blanche, comme toutes les autres :
+   * sur un voile sombre, le bouton principal en encre disparaissait dans le
+   * fond, et l'état inactif encore plus.
+   */
+  footer: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  footerRow: { flexDirection: 'row', gap: spacing.md },
+  count: { ...text.label, textAlign: 'center', marginBottom: spacing.md },
+  footerRow: { flexDirection: 'row', gap: spacing.sm },
   footerButton: { flex: 1 },
-  listButton: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
-  listButtonText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
 });

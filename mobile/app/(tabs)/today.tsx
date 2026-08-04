@@ -1,12 +1,28 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../../src/api/client';
 import type { MealPlanEntry, MealPlanOverview, SaveTodayCandidate } from '../../src/api/types';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loader, SectionTitle } from '../../src/components/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorBanner,
+  Icon,
+  Loader,
+  Row,
+  ScreenHeader,
+  SectionTitle,
+  Stamp,
+  StampHero,
+  formatShortDate,
+  useTopInset,
+} from '../../src/components/ui';
+import { deadlineOf } from '../../src/deadline';
+import { useEnterAnimation, useReducedMotion } from '../../src/motion';
 import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
-import { colors, spacing } from '../../src/theme';
+import { colors, deadlineSentence, spacing, text, thermalFor } from '../../src/theme';
 
 type LoadState<T> =
   | { status: 'loading' }
@@ -26,6 +42,8 @@ function errorMessage(exception: unknown): string {
  */
 export default function TodayScreen() {
   const router = useRouter();
+  const reducedMotion = useReducedMotion();
+  const topInset = useTopInset();
 
   const [urgent, setUrgent] = useState<LoadState<SaveTodayCandidate[]>>({ status: 'loading' });
   const [review, setReview] = useState<LoadState<number>>({ status: 'loading' });
@@ -131,20 +149,27 @@ export default function TodayScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <SectionTitle>Ce qui mérite une action</SectionTitle>
+    <ScrollView style={topInset} contentContainerStyle={styles.container}>
+      <ScreenHeader eyebrow={todayLabel()} title="Aujourd'hui" />
+
       <ErrorBanner message={actionError} />
 
       {attentionLoading ? (
-        <Loader label="Recherche de ce qui mérite votre attention…" />
+        <Loader label="Recherche de ce qui réclame votre attention" />
       ) : (
         <>
           {urgent.status === 'error' ? <ErrorBanner message={urgent.message} /> : null}
-          {urgentItems.map((candidate) => (
+
+          {urgentItems.length > 0 ? <SectionTitle>À traiter maintenant</SectionTitle> : null}
+          {urgentItems.map((candidate, index) => (
             <TodayCard
               key={candidate.stockItem.id}
               candidate={candidate}
+              hero={0 === index}
+              index={index}
+              animate={!reducedMotion}
               busy={busy}
+              onOpen={() => router.push(`/item/${candidate.stockItem.id}`)}
               onConsumed={() =>
                 run(candidate.stockItem.id, 'consumed', (operationKey) =>
                   api.consume(candidate.stockItem.id, { mode: 'all' }, operationKey),
@@ -165,32 +190,47 @@ export default function TodayScreen() {
                   api.freezeStockItem(candidate.stockItem.id, operationKey),
                 )
               }
-              onCheckDetail={() => router.push(`/item/${candidate.stockItem.id}`)}
             />
           ))}
 
+          {urgentItems.length > 1 ? (
+            <Button
+              label="Cuisiner avec ces aliments"
+              variant="secondary"
+              icon="pot-steam-outline"
+              onPress={findAMeal}
+              hint="Impose les aliments urgents aux recettes proposées"
+              style={styles.spaced}
+            />
+          ) : null}
+
           {mealPlan.status === 'error' ? <ErrorBanner message={mealPlan.message} /> : null}
+          {review.status === 'error' ? <ErrorBanner message={review.message} /> : null}
+
+          {readyEntry || reviewCount > 0 ? <SectionTitle>Déjà prêt</SectionTitle> : null}
+
           {readyEntry ? (
             <Card style={styles.compactCard}>
-              <Text style={styles.compactTitle}>Prêt à cuisiner : {readyEntry.displayName}</Text>
-              <Text style={styles.compactHint}>
-                {readyEntry.mealSlotLabel} · {formatDisplayDate(readyEntry.date)} — tous les ingrédients sont disponibles.
+              <Text style={text.label}>
+                {readyEntry.mealSlotLabel} · {formatShortDate(readyEntry.date)}
               </Text>
-              <Button
-                label="Cuisiner maintenant"
-                onPress={() => cookEntry(readyEntry)}
-                style={styles.spaced}
-              />
+              <Text style={[text.heading, styles.compactTitle]}>{readyEntry.displayName}</Text>
+              <Text style={[text.small, styles.compactHint]}>
+                Tous les ingrédients sont dans votre stock.
+              </Text>
+              <Button label="Cuisiner ce repas" onPress={() => cookEntry(readyEntry)} style={styles.spaced} />
             </Card>
           ) : null}
 
-          {review.status === 'error' ? <ErrorBanner message={review.message} /> : null}
           {reviewCount > 0 ? (
             <Card style={styles.compactCard}>
-              <Text style={styles.compactTitle}>
-                {reviewCount} produit{reviewCount > 1 ? 's' : ''} à vérifier
+              <Text style={text.label}>File de vérification</Text>
+              <Text style={[text.heading, styles.compactTitle]}>
+                {reviewCount} produit{reviewCount > 1 ? 's' : ''} à confirmer
               </Text>
-              <Text style={styles.compactHint}>Confirmez en quelques instants ce qui est encore exact.</Text>
+              <Text style={[text.small, styles.compactHint]}>
+                Quantité entamée, date estimée, lot oublié : quelques secondes pour remettre le stock d'aplomb.
+              </Text>
               <Button
                 label="Vérifier mon stock"
                 variant="secondary"
@@ -202,26 +242,30 @@ export default function TodayScreen() {
 
           {!hasSomethingToShow && urgent.status === 'ready' ? (
             <EmptyState
-              title="Rien à traiter pour l'instant"
-              description="Votre stock est à jour, rien ne réclame d'action maintenant."
+              icon="check-decagram-outline"
+              title="Rien ne presse"
+              description="Aucun aliment ne réclame de décision aujourd'hui. C'est le bon moment pour préparer la suite."
             />
           ) : null}
         </>
       )}
 
       <SectionTitle>Gestes fréquents</SectionTitle>
-      <Card style={styles.shortcutCard}>
-        <ShortcutRow
+      <Card style={styles.rowCard}>
+        <Row
+          icon="silverware-fork-knife"
           label="J'ai utilisé quelque chose"
-          subtitle="Déclarer une consommation ordinaire"
+          subtitle="Retirer une quantité du stock"
           onPress={() => router.push('/quick-consume')}
         />
-        <ShortcutRow
+        <Row
+          icon="barcode-scan"
           label="Enregistrer un retour de courses"
           subtitle="Scanner ce que vous venez d'acheter"
           onPress={() => router.push('/scan')}
         />
-        <ShortcutRow
+        <Row
+          icon="format-list-checks"
           label="Liste de courses"
           subtitle="Voir et compléter votre liste"
           onPress={() => router.push('/shopping-list')}
@@ -230,23 +274,15 @@ export default function TodayScreen() {
       </Card>
 
       <SectionTitle>Préparer la suite</SectionTitle>
-      <Card style={styles.shortcutCard}>
-        <ShortcutRow
-          label="Cuisiner avec les produits urgents"
-          subtitle={
-            urgentItems.length > 0
-              ? `${urgentItems.length} produit${urgentItems.length > 1 ? 's' : ''} à utiliser en priorité`
-              : 'Aucun produit urgent en ce moment'
-          }
-          onPress={findAMeal}
-          disabled={urgentItems.length === 0}
-        />
-        <ShortcutRow
+      <Card style={styles.rowCard}>
+        <Row
+          icon="calendar-blank-outline"
           label="Mon plan de repas"
-          subtitle={nextEntry ? `${nextEntry.displayName} · ${formatDisplayDate(nextEntry.date)}` : 'Aucun repas planifié'}
+          subtitle={nextEntry ? `${nextEntry.displayName} · ${formatShortDate(nextEntry.date)}` : 'Aucun repas planifié'}
           onPress={() => router.push('/meal-plan')}
         />
-        <ShortcutRow
+        <Row
+          icon="cart-outline"
           label="Vérifier un achat avant les courses"
           subtitle="Ce qu'il vaut mieux ne pas racheter"
           onPress={() => router.push('/shopping-advisor')}
@@ -257,138 +293,121 @@ export default function TodayScreen() {
   );
 }
 
+/** « mardi 4 août » — la rubrique de l'écran porte une vraie donnée, pas un mot de remplissage. */
+function todayLabel(): string {
+  return new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
 function TodayCard({
   candidate,
+  hero,
+  index,
+  animate,
   busy,
+  onOpen,
   onConsumed,
   onSnoozed,
   onDiscarded,
   onFrozen,
-  onCheckDetail,
 }: {
   candidate: SaveTodayCandidate;
+  /** Le premier lot est le plus pressant : il porte le cachet en grand. */
+  hero: boolean;
+  index: number;
+  animate: boolean;
   busy: boolean;
+  onOpen: () => void;
   onConsumed: () => void;
   onSnoozed: () => void;
   onDiscarded: () => void;
   onFrozen: () => void;
-  onCheckDetail: () => void;
 }) {
   const item = candidate.stockItem;
+  const deadline = deadlineOf(item);
+  const level = thermalFor(deadline.days);
+  const entering = useEnterAnimation(index * 60, animate);
+
+  const reasons = candidate.reasons.map((reason) => reason.label).join(' · ');
 
   return (
-    <Card style={styles.card}>
-      <Text style={styles.name}>{item.variant.culinaryLabel}</Text>
-      {item.variant.brand ? <Text style={styles.brand}>{item.variant.brand}</Text> : null}
+    <Animated.View style={entering}>
+      <Card level={level} style={styles.card}>
+        <Pressable
+          onPress={onOpen}
+          accessibilityRole="button"
+          accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}. ${deadlineSentence(deadline.days, deadline.estimated)}. ${reasons}`}
+          accessibilityHint="Ouvre la fiche de l'aliment"
+          style={({ pressed }) => [styles.cardHead, pressed && styles.cardHeadPressed]}
+        >
+          {hero ? (
+            <>
+              <StampHero days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+              <View style={styles.heroName}>
+                <Text style={[text.title, styles.heroNameText]}>{item.variant.culinaryLabel}</Text>
+                <Icon name="chevron-right" size={20} color={colors.border} />
+              </View>
+            </>
+          ) : (
+            <View style={styles.compactHead}>
+              <Text style={[text.heading, styles.compactHeadName]}>{item.variant.culinaryLabel}</Text>
+              <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} decorative />
+            </View>
+          )}
 
-      <View style={styles.reasons}>
-        {candidate.reasons.map((reason) => (
-          <Badge key={reason.code} label={reason.label} color={colors.accent} background={colors.accentSoft} />
-        ))}
-      </View>
+          <Text style={[text.data, styles.meta]}>
+            {item.displayQuantity} {item.displayUnit} · {item.storageLocationLabel}
+            {item.variant.brand ? ` · ${item.variant.brand}` : ''}
+          </Text>
+          <Text style={[text.label, styles.reasons]}>{reasons}</Text>
+        </Pressable>
 
-      <Text style={styles.meta}>
-        {item.displayQuantity} {item.displayUnit} · {item.storageLocationLabel}
-        {item.expirationIsEstimated ? ' · date estimée' : ''}
-      </Text>
-
-      <View style={styles.row}>
-        <Button label="Consommé" onPress={onConsumed} disabled={busy} style={styles.rowItem} />
-        <Button
-          label="Rappeler plus tard"
-          variant="secondary"
-          onPress={onSnoozed}
-          disabled={busy}
-          style={styles.rowItem}
-        />
-      </View>
-      <Button label="Jeté" variant="danger" onPress={onDiscarded} disabled={busy} style={styles.spacedSmall} />
-
-      <View style={styles.secondaryRow}>
-        {'freezer' !== item.storageLocation ? (
-          <Button label="Congeler" variant="ghost" onPress={onFrozen} disabled={busy} />
-        ) : null}
-        <Button label="Vérifier l'état" variant="ghost" onPress={onCheckDetail} disabled={busy} />
-      </View>
-    </Card>
+        <View style={styles.actions}>
+          <Button label="J'ai tout consommé" onPress={onConsumed} disabled={busy} style={styles.actionMain} />
+          <Button label="Jeté" variant="danger" onPress={onDiscarded} disabled={busy} style={styles.actionSide} />
+        </View>
+        <View style={styles.minorActions}>
+          <Button label="Rappeler plus tard" variant="ghost" onPress={onSnoozed} disabled={busy} />
+          {'freezer' !== item.storageLocation ? (
+            <Button label="Congelé" variant="ghost" onPress={onFrozen} disabled={busy} />
+          ) : null}
+        </View>
+      </Card>
+    </Animated.View>
   );
-}
-
-/** Une ligne de raccourci : libellé, sous-titre facultatif, chevron — jamais un bouton plein. */
-function ShortcutRow({
-  label,
-  subtitle,
-  onPress,
-  disabled = false,
-  last = false,
-}: {
-  label: string;
-  subtitle?: string;
-  onPress: () => void;
-  disabled?: boolean;
-  last?: boolean;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={subtitle}
-      accessibilityState={{ disabled }}
-      style={({ pressed }) => [
-        styles.shortcutRow,
-        !last && styles.shortcutRowDivider,
-        pressed && !disabled && styles.shortcutRowPressed,
-        disabled && styles.shortcutRowDisabled,
-      ]}
-    >
-      <View style={styles.shortcutText}>
-        <Text style={styles.shortcutLabel}>{label}</Text>
-        {subtitle ? <Text style={styles.shortcutSubtitle}>{subtitle}</Text> : null}
-      </View>
-      <Text style={styles.shortcutChevron}>›</Text>
-    </Pressable>
-  );
-}
-
-function formatDisplayDate(iso: string): string {
-  const [year, month, day] = iso.split('-').map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
 }
 
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2, flexGrow: 1 },
-  card: { marginBottom: spacing.lg },
-  compactCard: { marginBottom: spacing.lg },
-  compactTitle: { fontSize: 16, fontWeight: '700', color: colors.ink },
-  compactHint: { fontSize: 13, color: colors.inkMuted, marginTop: spacing.xs },
-  name: { fontSize: 19, fontWeight: '800', color: colors.ink },
-  brand: { fontSize: 14, color: colors.inkMuted, marginTop: 2 },
-  reasons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.md },
-  meta: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.md },
-  row: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
-  rowItem: { flex: 1 },
-  spaced: { marginTop: spacing.md },
-  spacedSmall: { marginTop: spacing.sm },
-  secondaryRow: {
+  // `paddingLeft` explicitement remis à zéro : `Card` en pose un pour dégager
+  // le rail, et Yoga le fait gagner sur le `padding: 0` qui suit. Ici, ce sont
+  // les blocs internes qui portent leur propre marge.
+  card: { marginBottom: spacing.md, padding: 0, paddingLeft: 0 },
+  cardHead: { padding: spacing.lg, paddingLeft: spacing.lg + spacing.xs, paddingBottom: spacing.md },
+  cardHeadPressed: { backgroundColor: colors.surfaceSunk },
+  heroName: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.lg },
+  heroNameText: { flex: 1 },
+  compactHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  compactHeadName: { flex: 1 },
+  meta: { marginTop: spacing.sm },
+  reasons: { marginTop: spacing.sm },
+  actions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: spacing.sm,
-  },
-  shortcutCard: { padding: 0, marginBottom: spacing.lg, overflow: 'hidden' },
-  shortcutRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: spacing.sm,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 2,
+    paddingLeft: spacing.lg + spacing.xs,
   },
-  shortcutRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.border },
-  shortcutRowPressed: { backgroundColor: colors.surfaceMuted },
-  shortcutRowDisabled: { opacity: 0.5 },
-  shortcutText: { flex: 1, paddingRight: spacing.md },
-  shortcutLabel: { fontSize: 15, fontWeight: '600', color: colors.ink },
-  shortcutSubtitle: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
-  shortcutChevron: { fontSize: 20, color: colors.inkMuted },
+  actionMain: { flex: 1 },
+  actionSide: { minWidth: 88 },
+  minorActions: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingLeft: spacing.md + spacing.xs,
+    paddingBottom: spacing.sm,
+  },
+  compactCard: { marginBottom: spacing.md },
+  compactTitle: { marginTop: spacing.sm },
+  compactHint: { marginTop: spacing.xs },
+  rowCard: { padding: 0 },
+  spaced: { marginTop: spacing.sm, marginBottom: spacing.md },
 });

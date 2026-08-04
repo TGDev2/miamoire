@@ -66,6 +66,7 @@ export default function SavedRecipeScreen() {
   if (missing) {
     return (
       <EmptyState
+        icon="content-save-outline"
         title="Recette introuvable"
         description="Elle a peut-être été retirée depuis un autre téléphone du foyer."
       />

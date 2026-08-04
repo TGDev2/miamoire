@@ -4,8 +4,18 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../src/api/client';
 import type { Reference, ShoppingListItem, Unit } from '../src/api/types';
-import { Button, Chip, EmptyState, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
-import { colors, spacing } from '../src/theme';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  ErrorBanner,
+  Field,
+  Icon,
+  IconButton,
+  Loader,
+  SectionTitle,
+} from '../src/components/ui';
+import { colors, font, spacing, text } from '../src/theme';
 
 /**
  * La liste de courses du foyer : pas un container séparé, une seule liste par
@@ -97,7 +107,7 @@ export default function ShoppingListScreen() {
   }
 
   if (null === items) {
-    return <Loader label="Chargement de la liste…" />;
+    return <Loader label="Chargement de la liste" />;
   }
 
   const toBuy = items.filter((item) => !item.checked);
@@ -110,13 +120,50 @@ export default function ShoppingListScreen() {
       <Button
         label="Vérifier avant d'acheter"
         variant="secondary"
+        icon="cart-outline"
         onPress={() => router.push('/shopping-advisor')}
         hint="Ce que le stock actuel, l'historique et les repas prévus suggèrent de ne pas racheter"
         style={styles.advisorButton}
       />
 
-      <SectionTitle>Ajouter</SectionTitle>
-      <Field label="Aliment" value={label} onChangeText={setLabel} placeholder="Pain, œufs, farine…" />
+      {/* La liste avant le formulaire : on ouvre cet écran dans le magasin pour
+          cocher, bien plus souvent que chez soi pour ajouter. */}
+      {0 === items.length ? (
+        <EmptyState
+          icon="format-list-checks"
+          title="Liste vide"
+          description="Ajoutez un aliment ci-dessous, ou depuis les ingrédients manquants d'une recette."
+        />
+      ) : (
+        <>
+          <SectionTitle>{`À acheter · ${toBuy.length}`}</SectionTitle>
+          {0 === toBuy.length ? (
+            <Text style={text.small}>Tout est coché — bonnes courses.</Text>
+          ) : (
+            toBuy.map((item) => (
+              <ListRow key={item.id} item={item} busy={busyId === item.id} onToggle={toggle} onRemove={remove} />
+            ))
+          )}
+
+          {bought.length > 0 ? (
+            <>
+              <SectionTitle>{`Déjà pris · ${bought.length}`}</SectionTitle>
+              {bought.map((item) => (
+                <ListRow key={item.id} item={item} busy={busyId === item.id} onToggle={toggle} onRemove={remove} />
+              ))}
+            </>
+          ) : null}
+        </>
+      )}
+
+      <SectionTitle>Ajouter un aliment</SectionTitle>
+      <Field
+        label="Aliment"
+        hideLabel
+        value={label}
+        onChangeText={setLabel}
+        placeholder="Pain, œufs, farine…"
+      />
       <Field
         label="Quantité (facultatif)"
         value={quantity}
@@ -124,6 +171,7 @@ export default function ShoppingListScreen() {
         keyboardType="decimal-pad"
         placeholder="ex. 500"
       />
+      <Text style={styles.unitLabel}>Unité</Text>
       <View style={styles.chips}>
         {(reference?.units ?? []).map((option) => (
           <Chip
@@ -135,38 +183,11 @@ export default function ShoppingListScreen() {
         ))}
       </View>
       <Button label="Ajouter à la liste" onPress={addManually} loading={adding} style={styles.addButton} />
-
-      {0 === items.length ? (
-        <EmptyState
-          title="Liste vide"
-          description="Ajoutez un aliment ci-dessus, ou depuis les ingrédients manquants d'une recette."
-        />
-      ) : (
-        <>
-          <SectionTitle>À acheter</SectionTitle>
-          {0 === toBuy.length ? (
-            <Text style={styles.help}>Tout est coché — bonnes courses !</Text>
-          ) : (
-            toBuy.map((item) => (
-              <Row key={item.id} item={item} busy={busyId === item.id} onToggle={toggle} onRemove={remove} />
-            ))
-          )}
-
-          {bought.length > 0 ? (
-            <>
-              <SectionTitle>Déjà pris</SectionTitle>
-              {bought.map((item) => (
-                <Row key={item.id} item={item} busy={busyId === item.id} onToggle={toggle} onRemove={remove} />
-              ))}
-            </>
-          ) : null}
-        </>
-      )}
     </ScrollView>
   );
 }
 
-function Row({
+function ListRow({
   item,
   busy,
   onToggle,
@@ -187,7 +208,9 @@ function Row({
         accessibilityState={{ checked: item.checked, disabled: busy }}
         accessibilityLabel={item.label}
       >
-        <Text style={styles.checkbox}>{item.checked ? '☑' : '☐'}</Text>
+        <View style={[styles.checkbox, item.checked && styles.checkboxChecked]}>
+          {item.checked ? <Icon name="check" size={14} color={colors.onInk} /> : null}
+        </View>
         <View style={styles.flex}>
           <Text style={[styles.label, item.checked && styles.labelChecked]}>{item.label}</Text>
           {null !== item.quantity ? (
@@ -197,14 +220,13 @@ function Row({
           ) : null}
         </View>
       </Pressable>
-      <Pressable
-        onPress={() => onRemove(item)}
+      <IconButton
+        icon="close"
+        label={`Retirer ${item.label} de la liste`}
+        tone="critical"
         disabled={busy}
-        accessibilityRole="button"
-        accessibilityLabel={`Retirer ${item.label} de la liste`}
-      >
-        <Text style={styles.remove}>Retirer</Text>
-      </Pressable>
+        onPress={() => onRemove(item)}
+      />
     </View>
   );
 }
@@ -212,23 +234,33 @@ function Row({
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   flex: { flex: 1 },
-  advisorButton: { marginBottom: spacing.lg },
+  advisorButton: { marginBottom: spacing.sm },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
+  unitLabel: { ...text.label, marginBottom: spacing.sm },
   addButton: { marginTop: spacing.sm, marginBottom: spacing.lg },
-  help: { fontSize: 14, color: colors.inkMuted },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: spacing.sm + 2,
+    paddingVertical: spacing.sm,
+    minHeight: 52,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    gap: spacing.md,
+    gap: spacing.sm,
   },
-  rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  checkbox: { fontSize: 20, color: colors.primary },
-  label: { fontSize: 15, color: colors.ink },
+  rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: { backgroundColor: colors.ink, borderColor: colors.ink },
+  label: text.body,
   labelChecked: { color: colors.inkMuted, textDecorationLine: 'line-through' },
-  quantity: { fontSize: 13, color: colors.inkMuted, marginTop: 2 },
-  remove: { fontSize: 13, color: colors.danger, fontWeight: '600' },
+  quantity: { fontFamily: font.mono, fontSize: 11, lineHeight: 16, color: colors.inkMuted, marginTop: 2 },
 });

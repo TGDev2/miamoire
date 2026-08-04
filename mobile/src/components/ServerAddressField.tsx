@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
 import { DEFAULT_API_BASE_URL, getApiBaseUrl, setApiBaseUrl } from '../api/config';
-import { colors, spacing } from '../theme';
+import { font, spacing, text, thermal } from '../theme';
 import { Button, Field } from './ui';
 
 /**
@@ -97,7 +97,14 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
   grow: { flex: 1 },
   spaced: { marginTop: spacing.sm },
-  confirmation: { fontSize: 13, color: colors.primary, marginTop: spacing.sm },
-  failure: { color: colors.danger },
-  hint: { fontSize: 11, color: colors.inkMuted, marginTop: spacing.xs },
+  /** Une adresse est une donnée machine : elle se relit caractère par caractère. */
+  confirmation: {
+    fontFamily: font.mono,
+    fontSize: 11,
+    lineHeight: 16,
+    color: thermal.safe.line,
+    marginTop: spacing.sm,
+  },
+  failure: { color: thermal.critical.line },
+  hint: { ...text.data, fontSize: 11, marginTop: spacing.xs },
 });

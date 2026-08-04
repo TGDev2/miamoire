@@ -5,7 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { api } from '../../src/api/client';
 import type { SavedRecipe } from '../../src/api/types';
 import { Badge, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
-import { colors, feasibilityPresentation, radius, spacing } from '../../src/theme';
+import { colors, feasibilityPresentation, font, radius, spacing, text, thermal } from '../../src/theme';
 
 /**
  * Les recettes que le foyer a gardées.
@@ -68,6 +68,7 @@ export default function SavedRecipesScreen() {
       <View style={styles.emptyWrapper}>
         <ErrorBanner message={error} />
         <EmptyState
+          icon="content-save-outline"
           title="Aucune recette enregistrée"
           description="Ouvrez une proposition depuis l'onglet Cuisiner et touchez « Enregistrer cette recette » pour la conserver ici."
         />
@@ -92,18 +93,16 @@ export default function SavedRecipesScreen() {
             accessibilityHint="Ouvre la recette"
             style={({ pressed }) => [styles.card, pressed && styles.pressed]}
           >
-            <Badge
-              label={presentation.label}
-              color={presentation.color}
-              background={presentation.background}
-            />
-            <Text style={styles.title}>{saved.recipeName}</Text>
-            <Text style={styles.summary}>{saved.recipe.summary}</Text>
-            <Text style={styles.meta}>
-              {saved.recipe.preparationTime} min · {saved.recipe.servings}{' '}
-              {saved.recipe.servings > 1 ? 'personnes' : 'personne'}
-              {saved.savedBy ? ` · enregistrée par ${saved.savedBy}` : ''}
-            </Text>
+            <Badge label={presentation.label} level={presentation.level} />
+            <Text style={[text.title, styles.title]}>{saved.recipeName}</Text>
+            <Text style={[text.small, styles.summary]}>{saved.recipe.summary}</Text>
+            <View style={styles.metaRow}>
+              <Text style={styles.meta}>{saved.recipe.preparationTime} min</Text>
+              <Text style={styles.meta}>
+                {saved.recipe.servings} {saved.recipe.servings > 1 ? 'pers.' : 'pers.'}
+              </Text>
+              {saved.savedBy ? <Text style={styles.meta}>par {saved.savedBy}</Text> : null}
+            </View>
             {/* Imbriqué dans la carte : sans libellé propre, il se confond avec
                 elle et l'on ne sait plus quelle recette on retire. */}
             <Pressable
@@ -137,10 +136,24 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     marginBottom: spacing.lg,
   },
-  pressed: { opacity: 0.75 },
-  title: { fontSize: 19, fontWeight: '800', color: colors.ink, marginTop: spacing.md },
-  summary: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 20 },
-  meta: { fontSize: 13, color: colors.ink, marginTop: spacing.md },
-  remove: { fontSize: 13, color: colors.danger, fontWeight: '600', marginTop: spacing.md },
-  footer: { fontSize: 12, color: colors.inkMuted, lineHeight: 18, marginTop: spacing.sm },
+  pressed: { backgroundColor: colors.surfaceSunk },
+  title: { marginTop: spacing.md },
+  summary: { marginTop: spacing.xs },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.lg,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  meta: { fontFamily: font.monoMedium, fontSize: 11, lineHeight: 15, color: colors.ink },
+  remove: {
+    ...text.small,
+    color: thermal.critical.line,
+    fontFamily: font.sansMedium,
+    marginTop: spacing.md,
+  },
+  footer: { ...text.small, marginTop: spacing.sm },
 });

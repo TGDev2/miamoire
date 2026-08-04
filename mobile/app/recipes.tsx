@@ -3,9 +3,9 @@ import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { Feasibility, Recipe } from '../src/api/types';
-import { Badge, EmptyState } from '../src/components/ui';
+import { Badge, Card, EmptyState, Icon } from '../src/components/ui';
 import { useRecipes } from '../src/recipes/RecipeContext';
-import { colors, feasibilityPresentation, radius, spacing } from '../src/theme';
+import { colors, feasibilityPresentation, font, radius, spacing, text, thermal } from '../src/theme';
 
 /** Ordre d'affichage : le plus immédiatement réalisable en premier. */
 const ORDER: Feasibility[] = ['ready', 'adapted', 'needs_shopping'];
@@ -17,6 +17,7 @@ export default function RecipeListScreen() {
   if (!suggestion || suggestion.recipes.length === 0) {
     return (
       <EmptyState
+        icon="pot-steam-outline"
         title="Aucune proposition"
         description="Revenez à l'onglet Cuisiner pour générer des idées de repas."
       />
@@ -33,35 +34,39 @@ export default function RecipeListScreen() {
           sans cela, trois recettes autour du même aliment ressemblent à une
           coïncidence plutôt qu'à une contrainte respectée. */}
       {suggestion.requiredIngredient ? (
-        <View style={styles.required}>
-          <Text style={styles.requiredTitle}>
-            Aliment imposé : {suggestion.requiredIngredient.label}
+        <Card style={styles.notice}>
+          <Text style={text.label}>Aliment imposé</Text>
+          <Text style={[text.subheading, styles.noticeTitle]}>
+            {suggestion.requiredIngredient.label}
           </Text>
-          <Text style={styles.requiredHint}>
+          <Text style={[text.small, styles.noticeLine]}>
             Chaque proposition ci-dessous l'utilise. Celles qui l'ignoraient ont été écartées.
           </Text>
-        </View>
+        </Card>
       ) : null}
 
       {/* Une proposition qui disparaît sans explication ressemble à une panne.
           C'est au contraire un contrôle qui a fonctionné. */}
       {suggestion.rejected.length > 0 ? (
-        <View style={styles.rejected}>
-          <Text style={styles.rejectedTitle}>
-            {suggestion.rejected.length === 1
-              ? '1 proposition écartée'
-              : `${suggestion.rejected.length} propositions écartées`}
-          </Text>
+        <Card style={styles.notice}>
+          <View style={styles.noticeHead}>
+            <Icon name="shield-check-outline" size={18} />
+            <Text style={text.label}>
+              {suggestion.rejected.length === 1
+                ? '1 proposition écartée'
+                : `${suggestion.rejected.length} propositions écartées`}
+            </Text>
+          </View>
           {suggestion.rejected.map((entry, position) => (
-            <Text key={`rejected-${position}`} style={styles.rejectedLine}>
+            <Text key={`rejected-${position}`} style={[text.small, styles.noticeLine]}>
               « {entry.recipeName} » — {entry.reason}
             </Text>
           ))}
-          <Text style={styles.rejectedFooter}>
-            Chaque recette est relue avant affichage : titre, ingrédients, adaptations
-            et étapes comprises, ainsi que l'usage réel de l'aliment imposé.
+          <Text style={[text.small, styles.noticeFooter]}>
+            Chaque recette est relue avant affichage : titre, ingrédients, adaptations et étapes
+            comprises, ainsi que l'usage réel de l'aliment imposé.
           </Text>
-        </View>
+        </Card>
       ) : null}
 
       {sorted.map((recipe) => {
@@ -123,82 +128,67 @@ function RecipeCard({
       accessibilityHint="Ouvre la recette et sa préparation"
       style={({ pressed }) => [styles.card, pressed && styles.pressed]}
     >
-      <Badge
-        label={presentation.label}
-        color={presentation.color}
-        background={presentation.background}
-      />
+      <Badge label={presentation.label} level={presentation.level} />
 
-      <Text style={styles.title}>{recipe.recipeName}</Text>
-      <Text style={styles.summary}>{recipe.summary}</Text>
+      <Text style={[text.title, styles.title]}>{recipe.recipeName}</Text>
+      <Text style={[text.small, styles.summary]}>{recipe.summary}</Text>
 
+      {/* Trois mesures alignées, dans la voix machine : le temps, les convives,
+          ce que la recette prend déjà chez vous. */}
       <View style={styles.metaRow}>
         <Text style={styles.meta}>{recipe.preparationTime} min</Text>
-        <Text style={styles.metaSeparator}>·</Text>
-        <Text style={styles.meta}>
-          {recipe.servings} {recipe.servings > 1 ? 'personnes' : 'personne'}
-        </Text>
-        <Text style={styles.metaSeparator}>·</Text>
-        <Text style={styles.meta}>
-          {recipe.ingredientsFromInventory.length} ingrédient(s) de votre stock
-        </Text>
+        <Text style={styles.meta}>{recipe.servings} pers.</Text>
+        <Text style={styles.meta}>{recipe.ingredientsFromInventory.length} du stock</Text>
       </View>
 
       {missingEssential.length > 0 ? (
-        <Text style={styles.missing}>
+        <Text style={[text.small, styles.missing]}>
           À acheter : {missingEssential.map((entry) => entry.label).join(', ')}
         </Text>
       ) : null}
 
       {recipe.substitutions.length > 0 ? (
-        <Text style={styles.substitution}>
-          {recipe.substitutions
-            .map((entry) => `${entry.original} → ${entry.replacedBy}`)
-            .join(' · ')}
+        <Text style={[text.small, styles.detail]}>
+          {recipe.substitutions.map((entry) => `${entry.original} → ${entry.replacedBy}`).join(' · ')}
         </Text>
       ) : null}
 
       {usedDesired.length > 0 ? (
-        <Text style={styles.desired}>Utilise aussi : {usedDesired.join(', ')}</Text>
+        <Text style={[text.small, styles.detail]}>Utilise aussi : {usedDesired.join(', ')}</Text>
       ) : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: spacing.xl },
+  container: { padding: spacing.xl, paddingBottom: spacing.xxl },
   card: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.lg,
     padding: spacing.lg,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
-  pressed: { opacity: 0.75 },
-  title: { fontSize: 19, fontWeight: '800', color: colors.ink, marginTop: spacing.md },
-  summary: { fontSize: 14, color: colors.inkMuted, marginTop: spacing.xs, lineHeight: 20 },
-  metaRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: spacing.md },
-  meta: { fontSize: 13, color: colors.ink },
-  metaSeparator: { fontSize: 13, color: colors.inkMuted, marginHorizontal: spacing.sm },
-  missing: { fontSize: 13, color: colors.accent, marginTop: spacing.md, fontWeight: '600' },
-  substitution: { fontSize: 13, color: colors.info, marginTop: spacing.xs },
-  desired: { fontSize: 13, color: colors.primary, marginTop: spacing.xs, fontWeight: '600' },
-  rejected: {
-    backgroundColor: colors.accentSoft,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
+  pressed: { backgroundColor: colors.surfaceSunk },
+  title: { marginTop: spacing.md },
+  summary: { marginTop: spacing.xs },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.lg,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  required: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  requiredTitle: { fontSize: 14, fontWeight: '700', color: colors.primary },
-  requiredHint: { fontSize: 13, color: colors.primary, marginTop: spacing.xs, lineHeight: 19 },
-  rejectedTitle: { fontSize: 14, fontWeight: '700', color: colors.accent },
-  rejectedLine: { fontSize: 13, color: colors.accent, marginTop: spacing.xs, lineHeight: 19 },
-  rejectedFooter: { fontSize: 12, color: colors.accent, marginTop: spacing.sm, lineHeight: 17 },
+  meta: { fontFamily: font.monoMedium, fontSize: 11, lineHeight: 15, color: colors.ink },
+  missing: { marginTop: spacing.md, color: thermal.soon.line, fontFamily: font.sansMedium },
+  detail: { marginTop: spacing.xs },
+
+  notice: { marginBottom: spacing.md },
+  noticeHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  noticeTitle: { marginTop: spacing.sm },
+  noticeLine: { marginTop: spacing.xs },
+  noticeFooter: { marginTop: spacing.sm },
 });
