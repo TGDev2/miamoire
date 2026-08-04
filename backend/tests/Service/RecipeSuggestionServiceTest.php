@@ -6,33 +6,42 @@ namespace App\Tests\Service;
 
 use App\Enum\Unit;
 use App\Exception\StockException;
+use App\Service\Ai\PriorityChoice;
 use App\Service\Ai\RecipeSuggestionService;
+use App\Service\Ai\ResolvedPriority;
 use App\Service\Inventory\InventoryLine;
+use App\Service\Inventory\InventoryPackaging;
+use App\Service\UnitConverter;
 use PHPUnit\Framework\TestCase;
 
 /**
- * La résolution des aliments prioritaires (1 imposé + jusqu'à 2 souhaités).
+ * La résolution des aliments prioritaires (1 imposé + jusqu'à 2 souhaités) et
+ * de la quantité facultative que chacun peut porter.
  *
- * `resolvePriorities()` est privée et pure — aucune dépendance réseau ni
- * base — donc testée par réflexion plutôt qu'en construisant tout le graphe
- * de `RecipeSuggestionService` (générateur IA, agrégateur, garde-fous...)
- * pour une seule méthode qui n'en a besoin d'aucun.
+ * `resolvePriorities()` est privée et n'a besoin que du convertisseur d'unités —
+ * ni réseau, ni base — donc testée par réflexion plutôt qu'en construisant tout
+ * le graphe de `RecipeSuggestionService` (générateur IA, agrégateur,
+ * garde-fous...) pour une seule méthode qui n'en a besoin d'aucun.
  */
 class RecipeSuggestionServiceTest extends TestCase
 {
     /**
-     * @param list<InventoryLine> $inventory
-     * @param list<string>        $priorityKeys
+     * @param list<InventoryLine>  $inventory
+     * @param list<PriorityChoice> $priorities
      *
-     * @return array{required: ?InventoryLine, desired: list<InventoryLine>}
+     * @return array{required: ?ResolvedPriority, desired: list<ResolvedPriority>}
      */
-    private function resolvePriorities(array $inventory, array $priorityKeys): array
+    private function resolvePriorities(array $inventory, array $priorities): array
     {
         $service = (new \ReflectionClass(RecipeSuggestionService::class))->newInstanceWithoutConstructor();
+
+        $converter = new \ReflectionProperty(RecipeSuggestionService::class, 'converter');
+        $converter->setValue($service, new UnitConverter());
+
         $method = new \ReflectionMethod(RecipeSuggestionService::class, 'resolvePriorities');
 
-        /** @var array{required: ?InventoryLine, desired: list<InventoryLine>} */
-        return $method->invoke($service, $inventory, $priorityKeys);
+        /** @var array{required: ?ResolvedPriority, desired: list<ResolvedPriority>} */
+        return $method->invoke($service, $inventory, $priorities);
     }
 
     public function testNoKeysResolvesToNothing(): void
@@ -43,14 +52,15 @@ class RecipeSuggestionServiceTest extends TestCase
         self::assertSame([], $result['desired']);
     }
 
-    /** Comportement inchangé de l'ancien `priorityKey` : la première clé est une contrainte. */
+    /** Comportement inchangé de l'ancien `priorityKey` : le premier aliment est une contrainte. */
     public function testFirstKeyBecomesRequired(): void
     {
         $courgette = $this->line('courgette', 'Courgettes');
 
-        $result = $this->resolvePriorities([$courgette], ['courgette']);
+        $result = $this->resolvePriorities([$courgette], [PriorityChoice::of('courgette')]);
 
-        self::assertSame($courgette, $result['required']);
+        self::assertSame($courgette, $result['required']->line);
+        self::assertFalse($result['required']->hasTarget(), 'Aucune quantité imposée : le cas courant.');
         self::assertSame([], $result['desired']);
     }
 
@@ -60,33 +70,39 @@ class RecipeSuggestionServiceTest extends TestCase
         $creme = $this->line('creme', 'Crème entamée');
         $fromage = $this->line('fromage', 'Fromage');
 
-        $result = $this->resolvePriorities([$courgette, $creme, $fromage], ['courgette', 'creme', 'fromage']);
+        $result = $this->resolvePriorities(
+            [$courgette, $creme, $fromage],
+            [PriorityChoice::of('courgette'), PriorityChoice::of('creme'), PriorityChoice::of('fromage')],
+        );
 
-        self::assertSame($courgette, $result['required']);
-        self::assertSame([$creme, $fromage], $result['desired']);
+        self::assertSame($courgette, $result['required']->line);
+        self::assertSame([$creme, $fromage], array_map(static fn (ResolvedPriority $p) => $p->line, $result['desired']));
     }
 
-    /** Au plus 2 souhaités, même si davantage sont envoyées (le contrôleur tronque déjà à 3 au total). */
+    /** Au plus 2 souhaités, même si davantage sont envoyés (le contrôleur tronque déjà à 3 au total). */
     public function testDesiredIngredientsAreCappedAtTwo(): void
     {
-        $a = $this->line('a', 'A');
-        $b = $this->line('b', 'B');
-        $c = $this->line('c', 'C');
-        $d = $this->line('d', 'D');
+        $lines = array_map(fn (string $key) => $this->line($key, strtoupper($key)), ['a', 'b', 'c', 'd']);
 
-        $result = $this->resolvePriorities([$a, $b, $c, $d], ['a', 'b', 'c', 'd']);
+        $result = $this->resolvePriorities($lines, array_map(PriorityChoice::of(...), ['a', 'b', 'c', 'd']));
 
-        self::assertSame($a, $result['required']);
-        self::assertSame([$b, $c], $result['desired']);
+        self::assertSame($lines[0], $result['required']->line);
+        self::assertSame(
+            [$lines[1], $lines[2]],
+            array_map(static fn (ResolvedPriority $p) => $p->line, $result['desired']),
+        );
     }
 
     public function testDuplicateKeysAreDeduplicated(): void
     {
         $courgette = $this->line('courgette', 'Courgettes');
 
-        $result = $this->resolvePriorities([$courgette], ['courgette', 'courgette']);
+        $result = $this->resolvePriorities(
+            [$courgette],
+            [PriorityChoice::of('courgette'), PriorityChoice::of('courgette')],
+        );
 
-        self::assertSame($courgette, $result['required']);
+        self::assertSame($courgette, $result['required']->line);
         self::assertSame([], $result['desired']);
     }
 
@@ -98,7 +114,7 @@ class RecipeSuggestionServiceTest extends TestCase
     {
         $this->expectException(StockException::class);
 
-        $this->resolvePriorities([$this->line('courgette', 'Courgettes')], ['inconnu']);
+        $this->resolvePriorities([$this->line('courgette', 'Courgettes')], [PriorityChoice::of('inconnu')]);
     }
 
     /**
@@ -110,20 +126,123 @@ class RecipeSuggestionServiceTest extends TestCase
     {
         $courgette = $this->line('courgette', 'Courgettes');
 
-        $result = $this->resolvePriorities([$courgette], ['courgette', 'inconnu']);
+        $result = $this->resolvePriorities(
+            [$courgette],
+            [PriorityChoice::of('courgette'), PriorityChoice::of('inconnu')],
+        );
 
-        self::assertSame($courgette, $result['required']);
+        self::assertSame($courgette, $result['required']->line);
         self::assertSame([], $result['desired']);
     }
 
-    private function line(string $key, string $label): InventoryLine
+    public function testAnImposedQuantityIsKeptAsIs(): void
     {
+        $result = $this->resolvePriorities(
+            [$this->line('courgette', 'Courgettes')],
+            [PriorityChoice::ofQuantity('courgette', 400, Unit::Gram)],
+        );
+
+        self::assertSame(400.0, $result['required']->quantity);
+        self::assertSame(Unit::Gram, $result['required']->unit);
+        self::assertSame('400 g', $result['required']->describe());
+    }
+
+    /** Une unité de la même famille se convertit vers celle de la ligne. */
+    public function testAQuantityInAnotherUnitOfTheSameFamilyIsConverted(): void
+    {
+        $result = $this->resolvePriorities(
+            [$this->line('courgette', 'Courgettes')],
+            [PriorityChoice::ofQuantity('courgette', 0.3, Unit::Kilogram)],
+        );
+
+        self::assertSame(300.0, $result['required']->quantity);
+        self::assertSame(Unit::Gram, $result['required']->unit);
+    }
+
+    /**
+     * Le geste que la fonctionnalité vise : « écoule une boîte », pas
+     * « écoule 400 g ». C'est ici que la boîte devient une quantité, parce que
+     * c'est ici seulement qu'on sait ce qu'elle pèse.
+     */
+    public function testPackagesBecomeAQuantity(): void
+    {
+        $line = $this->line('tomate', 'Tomates pelées', quantity: 800, packaging: new InventoryPackaging(2, 400, Unit::Gram));
+
+        $result = $this->resolvePriorities([$line], [PriorityChoice::ofPackages('tomate', 1)]);
+
+        self::assertSame(400.0, $result['required']->quantity);
+        self::assertSame('400 g', $result['required']->describe());
+    }
+
+    /**
+     * Sans conditionnement connu, « un exemplaire » ne veut rien dire — mais
+     * l'utilisateur a bien désigné un aliment à écouler, et ce geste-là reste
+     * valable. On abandonne le chiffre, jamais la contrainte.
+     */
+    public function testPackagesWithoutKnownPackagingLoseTheQuantityNotTheFood(): void
+    {
+        $line = $this->line('courgette', 'Courgettes');
+
+        $result = $this->resolvePriorities([$line], [PriorityChoice::ofPackages('courgette', 2)]);
+
+        self::assertSame($line, $result['required']->line);
+        self::assertFalse($result['required']->hasTarget());
+    }
+
+    /**
+     * Des grammes ne deviennent pas des litres : `UnitConverter` refuse de
+     * franchir les familles, et ce refus protège l'inventaire. La quantité est
+     * abandonnée, l'aliment reste imposé.
+     */
+    public function testAQuantityFromAnotherUnitFamilyIsDropped(): void
+    {
+        $line = $this->line('courgette', 'Courgettes');
+
+        $result = $this->resolvePriorities([$line], [PriorityChoice::ofQuantity('courgette', 2, Unit::Liter)]);
+
+        self::assertSame($line, $result['required']->line);
+        self::assertFalse($result['required']->hasTarget());
+    }
+
+    /**
+     * On ne peut pas écouler ce qu'on n'a pas. Sans ce plafonnement, une cible
+     * inatteignable écarterait les trois recettes pour une faute que
+     * l'utilisateur n'a pas commise.
+     */
+    public function testATargetLargerThanTheStockIsCappedToWhatRemains(): void
+    {
+        $result = $this->resolvePriorities(
+            [$this->line('courgette', 'Courgettes', quantity: 500)],
+            [PriorityChoice::ofQuantity('courgette', 800, Unit::Gram)],
+        );
+
+        self::assertSame(500.0, $result['required']->quantity);
+    }
+
+    /** Un aliment souhaité porte lui aussi sa quantité — un souhait, jamais un rejet. */
+    public function testDesiredIngredientsCarryTheirOwnTarget(): void
+    {
+        $result = $this->resolvePriorities(
+            [$this->line('courgette', 'Courgettes'), $this->line('creme', 'Crème')],
+            [PriorityChoice::of('courgette'), PriorityChoice::ofQuantity('creme', 200, Unit::Gram)],
+        );
+
+        self::assertFalse($result['required']->hasTarget());
+        self::assertSame(200.0, $result['desired'][0]->quantity);
+    }
+
+    private function line(
+        string $key,
+        string $label,
+        float $quantity = 500,
+        ?InventoryPackaging $packaging = null,
+    ): InventoryLine {
         return new InventoryLine(
             key: $key,
             variantId: '00000000-0000-0000-0000-000000000000',
             label: $label,
             name: $label,
-            quantity: 500,
+            quantity: $quantity,
             unit: Unit::Gram,
             expiresSoon: false,
             alreadyOpened: false,
@@ -133,6 +252,7 @@ class RecipeSuggestionServiceTest extends TestCase
             category: null,
             locations: [],
             lotCount: 1,
+            packaging: $packaging,
         );
     }
 }

@@ -4,7 +4,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
 import { useSession } from '../../src/session/SessionContext';
-import type { InventorySummary, Reference } from '../../src/api/types';
+import type { InventorySummary, Priority, Reference } from '../../src/api/types';
 import {
   Badge,
   Button,
@@ -42,8 +42,11 @@ export default function CookScreen() {
   const [maxMinutes, setMaxMinutes] = useState<number | null>(null);
   const [equipment, setEquipment] = useState<string[]>([]);
   const [allowExtra, setAllowExtra] = useState(false);
-  /** Aliments imposés aux trois recettes, jusqu'à 3. Vide = aucune contrainte, le défaut. */
-  const [priorityKeys, setPriorityKeys] = useState<string[]>([]);
+  /**
+   * Aliments imposés aux trois recettes, jusqu'à 3. Vide = aucune contrainte,
+   * le défaut. Chacun peut porter une quantité à écouler, elle aussi facultative.
+   */
+  const [priorities, setPriorities] = useState<Priority[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -51,6 +54,8 @@ export default function CookScreen() {
   const { setSuggestion } = useRecipes();
 
   // Mémorise la dernière valeur de `priorityKeys` appliquée depuis les params,
+  // qui restent une simple liste de clés : « Aujourd'hui » désigne des aliments
+  // à sauver, il ne dit pas encore combien en écouler.
   // pour ne semer qu'une fois par navigation — pas à chaque refocus de l'onglet,
   // ce qui écraserait silencieusement une édition faite entre-temps par l'utilisateur.
   const appliedParams = useRef<string | null>(null);
@@ -66,11 +71,16 @@ export default function CookScreen() {
       appliedParams.current = incoming;
 
       const known = new Set(inv.ingredients.map((entry) => entry.key));
-      setPriorityKeys((current) => {
-        const base = seeding ? (incoming ?? '').split(',').filter(Boolean) : current;
+      setPriorities((current) => {
+        const base = seeding
+          ? (incoming ?? '')
+              .split(',')
+              .filter(Boolean)
+              .map((key): Priority => ({ key }))
+          : current;
         // Un aliment épuisé entre deux visites ne doit pas rester sélectionné :
         // le serveur refuserait la génération avec une clé qu'il ne connaît plus.
-        return base.filter((key) => known.has(key)).slice(0, MAX_PRIORITY_KEYS);
+        return base.filter((entry) => known.has(entry.key)).slice(0, MAX_PRIORITY_KEYS);
       });
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Chargement impossible.');
@@ -103,7 +113,7 @@ export default function CookScreen() {
         equipment,
         exclusions: [],
         allowExtraIngredients: allowExtra,
-        priorityKeys,
+        priorities,
       });
       setSuggestion(result);
       router.push('/recipes');
@@ -114,8 +124,26 @@ export default function CookScreen() {
     }
   }
 
-  const priorityLabels = priorityKeys
-    .map((key) => inventory?.ingredients.find((entry) => entry.key === key)?.label)
+  // « Courgettes (400 g) » : la quantité imposée se relit juste au-dessus du
+  // bouton, là où on décide de lancer — pas seulement dans la feuille où on l'a
+  // saisie et qu'il faudrait rouvrir pour la vérifier.
+  const priorityLabels = priorities
+    .map((priority) => {
+      const ingredient = inventory?.ingredients.find((entry) => entry.key === priority.key);
+
+      if (!ingredient) return null;
+
+      if (priority.packages !== undefined) {
+        const unit = priority.packages > 1 ? 'exemplaires' : 'exemplaire';
+        return `${ingredient.label} (${priority.packages} ${unit})`;
+      }
+
+      if (priority.quantity !== undefined) {
+        return `${ingredient.label} (${priority.quantity} ${ingredient.unitLabel})`;
+      }
+
+      return ingredient.label;
+    })
     .filter((label): label is string => Boolean(label));
 
   if (loading) return <Loader label="Lecture de votre inventaire" />;
@@ -217,8 +245,8 @@ export default function CookScreen() {
       <SectionTitle>Aliments à utiliser en priorité</SectionTitle>
       <IngredientPicker
         ingredients={inventory?.ingredients ?? []}
-        selectedKeys={priorityKeys}
-        onChange={setPriorityKeys}
+        value={priorities}
+        onChange={setPriorities}
         max={MAX_PRIORITY_KEYS}
       />
 

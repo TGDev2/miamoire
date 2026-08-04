@@ -6,6 +6,7 @@ namespace App\Service\Inventory;
 
 use App\Entity\Household;
 use App\Entity\StockItem;
+use App\Enum\Unit;
 use App\Repository\StockItemRepository;
 use App\Service\Ai\Safety\DietaryGuard;
 use App\Service\Food\FreshFoodLexicon;
@@ -68,6 +69,9 @@ class InventoryAggregator
          *     locations: array<string, true>,
          *     lots: int,
          *     notes: array<string, true>,
+         *     packages: int,
+         *     packageBase: ?float,
+         *     packagingIsUniform: bool,
          *     buckets: array<string, array{base: float, useBy: ?\DateTimeImmutable, useByIsEstimated: bool, opened: bool, expiresSoon: bool}>,
          * }> $grouped
          */
@@ -91,6 +95,9 @@ class InventoryAggregator
                     'locations' => [],
                     'lots' => 0,
                     'notes' => [],
+                    'packages' => 0,
+                    'packageBase' => null,
+                    'packagingIsUniform' => true,
                     'buckets' => [],
                 ];
             }
@@ -99,6 +106,21 @@ class InventoryAggregator
 
             $grouped[$key]['base'] += $itemBase;
             $grouped[$key]['lots']++;
+
+            // Les exemplaires se comptent, ils ne se déduisent pas d'une division :
+            // `getPackages()` sait qu'un exemplaire entamé en est un, et que le
+            // dernier peut être partiel. Leur contenance, elle, doit être la même
+            // partout — sinon « un exemplaire » ne désigne plus rien de précis, et
+            // mieux vaut se taire que choisir pour l'utilisateur.
+            $packageBase = $this->converter->toBase($item->getPackageSize(), $item->getUnit());
+
+            if (null === $grouped[$key]['packageBase']) {
+                $grouped[$key]['packageBase'] = $packageBase;
+            } elseif (abs($grouped[$key]['packageBase'] - $packageBase) > 0.001) {
+                $grouped[$key]['packagingIsUniform'] = false;
+            }
+
+            $grouped[$key]['packages'] += count($item->getPackages());
             $grouped[$key]['locations'][$item->getStorageLocation()->value] = true;
             $grouped[$key]['estimatedQuantity'] = $grouped[$key]['estimatedQuantity'] || $item->isQuantityEstimated();
 
@@ -191,6 +213,7 @@ class InventoryAggregator
                 approxPieceWeight: $variant->getCut()?->approxPieceWeight()
                     ?? $this->lexicon->find($variant->getName())?->approxPieceWeight,
                 cut: $variant->getCut(),
+                packaging: $this->packagingOf($data, $readable['unit']),
             );
         }
 
@@ -220,5 +243,43 @@ class InventoryAggregator
         });
 
         return $lines;
+    }
+
+    /**
+     * Le conditionnement de la ligne, ou `null` quand la question n'a pas de
+     * réponse honnête.
+     *
+     * Quatre refus, et chacun vaut mieux qu'une approximation :
+     *
+     * - un aliment compté à la pièce compte déjà ses exemplaires — un yaourt
+     *   *est* un exemplaire, l'annoncer deux fois permettrait de se contredire ;
+     * - des lots aux contenances différentes ne partagent aucun « exemplaire »
+     *   commun : une boîte de 400 g et un bocal de 700 g n'en font pas 1,5 ;
+     * - **un exemplaire unique n'apprend rien** : « écouler 1 exemplaire » dit
+     *   alors exactement « écouler tout le stock », que la quantité exprime
+     *   déjà. Et comme un lot vaut un exemplaire par défaut, sans ce refus des
+     *   courgettes achetées en vrac se voyaient attribuer un emballage qu'elles
+     *   n'ont jamais eu ;
+     * - une contenance nulle ou absurde ne se rattrape pas.
+     *
+     * @param array{packages: int, packageBase: ?float, packagingIsUniform: bool} $data
+     */
+    private function packagingOf(array $data, Unit $unit): ?InventoryPackaging
+    {
+        if (!$data['packagingIsUniform'] || $data['packages'] < 2) {
+            return null;
+        }
+
+        if ($unit->isDiscrete()) {
+            return null;
+        }
+
+        $size = $this->converter->convert($data['packageBase'] ?? 0.0, $unit->baseUnit(), $unit);
+
+        if ($size <= 0.0) {
+            return null;
+        }
+
+        return new InventoryPackaging($data['packages'], round($size, 3), $unit);
     }
 }

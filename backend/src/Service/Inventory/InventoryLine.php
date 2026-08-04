@@ -67,6 +67,11 @@ final readonly class InventoryLine
          * de poulet en tranches.
          */
         public ?FoodCut $cut = null,
+        /**
+         * Le conditionnement, quand « un exemplaire » veut dire quelque chose.
+         * `null` sinon — voir {@see InventoryPackaging}.
+         */
+        public ?InventoryPackaging $packaging = null,
     ) {
     }
 
@@ -95,6 +100,17 @@ final readonly class InventoryLine
 
         if (null !== $this->approxPieceWeight && Unit::Piece === $this->unit) {
             $payload['approxWeightPerPiece'] = sprintf('%d g', $this->approxPieceWeight);
+        }
+
+        // « 800 g » et « deux boîtes de 400 g » décrivent le même stock, mais
+        // seule la seconde écriture dit qu'en utiliser la moitié n'ouvre rien.
+        if (null !== $this->packaging) {
+            $payload['packaging'] = sprintf(
+                '%d x %s %s',
+                $this->packaging->count,
+                rtrim(rtrim(number_format($this->packaging->size, 3, '.', ''), '0'), '.'),
+                $this->packaging->unit->value,
+            );
         }
 
         // Émise seulement quand elle est connue : `null` veut dire « on ignore la

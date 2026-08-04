@@ -15,6 +15,7 @@ use App\Service\Ai\Safety\DietaryGuardFactory;
 use App\Service\Ai\Safety\RecipeSafetyFilter;
 use App\Service\Inventory\InventoryAggregator;
 use App\Service\Inventory\InventoryLine;
+use App\Service\UnitConverter;
 use Doctrine\ORM\EntityManagerInterface;
 
 /**
@@ -47,6 +48,7 @@ class RecipeSuggestionService
         private readonly RecipePlanService $planner,
         private readonly SeasonalContextFactory $seasons,
         private readonly EntityManagerInterface $entityManager,
+        private readonly UnitConverter $converter,
     ) {
     }
 
@@ -65,7 +67,7 @@ class RecipeSuggestionService
                 : 'Aucun aliment de votre inventaire ne respecte les exclusions du foyer.');
         }
 
-        ['required' => $required, 'desired' => $desired] = $this->resolvePriorities($inventory, $request->priorityKeys);
+        ['required' => $required, 'desired' => $desired] = $this->resolvePriorities($inventory, $request->priorities);
         $inventoryPayload = array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory);
 
         // Le seul endroit où l'heure est lue : le reste du service la reçoit, ce
@@ -88,13 +90,8 @@ class RecipeSuggestionService
             ),
             'dietaryExclusions' => $guard->exclusions(),
             'allowExtraIngredients' => $request->allowExtraIngredients,
-            'mustUseIngredient' => null !== $required
-                ? ['key' => $required->key, 'ingredient' => $required->label]
-                : null,
-            'desiredIngredients' => array_map(
-                static fn (InventoryLine $line): array => ['key' => $line->key, 'ingredient' => $line->label],
-                $desired,
-            ),
+            'mustUseIngredient' => null !== $required ? self::priorityPayload($required) : null,
+            'desiredIngredients' => array_map(self::priorityPayload(...), $desired),
             'inventory' => $inventoryPayload,
         ];
 
@@ -172,44 +169,86 @@ class RecipeSuggestionService
             'rejected' => $rejected,
             'inventory' => $inventoryPayload,
             'guaranteedExclusions' => $guard->exclusions(),
-            'requiredIngredient' => null !== $required
-                ? ['key' => $required->key, 'label' => $required->label]
-                : null,
-            'desiredIngredients' => array_map(
-                static fn (InventoryLine $line): array => ['key' => $line->key, 'label' => $line->label],
-                $desired,
-            ),
+            // `targetLabel` est la phrase que l'écran affiche telle quelle : la
+            // même que celle du prompt et celle des motifs de rejet, pour que
+            // trois écritures d'une seule quantité ne se contredisent jamais.
+            'requiredIngredient' => null !== $required ? self::priorityResponse($required) : null,
+            'desiredIngredients' => array_map(self::priorityResponse(...), $desired),
             'provider' => $generator->label(),
         ];
     }
 
     /**
-     * Les aliments à privilégier, résolus depuis les clés reçues, dans l'ordre.
+     * Ce que le modèle lit d'un aliment privilégié.
      *
-     * La PREMIÈRE clé est une contrainte, exactement comme l'ancien
-     * `priorityKey` : une clé inconnue est une erreur explicite et non un
-     * silence, parce qu'elle vient d'un inventaire que l'application
-     * affichait encore alors que le lot venait d'être épuisé ou écarté par
-     * une exclusion — générer trois recettes en ignorant la contrainte serait
-     * la pire des réponses.
-     *
-     * Les clés suivantes (au plus 2) ne sont que des préférences : une clé
-     * devenue invalide y est silencieusement ignorée plutôt que de faire
-     * échouer toute la génération pour un aliment facultatif par nature.
-     *
-     * @param list<InventoryLine> $inventory
-     * @param list<string>        $priorityKeys
-     *
-     * @return array{required: ?InventoryLine, desired: list<InventoryLine>}
+     * @return array<string, mixed>
      */
-    private function resolvePriorities(array $inventory, array $priorityKeys): array
+    private static function priorityPayload(ResolvedPriority $priority): array
     {
-        $keys = array_values(array_unique(array_filter(
-            array_map(static fn (string $key): string => trim($key), $priorityKeys),
-            static fn (string $key): bool => '' !== $key,
-        )));
+        $payload = ['key' => $priority->line->key, 'ingredient' => $priority->line->label];
 
-        if ([] === $keys) {
+        if ($priority->hasTarget()) {
+            $payload['targetQuantity'] = $priority->quantity;
+            $payload['targetUnit'] = $priority->unit->value;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Ce que l'écran lit d'un aliment privilégié.
+     *
+     * @return array<string, mixed>
+     */
+    private static function priorityResponse(ResolvedPriority $priority): array
+    {
+        return [
+            'key' => $priority->line->key,
+            'label' => $priority->line->label,
+            'targetQuantity' => $priority->quantity,
+            'targetUnit' => $priority->unit?->value,
+            'targetLabel' => $priority->describe(),
+        ];
+    }
+
+    /**
+     * Les aliments à privilégier, résolus contre l'inventaire, dans l'ordre.
+     *
+     * Le PREMIER est une contrainte, exactement comme l'ancien `priorityKey` :
+     * une clé inconnue est une erreur explicite et non un silence, parce
+     * qu'elle vient d'un inventaire que l'application affichait encore alors
+     * que le lot venait d'être épuisé ou écarté par une exclusion — générer
+     * trois recettes en ignorant la contrainte serait la pire des réponses.
+     *
+     * Les suivants (au plus 2) ne sont que des préférences : une clé devenue
+     * invalide y est silencieusement ignorée plutôt que de faire échouer toute
+     * la génération pour un aliment facultatif par nature.
+     *
+     * La quantité éventuellement demandée sur chacun est résolue ici aussi —
+     * exemplaires convertis, unité vérifiée, cible plafonnée au stock : voir
+     * {@see ResolvedPriority}.
+     *
+     * @param list<InventoryLine>  $inventory
+     * @param list<PriorityChoice> $priorities
+     *
+     * @return array{required: ?ResolvedPriority, desired: list<ResolvedPriority>}
+     */
+    private function resolvePriorities(array $inventory, array $priorities): array
+    {
+        // Dédoublonnage sur la clé : deux quantités contradictoires pour un même
+        // aliment n'ont pas de sens, la première saisie fait foi.
+        $choices = [];
+        foreach ($priorities as $choice) {
+            $key = trim($choice->key);
+
+            if ('' !== $key && !isset($choices[$key])) {
+                $choices[$key] = $choice;
+            }
+        }
+
+        $choices = array_values($choices);
+
+        if ([] === $choices) {
             return ['required' => null, 'desired' => []];
         }
 
@@ -218,18 +257,25 @@ class RecipeSuggestionService
             $byKey[$line->key] = $line;
         }
 
-        $requiredKey = array_shift($keys);
-        $required = $byKey[$requiredKey] ?? throw new StockException(
+        $first = array_shift($choices);
+        $requiredLine = $byKey[trim($first->key)] ?? throw new StockException(
             'L\'aliment à utiliser en priorité n\'est plus disponible dans votre inventaire. '
             .'Rafraîchissez l\'écran et choisissez-en un autre.',
         );
 
-        $desired = array_values(array_filter(array_map(
-            static fn (string $key): ?InventoryLine => $byKey[$key] ?? null,
-            array_slice($keys, 0, 2),
-        )));
+        $desired = [];
+        foreach (array_slice($choices, 0, 2) as $choice) {
+            $line = $byKey[trim($choice->key)] ?? null;
 
-        return ['required' => $required, 'desired' => $desired];
+            if (null !== $line) {
+                $desired[] = ResolvedPriority::resolve($choice, $line, $this->converter);
+            }
+        }
+
+        return [
+            'required' => ResolvedPriority::resolve($first, $requiredLine, $this->converter),
+            'desired' => $desired,
+        ];
     }
 
     /**
@@ -321,6 +367,33 @@ class RecipeSuggestionService
         );
     }
 
+    /**
+     * La quantité à écouler, dite au modèle — vide quand aucune n'est imposée.
+     *
+     * « Quitte à ajuster les portions » n'est pas une politesse : sans cette
+     * phrase, le modèle tient le nombre de convives pour intouchable, met
+     * 100 g de l'aliment imposé dans une garniture, et le lot périme quand même.
+     * Or c'est exactement ce que l'utilisateur cherchait à éviter en ouvrant cet
+     * écran.
+     */
+    private function quantityInstruction(ResolvedPriority $required): string
+    {
+        $target = $required->describe();
+
+        if (null === $target) {
+            return '';
+        }
+
+        return sprintf(
+            "\n            Il faut en écouler AU MOINS %s : dimensionne la recette pour l'atteindre,\n"
+            ."            quitte à ajuster le nombre de portions et à prévoir un reste. Le même\n"
+            ."            programme relit la quantité proposée pour cette clé dans\n"
+            ."            `stockConsumptionProposal` et supprime les recettes qui restent nettement\n"
+            .'            en dessous.',
+            $target,
+        );
+    }
+
     /** Certains modèles encadrent le JSON par ```json malgré la consigne. */
     private function stripCodeFence(string $raw): string
     {
@@ -334,14 +407,14 @@ class RecipeSuggestionService
     }
 
     /**
-     * @param list<string>        $exclusions
-     * @param list<InventoryLine> $desired
-     * @param list<string>        $recentNames
-     * @param list<Equipment>     $equipment
+     * @param list<string>           $exclusions
+     * @param list<ResolvedPriority> $desired
+     * @param list<string>           $recentNames
+     * @param list<Equipment>        $equipment
      */
     private function systemPrompt(
         array $exclusions,
-        ?InventoryLine $required,
+        ?ResolvedPriority $required,
         array $desired,
         array $recentNames,
         SeasonalContext $season,
@@ -361,9 +434,10 @@ class RecipeSuggestionService
                 "\n            ALIMENT IMPOSÉ : « %s » (clé `%s`). Les TROIS recettes doivent l'employer,\n"
                 ."            et sa clé doit figurer dans leur `stockConsumptionProposal`. Un programme\n"
                 ."            vérifie cette clé sur chaque recette et supprime celles qui ne l'utilisent\n"
-                ."            pas : une proposition sans cet aliment est une proposition perdue.\n",
-                $required->label,
-                $required->key,
+                ."            pas : une proposition sans cet aliment est une proposition perdue.%s\n",
+                $required->line->label,
+                $required->line->key,
+                $this->quantityInstruction($required),
             );
 
         $wished = [] === $desired
@@ -375,7 +449,16 @@ class RecipeSuggestionService
                 ."            rejetée : indique simplement leur clé dans `stockConsumptionProposal` ou\n"
                 ."            `ingredientsFromInventory` quand tu les utilises réellement.\n",
                 implode(', ', array_map(
-                    static fn (InventoryLine $line): string => sprintf('« %s » (clé `%s`)', $line->label, $line->key),
+                    static function (ResolvedPriority $priority): string {
+                        $target = $priority->describe();
+
+                        return sprintf(
+                            '« %s » (clé `%s`%s)',
+                            $priority->line->label,
+                            $priority->line->key,
+                            null !== $target ? sprintf(', idéalement %s', $target) : '',
+                        );
+                    },
                     $desired,
                 )),
             );

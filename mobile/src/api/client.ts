@@ -12,6 +12,7 @@ import type {
   MealPlanOverview,
   MealSlot,
   Member,
+  Priority,
   Product,
   ProductCutValue,
   ProductTraitValue,
@@ -464,11 +465,16 @@ export const api = {
     ),
 
   /**
-   * `priorityKeys` privilégie jusqu'à 3 aliments de l'inventaire, dans l'ordre.
+   * `priorities` privilégie jusqu'à 3 aliments de l'inventaire, dans l'ordre.
    *
    * Facultatif : sans lui, la génération reste celle d'avant. Le PREMIER est
    * une contrainte — le serveur écarte les recettes qui ne l'utilisent pas —
    * les suivants (au plus 2) ne sont que des préférences.
+   *
+   * Chacun peut porter une quantité à écouler, elle aussi facultative : une
+   * quantité dans une unité, ou un nombre d'exemplaires. Seule celle du premier
+   * est vérifiée après génération ; celle d'une simple préférence reste un
+   * souhait, comme la préférence elle-même.
    */
   suggestRecipes: (body: {
     people: number;
@@ -478,7 +484,7 @@ export const api = {
     equipment: string[];
     exclusions: string[];
     allowExtraIngredients: boolean;
-    priorityKeys?: string[];
+    priorities?: Priority[];
   }) => request<SuggestionResponse>('/recipes/suggest', { method: 'POST', body }),
 
   savedRecipes: () => request<{ recipes: SavedRecipe[] }>('/recipes/saved'),

@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import type { Feasibility, Recipe } from '../src/api/types';
+import type { Feasibility, PriorityOutcome, Recipe } from '../src/api/types';
 import { Badge, Card, EmptyState, Icon } from '../src/components/ui';
 import { useRecipes } from '../src/recipes/RecipeContext';
 import { colors, feasibilityPresentation, font, radius, spacing, text, thermal } from '../src/theme';
@@ -38,9 +38,14 @@ export default function RecipeListScreen() {
           <Text style={text.label}>Aliment imposé</Text>
           <Text style={[text.subheading, styles.noticeTitle]}>
             {suggestion.requiredIngredient.label}
+            {suggestion.requiredIngredient.targetLabel
+              ? ` — ${suggestion.requiredIngredient.targetLabel} à écouler`
+              : ''}
           </Text>
           <Text style={[text.small, styles.noticeLine]}>
-            Chaque proposition ci-dessous l'utilise. Celles qui l'ignoraient ont été écartées.
+            {suggestion.requiredIngredient.targetLabel
+              ? "Chaque proposition ci-dessous l'utilise, et en écoule au moins l'essentiel. Celles qui restaient nettement en dessous ont été écartées."
+              : "Chaque proposition ci-dessous l'utilise. Celles qui l'ignoraient ont été écartées."}
           </Text>
         </Card>
       ) : null}
@@ -89,10 +94,7 @@ export default function RecipeListScreen() {
  * côté client plutôt que renvoyés par le serveur, l'information existe déjà
  * dans `ingredientsFromInventory`/`stockConsumptionProposal`.
  */
-function usedDesiredLabels(
-  recipe: Recipe,
-  desiredIngredients: Array<{ key: string; label: string }>,
-): string[] {
+function usedDesiredLabels(recipe: Recipe, desiredIngredients: PriorityOutcome[]): string[] {
   const usedKeys = new Set([
     ...recipe.ingredientsFromInventory.map((entry) => entry.key),
     ...recipe.stockConsumptionProposal.map((entry) => entry.key),
@@ -109,7 +111,7 @@ function RecipeCard({
   onPress,
 }: {
   recipe: Recipe;
-  desiredIngredients: Array<{ key: string; label: string }>;
+  desiredIngredients: PriorityOutcome[];
   onPress: () => void;
 }) {
   const presentation = feasibilityPresentation[recipe.feasibility] ?? feasibilityPresentation.ready;

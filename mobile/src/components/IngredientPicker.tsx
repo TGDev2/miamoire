@@ -10,13 +10,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { InventoryIngredient } from '../api/types';
+import type { InventoryIngredient, Priority } from '../api/types';
 import { colors, font, radius, spacing, text, thermal } from '../theme';
 import { Icon } from './ui';
 
 /**
  * Choisir jusqu'à `max` aliments parmi tout l'inventaire, sans dérouler tout
- * l'inventaire.
+ * l'inventaire — et, pour chacun, dire facultativement combien en écouler.
  *
  * La première version affichait une puce par ingrédient dans l'écran « Cuisiner ».
  * Sur un vrai foyer — 115 ingrédients, aux noms de fiches Open Food Facts longs
@@ -32,23 +32,41 @@ import { Icon } from './ui';
  * - la recherche devient possible, ce qu'une liste de puces ne permettait pas ;
  * - ce qu'on a choisi reste visible à côté du bouton, alors qu'il fallait
  *   auparavant remonter huit écrans pour le vérifier.
+ *
+ * La quantité obéit à la même règle que l'aliment lui-même : elle n'apparaît
+ * qu'une fois l'aliment choisi, et laissée vide elle ne contraint rien. Qui ne
+ * veut pas de quantité ne doit pas avoir un geste de plus à faire.
  */
 export function IngredientPicker({
   ingredients,
-  selectedKeys,
+  value,
   onChange,
   max = 3,
 }: {
   ingredients: InventoryIngredient[];
-  selectedKeys: string[];
-  onChange: (keys: string[]) => void;
+  value: Priority[];
+  onChange: (priorities: Priority[]) => void;
   max?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
 
-  const selected = ingredients.filter((entry) => selectedKeys.includes(entry.key));
-  const atLimit = selectedKeys.length >= max;
+  /**
+   * Ce qui est tapé, tel qu'il est tapé.
+   *
+   * Sans lui, effacer le « 0 » de « 40 » relit le nombre 4 et le réécrit dans
+   * le champ : impossible d'atteindre 400 en corrigeant. Le brouillon garde la
+   * frappe, la valeur n'en retient que ce qui est un nombre.
+   */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  const byKey = new Map(ingredients.map((entry) => [entry.key, entry]));
+  const selected = value
+    .map((priority) => ({ priority, ingredient: byKey.get(priority.key) }))
+    .filter((entry): entry is { priority: Priority; ingredient: InventoryIngredient } =>
+      Boolean(entry.ingredient),
+    );
+  const atLimit = value.length >= max;
 
   /**
    * Trois groupes, dans l'ordre où ils se perdent — le même que celui qui classe
@@ -85,16 +103,28 @@ export function IngredientPicker({
   }, [ingredients, search]);
 
   function toggle(key: string) {
-    if (selectedKeys.includes(key)) {
-      onChange(selectedKeys.filter((entry) => entry !== key));
+    if (value.some((entry) => entry.key === key)) {
+      onChange(value.filter((entry) => entry.key !== key));
+      // Désélectionner efface la quantité : la resélectionner plus tard ne doit
+      // pas ressusciter un chiffre que l'utilisateur croyait avoir retiré.
+      setDrafts((current) => {
+        const { [key]: _removed, ...rest } = current;
+        return rest;
+      });
       return;
     }
-    if (selectedKeys.length >= max) return;
-    onChange([...selectedKeys, key]);
+
+    if (value.length >= max) return;
+    onChange([...value, { key }]);
+  }
+
+  function update(key: string, next: Priority) {
+    onChange(value.map((entry) => (entry.key === key ? next : entry)));
   }
 
   function clear() {
     onChange([]);
+    setDrafts({});
   }
 
   return (
@@ -104,7 +134,7 @@ export function IngredientPicker({
         accessibilityRole="button"
         accessibilityLabel={
           selected.length > 0
-            ? `Aliments imposés : ${selected.map((entry) => entry.label).join(', ')}`
+            ? `Aliments imposés : ${selected.map(describeSelection).join(' ; ')}`
             : 'Aucun aliment imposé'
         }
         accessibilityHint="Ouvre la liste des aliments de votre stock"
@@ -114,7 +144,7 @@ export function IngredientPicker({
           {selected.length > 0 ? (
             <>
               <Text style={styles.triggerValue} numberOfLines={2}>
-                {selected.map((entry) => entry.label).join(' · ')}
+                {selected.map(describeSelection).join(' · ')}
               </Text>
               <Text style={styles.triggerHint}>
                 {selected.length > 1
@@ -190,12 +220,12 @@ export function IngredientPicker({
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
-              selected.length > 0 ? (
+              value.length > 0 ? (
                 <Pressable
                   onPress={clear}
                   accessibilityRole="button"
                   accessibilityLabel="Vider la sélection"
-                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                  style={({ pressed }) => [styles.rowMain, pressed && styles.pressed]}
                 >
                   <Text style={styles.rowLabel}>Vider la sélection</Text>
                 </Pressable>
@@ -206,35 +236,45 @@ export function IngredientPicker({
             )}
             renderItem={({ item }) => {
               const meta = describeDeadlines(item);
-              const isSelected = selectedKeys.includes(item.key);
-              const disabled = !isSelected && atLimit;
+              const priority = value.find((entry) => entry.key === item.key);
+              const disabled = !priority && atLimit;
 
               return (
-                <Pressable
-                  onPress={() => toggle(item.key)}
-                  disabled={disabled}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    disabled ? `${item.label}, ${meta}, maximum ${max} aliments` : `${item.label}, ${meta}`
-                  }
-                  // La sélection n'était marquée que par un « ✓ » décoratif :
-                  // invisible pour un lecteur d'écran, qui lisait donc deux
-                  // lignes identiques sans savoir laquelle était choisie.
-                  accessibilityState={{ selected: isSelected, disabled }}
-                  style={({ pressed }) => [
-                    styles.row,
-                    pressed && !disabled && styles.pressed,
-                    disabled && styles.rowDisabled,
-                  ]}
-                >
-                  <View style={styles.flex}>
-                    <Text style={[styles.rowLabel, isSelected && styles.rowLabelSelected]}>
-                      {item.label}
-                    </Text>
-                    <Text style={styles.rowMeta}>{meta}</Text>
-                  </View>
-                  {isSelected ? <Icon name="check" size={18} color={colors.ink} /> : null}
-                </Pressable>
+                <View style={[styles.row, disabled && styles.rowDisabled]}>
+                  <Pressable
+                    onPress={() => toggle(item.key)}
+                    disabled={disabled}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      disabled ? `${item.label}, ${meta}, maximum ${max} aliments` : `${item.label}, ${meta}`
+                    }
+                    // La sélection n'était marquée que par un « ✓ » décoratif :
+                    // invisible pour un lecteur d'écran, qui lisait donc deux
+                    // lignes identiques sans savoir laquelle était choisie.
+                    accessibilityState={{ selected: Boolean(priority), disabled }}
+                    style={({ pressed }) => [styles.rowMain, pressed && !disabled && styles.pressed]}
+                  >
+                    <View style={styles.flex}>
+                      <Text style={[styles.rowLabel, priority && styles.rowLabelSelected]}>
+                        {item.label}
+                      </Text>
+                      <Text style={styles.rowMeta}>{meta}</Text>
+                    </View>
+                    {priority ? <Icon name="check" size={18} color={colors.ink} /> : null}
+                  </Pressable>
+
+                  {/* Hors du `Pressable` : taper dans le champ ne doit pas
+                      désélectionner l'aliment qu'on est en train de régler. */}
+                  {priority ? (
+                    <AmountEditor
+                      ingredient={item}
+                      priority={priority}
+                      draft={drafts[item.key] ?? ''}
+                      onDraft={(next) => setDrafts((current) => ({ ...current, [item.key]: next }))}
+                      onChange={(next) => update(item.key, next)}
+                    />
+                  ) : null}
+                </View>
               );
             }}
             ListEmptyComponent={
@@ -254,6 +294,129 @@ export function IngredientPicker({
       </Modal>
     </>
   );
+}
+
+/**
+ * La quantité à écouler d'un aliment déjà choisi — toujours facultative.
+ *
+ * Deux unités possibles quand l'aliment est conditionné : la sienne (400 g) ou
+ * l'exemplaire (1 boîte). Le second n'est proposé que si le serveur a su dire
+ * ce que pèse un exemplaire ; sinon le choix n'aurait aucun sens, et une
+ * bascule sans effet vaut moins que pas de bascule du tout.
+ */
+function AmountEditor({
+  ingredient,
+  priority,
+  draft,
+  onDraft,
+  onChange,
+}: {
+  ingredient: InventoryIngredient;
+  priority: Priority;
+  draft: string;
+  onDraft: (value: string) => void;
+  onChange: (priority: Priority) => void;
+}) {
+  const packaging = ingredient.packaging;
+  const byPackage = priority.packages !== undefined;
+
+  function apply(raw: string, packages: boolean) {
+    onDraft(raw);
+
+    const parsed = Number(raw.replace(',', '.'));
+
+    // Vide, ou pas encore un nombre : aucune contrainte de quantité. C'est
+    // l'état par défaut, et il doit rester atteignable en effaçant le champ.
+    if ('' === raw.trim() || !Number.isFinite(parsed) || parsed <= 0) {
+      onChange({ key: priority.key });
+      return;
+    }
+
+    onChange(
+      packages
+        ? { key: priority.key, packages: Math.max(1, Math.round(parsed)) }
+        : { key: priority.key, quantity: parsed, unit: ingredient.unit },
+    );
+  }
+
+  return (
+    <View style={styles.amount}>
+      {/* Sur sa propre ligne : côté à côte avec le champ et les deux unités,
+          « À écouler » se faisait écraser jusqu'à n'afficher qu'un « À »
+          orphelin — une largeur qu'aucune assertion ne regardait. */}
+      <Text style={styles.amountLabel}>À écouler — facultatif</Text>
+
+      <View style={styles.amountControls}>
+        <TextInput
+          value={draft}
+          onChangeText={(raw) => apply(raw, byPackage)}
+          placeholder="—"
+          placeholderTextColor={colors.inkMuted}
+          keyboardType={byPackage ? 'number-pad' : 'decimal-pad'}
+          accessibilityLabel={`Quantité de ${ingredient.label} à écouler, facultative`}
+          style={styles.amountField}
+        />
+
+        {packaging ? (
+          <View style={styles.units} accessibilityRole="radiogroup">
+            <UnitChip
+              label={ingredient.unitLabel}
+              selected={!byPackage}
+              onPress={() => apply(draft, false)}
+            />
+            <UnitChip
+              label={packaging.count > 1 ? 'exemplaires' : 'exemplaire'}
+              selected={byPackage}
+              onPress={() => apply(draft, true)}
+            />
+          </View>
+        ) : (
+          <Text style={styles.amountUnit}>{ingredient.unitLabel}</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function UnitChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={label}
+      style={({ pressed }) => [styles.unit, selected && styles.unitSelected, pressed && styles.pressed]}
+    >
+      <Text style={[styles.unitLabel, selected && styles.unitLabelSelected]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** « Tomates pelées (1 boîte) » — l'aliment, et ce qu'on en veut quand on l'a dit. */
+function describeSelection({
+  priority,
+  ingredient,
+}: {
+  priority: Priority;
+  ingredient: InventoryIngredient;
+}): string {
+  if (priority.packages !== undefined) {
+    return `${ingredient.label} (${priority.packages} ${priority.packages > 1 ? 'exemplaires' : 'exemplaire'})`;
+  }
+
+  if (priority.quantity !== undefined) {
+    return `${ingredient.label} (${formatQuantity(priority.quantity)} ${ingredient.unitLabel})`;
+  }
+
+  return ingredient.label;
 }
 
 /**
@@ -279,6 +442,11 @@ function describeDeadlines(item: InventoryIngredient): string {
 
   return [
     `${item.quantity} ${item.unitLabel}`,
+    // Le conditionnement ne s'affiche que lorsqu'il ajoute quelque chose au
+    // total : dire « 400 g · 1 exemplaire » n'apprend rien.
+    item.packaging && item.packaging.count > 1
+      ? `${item.packaging.count} x ${formatQuantity(item.packaging.size)} ${item.packaging.unitLabel}`
+      : null,
     item.expiresSoon ? 'périme bientôt' : null,
     // « paquet entamé » ne veut rien dire d'un produit frais : il n'a pas d'emballage.
     item.alreadyOpened && !item.perishable ? 'paquet entamé' : null,
@@ -337,19 +505,46 @@ const styles = StyleSheet.create({
   },
   listContent: { padding: spacing.xl, paddingBottom: spacing.xxl },
   sectionHeader: { ...text.label, marginTop: spacing.xl, marginBottom: spacing.sm },
-  row: {
+  row: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  rowMain: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     paddingVertical: spacing.md,
     minHeight: 56,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   rowDisabled: { opacity: 0.4 },
   rowLabel: text.body,
   rowLabelSelected: { fontFamily: font.sansSemiBold },
   rowMeta: { ...text.data, marginTop: 2 },
+  amount: { gap: spacing.xs, paddingBottom: spacing.md },
+  amountControls: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  amountLabel: { ...text.label },
+  amountField: {
+    minWidth: 72,
+    minHeight: 40,
+    textAlign: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    ...text.body,
+  },
+  amountUnit: { ...text.small, color: colors.inkMuted },
+  units: { flexDirection: 'row', gap: spacing.xs },
+  unit: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    minHeight: 40,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+  },
+  unitSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
+  unitLabel: { ...text.small, color: colors.inkMuted },
+  unitLabelSelected: { color: colors.onInk, fontFamily: font.sansMedium },
   empty: { ...text.small, marginTop: spacing.xl, textAlign: 'center' },
   limitNote: { ...text.small, textAlign: 'center', marginTop: spacing.lg },
 });

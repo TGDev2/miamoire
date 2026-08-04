@@ -24,17 +24,22 @@ final readonly class RecipeRequest
         public array $exclusions = [],
         public bool $allowExtraIngredients = false,
         /**
-         * Clés d'inventaire d'aliments à privilégier, dans l'ordre — jusqu'à 3.
+         * Aliments à privilégier, dans l'ordre — jusqu'à 3.
          *
          * Facultatif : demander des recettes sans rien imposer reste le cas
-         * courant. Renseignées, la PREMIÈRE est une contrainte — vérifiée sur
-         * chaque recette renvoyée, comme l'ancien `priorityKey` — les suivantes
+         * courant. Renseignés, le PREMIER est une contrainte — vérifiée sur
+         * chaque recette renvoyée, comme l'ancien `priorityKey` — les suivants
          * (au plus 2) ne sont que des préférences : une recette qui les ignore
          * n'est jamais écartée pour cette seule raison.
          *
-         * @var list<string>
+         * Chacun peut porter une quantité à écouler, elle aussi facultative
+         * ({@see PriorityChoice}). Seule celle du premier est vérifiée après
+         * génération : la quantité d'une simple préférence reste un souhait,
+         * comme la préférence elle-même.
+         *
+         * @var list<PriorityChoice>
          */
-        public array $priorityKeys = [],
+        public array $priorities = [],
     ) {
     }
 }

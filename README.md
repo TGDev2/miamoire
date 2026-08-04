@@ -843,7 +843,7 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `POST` | `/stock-items/{id}/discard` | Produit jeté |
 | `GET` | `/stock-items/{id}/movements` | Journal du lot |
 | `GET` | `/inventory/summary` | Inventaire agrégé par ingrédient |
-| `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) ; `priorityKey` impose un aliment |
+| `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) ; `priorities` impose jusqu'à 3 aliments et, facultativement, la quantité à écouler de chacun |
 | `POST` | `/recipes/confirm` | Applique la déduction après confirmation |
 | `GET` `POST` | `/recipes/saved` | Recettes conservées par le foyer ; enregistrement idempotent |
 | `GET` `DELETE` | `/recipes/saved/{id}` | Une recette enregistrée, et son retrait |

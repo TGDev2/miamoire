@@ -13,6 +13,7 @@ use App\Http\JsonPayload;
 use App\Http\RequestContext;
 use App\Repository\MealPlanEntryRepository;
 use App\Repository\SavedRecipeRepository;
+use App\Service\Ai\PriorityChoice;
 use App\Service\Ai\RecipeConfirmationService;
 use App\Service\Ai\RecipeNormalizer;
 use App\Service\Ai\RecipePlanService;
@@ -60,9 +61,9 @@ class RecipeController extends AbstractApiController
             exclusions: $exclusions,
             allowExtraIngredients: $payload->bool('allowExtraIngredients'),
             // Facultatif : demander des recettes sans rien imposer reste le cas
-            // courant. Au plus 3 — la première est une contrainte, les autres
+            // courant. Au plus 3 — le premier est une contrainte, les autres
             // de simples préférences (voir RecipeRequest).
-            priorityKeys: array_slice($payload->stringList('priorityKeys'), 0, 3),
+            priorities: array_slice(PriorityChoice::listFrom($payload), 0, 3),
         ));
 
         // Le plan de chaque recette est un objet de service, pas encore une forme

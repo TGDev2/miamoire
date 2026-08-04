@@ -65,6 +65,15 @@ class InventoryController extends AbstractApiController
                     'cut' => $line->cut?->value,
                     'locations' => $line->locations,
                     'lotCount' => $line->lotCount,
+                    // `null` quand « un exemplaire » ne désigne rien de précis :
+                    // aliment déjà compté à la pièce, ou lots aux contenances
+                    // différentes. L'écran « Cuisiner » n'offre alors pas le choix.
+                    'packaging' => null !== $line->packaging ? [
+                        'count' => $line->packaging->count,
+                        'size' => $line->packaging->size,
+                        'unit' => $line->packaging->unit->value,
+                        'unitLabel' => $line->packaging->unit->label(),
+                    ] : null,
                     // La même quantité ventilée par échéance effective — « 250 g
                     // entamés à utiliser demain, 1 kg scellé plus tard » plutôt
                     // qu'un seul total marqué globalement urgent.

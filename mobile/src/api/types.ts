@@ -433,11 +433,42 @@ export interface InventoryIngredient {
   locations: StorageLocation[];
   lotCount: number;
   /**
+   * Le conditionnement, quand « un exemplaire » veut dire quelque chose — deux
+   * boîtes de 400 g. `null` sinon : aliment déjà compté à la pièce, ou lots aux
+   * contenances différentes. L'écran « Cuisiner » n'offre alors pas le choix
+   * entre écouler une quantité et écouler des exemplaires.
+   */
+  packaging: InventoryPackaging | null;
+  /**
    * La même quantité ventilée par échéance effective — « 250 g entamés à
    * utiliser demain, 1 kg scellé plus tard » plutôt qu'un seul total marqué
    * globalement urgent.
    */
   deadlines: InventoryDeadlineBucket[];
+}
+
+export interface InventoryPackaging {
+  /** Exemplaires restants, celui qui est entamé compris. */
+  count: number;
+  /** Contenance d'un exemplaire, dans `unit`. */
+  size: number;
+  unit: Unit;
+  unitLabel: string;
+}
+
+/**
+ * Un aliment imposé à la génération, et — facultativement — ce qu'on veut en
+ * écouler.
+ *
+ * Deux écritures possibles et au plus une : une quantité dans une unité
+ * (« 400 g »), ou un nombre d'exemplaires (« 1 boîte »). Aucune n'est
+ * obligatoire : imposer un aliment sans dire combien reste le cas courant.
+ */
+export interface Priority {
+  key: string;
+  quantity?: number;
+  unit?: Unit;
+  packages?: number;
 }
 
 export interface InventoryDeadlineBucket {
@@ -500,6 +531,23 @@ export interface RejectedRecipe {
   reason: string;
 }
 
+/**
+ * Un aliment privilégié tel que le serveur l'a réellement retenu.
+ *
+ * La cible peut différer de ce qui a été demandé — elle est plafonnée au stock
+ * réel, et abandonnée quand elle n'était pas exploitable. `targetLabel` est la
+ * phrase à afficher telle quelle : le serveur écrit la même dans le prompt et
+ * dans ses motifs de rejet, pour que trois écritures d'une seule quantité ne
+ * se contredisent jamais.
+ */
+export interface PriorityOutcome {
+  key: string;
+  label: string;
+  targetQuantity: number | null;
+  targetUnit: Unit | null;
+  targetLabel: string | null;
+}
+
 export interface SuggestionResponse {
   recipes: Recipe[];
   /** Recettes supprimées avant affichage : aliment exclu, ou aliment imposé absent. */
@@ -507,9 +555,9 @@ export interface SuggestionResponse {
   /** Les exclusions réellement vérifiées sur chaque recette, pas seulement demandées. */
   guaranteedExclusions: string[];
   /** L'aliment que l'utilisateur a imposé, quand il en a choisi un. */
-  requiredIngredient: { key: string; label: string } | null;
+  requiredIngredient: PriorityOutcome | null;
   /** Aliments souhaités mais non imposés : une recette qui les ignore n'est pas écartée. */
-  desiredIngredients: Array<{ key: string; label: string }>;
+  desiredIngredients: PriorityOutcome[];
   inventory: Array<{
     key: string;
     ingredient: string;
