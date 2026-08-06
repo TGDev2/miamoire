@@ -43,6 +43,15 @@ export function generateOperationKey(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Le statut d'une requête abandonnée par l'utilisateur.
+ *
+ * Zéro dit déjà « la requête n'a jamais atteint le serveur », et les écrans s'en
+ * servent pour conserver leur clé d'opération en vue d'un renvoi. Un abandon
+ * volontaire n'est pas cela : il ne sera pas rejoué, et rien ne doit s'afficher.
+ */
+export const ABORTED = -1;
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -50,6 +59,11 @@ export class ApiError extends Error {
   ) {
     super(message);
     this.name = 'ApiError';
+  }
+
+  /** L'utilisateur a renoncé : aucun écran n'a de message à en tirer. */
+  get isAborted(): boolean {
+    return ABORTED === this.status;
   }
 }
 
@@ -65,11 +79,18 @@ let currentHouseholdId: string | null = null;
 let currentMemberId: string | null = null;
 let currentHouseholdKey: string | null = null;
 
+/** Voir `api.reference()` : le référentiel est statique, on ne le redemande pas. */
+let referenceCache: Promise<Reference> | null = null;
+
 export function setIdentity(
   householdId: string | null,
   memberId: string | null,
   householdKey: string | null = null,
 ): void {
+  // Changer de foyer ou d'adresse d'API change le référentiel : le garder serait
+  // servir la table du serveur précédent.
+  if (householdId !== currentHouseholdId) referenceCache = null;
+
   currentHouseholdId = householdId;
   currentMemberId = memberId;
   currentHouseholdKey = householdKey;
@@ -91,10 +112,21 @@ type RequestOptions = {
   body?: unknown;
   /** Les trois appels qui précèdent l'accès à un foyer : santé, création, adhésion. */
   anonymous?: boolean;
+  /** De quoi renoncer à une requête en cours — la génération de recettes s'annule. */
+  signal?: AbortSignal;
+  /**
+   * Au-delà de ce délai, on cesse d'attendre et l'on dit pourquoi.
+   *
+   * Sans lui, une requête trop longue finit par échouer avec le message d'une
+   * panne de transport : « Vérifiez que l'API tourne et corrigez au besoin son
+   * adresse ». C'est un message d'administrateur système, et il est faux — le
+   * serveur répondait, il était simplement lent.
+   */
+  timeout?: { ms: number; message: string };
 };
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, anonymous = false } = options;
+  const { method = 'GET', body, anonymous = false, signal, timeout } = options;
   const baseUrl = getApiBaseUrl();
 
   const headers: Record<string, string> = { Accept: 'application/json' };
@@ -103,18 +135,41 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (!anonymous && currentMemberId) headers['X-Member'] = currentMemberId;
   if (!anonymous && currentHouseholdKey) headers['X-Household-Key'] = currentHouseholdKey;
 
+  // Le délai et l'abandon de l'utilisateur coupent la même requête ; seul un
+  // drapeau posé ici permet ensuite de dire lequel des deux s'est produit.
+  const controller = new AbortController();
+  let timedOut = false;
+  const expiry = timeout
+    ? setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeout.ms)
+    : null;
+  const abortRequest = () => controller.abort();
+  signal?.addEventListener('abort', abortRequest);
+
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
     });
   } catch {
+    if (timedOut && timeout) throw new ApiError(timeout.message, 0);
+
+    // Un abandon n'est pas une panne : c'est un geste, et l'écran qui l'a
+    // demandé n'a rien à afficher.
+    if (signal?.aborted) throw new ApiError('Requête annulée.', ABORTED);
+
     throw new ApiError(
       `Serveur injoignable (${baseUrl}). Vérifiez que l'API tourne et corrigez au besoin son adresse.`,
       0,
     );
+  } finally {
+    if (null !== expiry) clearTimeout(expiry);
+    signal?.removeEventListener('abort', abortRequest);
   }
 
   if (response.status === 204) {
@@ -258,7 +313,27 @@ export const api = {
   removeMember: (householdId: string, memberId: string) =>
     request<void>(`/households/${householdId}/members/${memberId}`, { method: 'DELETE' }),
 
-  reference: () => request<Reference>('/reference'),
+  /**
+   * Le référentiel : unités, emplacements, catégories, équipements, allergènes.
+   *
+   * Il ne change pas d'une seconde à l'autre — c'est une table de l'application,
+   * pas une donnée de foyer — et il repartait pourtant à chaque frappe dans la
+   * recherche du stock, à chaque retour d'onglet et après chaque écriture d'une
+   * fiche. On le retient pour la session, et la promesse elle-même est mise en
+   * cache : deux écrans qui l'appellent au même instant partagent une requête.
+   *
+   * Un échec n'est pas retenu : la fois suivante repart pour de bon.
+   */
+  reference: () => {
+    if (null === referenceCache) {
+      referenceCache = request<Reference>('/reference').catch((exception) => {
+        referenceCache = null;
+        throw exception;
+      });
+    }
+
+    return referenceCache;
+  },
 
   /**
    * `householdVariant` — non `null` seulement si CE foyer a déjà acheté ce

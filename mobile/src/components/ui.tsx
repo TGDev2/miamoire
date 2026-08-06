@@ -177,9 +177,12 @@ export function Badge({ label, level = 'calm' }: { label: string; level?: Therma
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 /**
- * L'état de chargement remplace le texte par un indicateur : sans
- * `accessibilityState`, le bouton devient donc muet ET inactif, sans qu'un
- * lecteur d'écran puisse dire pourquoi. Le libellé est conservé dans tous les cas.
+ * Le libellé reste affiché pendant le chargement, à côté de l'indicateur.
+ *
+ * Il était remplacé par lui. Sur « Proposer 3 recettes », dont la réponse
+ * demande quarante à cinquante secondes, l'écran devenait alors littéralement
+ * muet : plus un mot pendant une minute, pour la plus longue attente de
+ * l'application. Un bouton qui travaille doit continuer à dire ce qu'il fait.
  */
 export function Button({
   label,
@@ -222,15 +225,13 @@ export function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={skin.text.color} />
-      ) : (
-        <>
-          {icon ? <Icon name={icon} size={18} color={skin.text.color} /> : null}
-          <Text style={[text.button, skin.text]} numberOfLines={1}>
-            {label}
-          </Text>
-        </>
-      )}
+        <ActivityIndicator color={skin.text.color} size="small" />
+      ) : icon ? (
+        <Icon name={icon} size={18} color={skin.text.color} />
+      ) : null}
+      <Text style={[text.button, skin.text]} numberOfLines={1}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -273,7 +274,15 @@ export function IconButton({
   );
 }
 
-/** La sélection n'est portée que par la couleur : sans `selected`, elle est invisible. */
+/**
+ * La sélection n'est portée que par la couleur : sans `selected`, elle est
+ * invisible.
+ *
+ * C'est la cible la plus fréquente de l'application — unités, emplacements,
+ * traits, découpes, équipements, filtres du stock. Elle mesurait 36 px de haut,
+ * sous les 44 pt d'iOS comme les 48 dp d'Android, et se manipule au pouce dans
+ * une rangée qui défile horizontalement : un tap manqué déclenchait un défilement.
+ */
 export function Chip({
   label,
   selected,
@@ -286,6 +295,7 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      hitSlop={4}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected }}
@@ -630,6 +640,34 @@ export function EmptyState({
   );
 }
 
+/**
+ * L'attente d'une liste, à sa place et à sa forme.
+ *
+ * Un `Loader` plein écran remplaçait tout — titre, recherche et filtres compris —
+ * puis rendait la main d'un coup : la mise en page sautait entièrement à chaque
+ * ouverture du stock. Le gabarit reprend celui d'une ligne de lot, rail compris,
+ * pour que rien ne bouge quand les vraies données arrivent.
+ *
+ * Il ne respire pas. Une pulsation d'opacité sur cinq blocs gris est du bruit :
+ * ce qu'on veut savoir, c'est où les choses vont se poser.
+ */
+export function Skeleton({ count = 4 }: { count?: number }) {
+  return (
+    <View accessible accessibilityRole="progressbar" accessibilityLabel="Chargement en cours">
+      {Array.from({ length: count }, (unused, index) => (
+        <View key={index} style={styles.skeletonRow}>
+          <View style={styles.skeletonRail} />
+          <View style={styles.skeletonBody}>
+            <View style={[styles.skeletonBar, styles.skeletonTitle]} />
+            <View style={[styles.skeletonBar, styles.skeletonMeta]} />
+          </View>
+          <View style={styles.skeletonStamp} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function Loader({ label }: { label?: string }) {
   return (
     <View
@@ -726,7 +764,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginRight: spacing.sm,
     marginBottom: spacing.sm,
-    minHeight: 36,
+    minHeight: 44,
     justifyContent: 'center',
   },
   chipIdle: { backgroundColor: colors.surface, borderColor: colors.border },
@@ -852,4 +890,24 @@ const styles = StyleSheet.create({
 
   loader: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.md },
   loaderLabel: { textAlign: 'center' },
+
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+    paddingRight: spacing.lg,
+    paddingVertical: spacing.lg,
+    overflow: 'hidden',
+  },
+  skeletonRail: { width: 3, alignSelf: 'stretch', backgroundColor: colors.border },
+  skeletonBody: { flex: 1, gap: spacing.sm, paddingLeft: spacing.xs },
+  skeletonBar: { height: 12, borderRadius: radius.sm, backgroundColor: colors.surfaceSunk },
+  skeletonTitle: { width: '62%' },
+  skeletonMeta: { width: '38%', height: 10 },
+  skeletonStamp: { width: 52, height: 22, borderRadius: radius.sm, backgroundColor: colors.surfaceSunk },
 });

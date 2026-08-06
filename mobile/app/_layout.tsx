@@ -17,6 +17,7 @@ import React, { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { FeedbackProvider } from '../src/components/Feedback';
 import { useExpiryAlerts } from '../src/notifications/useExpiryAlerts';
 import { RecipeProvider } from '../src/recipes/RecipeContext';
 import { SessionProvider, useSession } from '../src/session/SessionContext';
@@ -72,41 +73,46 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <SessionProvider>
-        <ExpiryAlerts />
-        <RecipeProvider>
-          <ShoppingSessionProvider>
-            <StatusBar style="dark" />
-            <Stack
-              screenOptions={{
-                headerStyle: { backgroundColor: colors.ground },
-                headerTitleStyle: { color: colors.ink, fontFamily: font.sansSemiBold, fontSize: 17 },
-                headerTintColor: colors.ink,
-                headerShadowVisible: false,
-                contentStyle: { backgroundColor: colors.ground },
-              }}
-            >
-              <Stack.Screen name="index" options={{ headerShown: false }} />
-              <Stack.Screen name="setup" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="add" options={{ title: 'Ajouter au stock' }} />
-              <Stack.Screen name="review" options={{ title: 'Vérifier mon stock' }} />
-              <Stack.Screen name="quick-consume" options={{ title: "J'ai utilisé quelque chose" }} />
-              <Stack.Screen name="meal-plan" options={{ title: 'Mon plan de repas' }} />
-              <Stack.Screen name="meal-plan-entry/[id]" options={{ title: 'Repas planifié' }} />
-              <Stack.Screen name="shopping-review" options={{ title: 'Retour de courses' }} />
-              <Stack.Screen name="shopping-list" options={{ title: 'Liste de courses' }} />
-              <Stack.Screen name="shopping-advisor" options={{ title: 'Avant les courses' }} />
-              <Stack.Screen name="shopping-check" options={{ title: 'Vérifier un produit', headerShown: false }} />
-              <Stack.Screen name="item/[id]" options={{ title: 'Fiche aliment' }} />
-              <Stack.Screen name="recipes" options={{ title: 'Recettes proposées' }} />
-              <Stack.Screen name="recipe/[index]" options={{ title: 'Recette' }} />
-              <Stack.Screen name="saved/index" options={{ title: 'Mes recettes' }} />
-              <Stack.Screen name="saved/[id]" options={{ title: 'Recette enregistrée' }} />
-            </Stack>
-          </ShoppingSessionProvider>
-        </RecipeProvider>
-      </SessionProvider>
+      {/* La pastille de succès vit au-dessus de la pile de navigation, et non
+          dans un écran : une action engagée sur « Aujourd'hui » doit pouvoir
+          s'annuler depuis le stock, et partir quoi qu'il arrive ensuite. */}
+      <FeedbackProvider>
+        <SessionProvider>
+          <ExpiryAlerts />
+          <RecipeProvider>
+            <ShoppingSessionProvider>
+              <StatusBar style="dark" />
+              <Stack
+                screenOptions={{
+                  headerStyle: { backgroundColor: colors.ground },
+                  headerTitleStyle: { color: colors.ink, fontFamily: font.sansSemiBold, fontSize: 17 },
+                  headerTintColor: colors.ink,
+                  headerShadowVisible: false,
+                  contentStyle: { backgroundColor: colors.ground },
+                }}
+              >
+                <Stack.Screen name="index" options={{ headerShown: false }} />
+                <Stack.Screen name="setup" options={{ headerShown: false }} />
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="add" options={{ title: 'Ajouter au stock' }} />
+                <Stack.Screen name="review" options={{ title: 'Vérifier mon stock' }} />
+                <Stack.Screen name="quick-consume" options={{ title: "J'ai utilisé quelque chose" }} />
+                <Stack.Screen name="meal-plan" options={{ title: 'Mon plan de repas' }} />
+                <Stack.Screen name="meal-plan-entry/[id]" options={{ title: 'Repas planifié' }} />
+                <Stack.Screen name="shopping-review" options={{ title: 'Retour de courses' }} />
+                <Stack.Screen name="shopping-list" options={{ title: 'Liste de courses' }} />
+                <Stack.Screen name="shopping-advisor" options={{ title: 'Avant les courses' }} />
+                <Stack.Screen name="shopping-check" options={{ title: 'Vérifier un produit', headerShown: false }} />
+                <Stack.Screen name="item/[id]" options={{ title: 'Fiche aliment' }} />
+                <Stack.Screen name="recipes" options={{ title: 'Recettes proposées' }} />
+                <Stack.Screen name="recipe/[index]" options={{ title: 'Recette' }} />
+                <Stack.Screen name="saved/index" options={{ title: 'Mes recettes' }} />
+                <Stack.Screen name="saved/[id]" options={{ title: 'Recette enregistrée' }} />
+              </Stack>
+            </ShoppingSessionProvider>
+          </RecipeProvider>
+        </SessionProvider>
+      </FeedbackProvider>
     </SafeAreaProvider>
   );
 }
