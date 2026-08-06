@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -11,24 +11,28 @@ import {
   View,
 } from 'react-native';
 
-import { api } from '../../src/api/client';
+import { api, generateOperationKey } from '../../src/api/client';
 import type { Reference, StockItem } from '../../src/api/types';
+import { useFeedback } from '../../src/components/Feedback';
+import { Horizon, matchesHorizon, type HorizonSelection } from '../../src/components/Horizon';
 import {
   Button,
   Chip,
   EmptyState,
   ErrorBanner,
   Icon,
-  Loader,
   ScreenHeader,
+  Skeleton,
   Stamp,
   useTopInset,
 } from '../../src/components/ui';
 import { deadlineOf } from '../../src/deadline';
+import * as haptics from '../../src/haptics';
 import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
 import {
   colors,
   deadlineSentence,
+  font,
   radius,
   spacing,
   statusPresentation,
@@ -37,49 +41,80 @@ import {
   thermalFor,
 } from '../../src/theme';
 
-const EXPIRY_FILTER_DAYS = 3;
-
 /** Les états qui décrivent l'emballage, et que le cachet ne dit pas. */
 const PACKAGE_STATES = new Set(['opened', 'resealed', 'running_low', 'empty', 'archived']);
+
+/**
+ * « Crème » et « creme » doivent trouver la même chose.
+ *
+ * Décomposer puis retirer les diacritiques est la seule normalisation dont la
+ * recherche ait besoin : elle porte sur des noms d'aliments, pas sur du texte
+ * libre.
+ *
+ * La plage combinante est construite par `RegExp` à partir d'échappements, et
+ * non écrite littéralement : posés seuls dans un fichier source, ces caractères
+ * n'ont pas de lettre à décorer, et le premier outil qui repasse le fichier en
+ * NFC les recolle silencieusement sur le crochet voisin. Pas d'échappement de
+ * propriété Unicode non plus — le moteur embarqué ne le garantit pas.
+ */
+const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g');
+
+function fold(value: string): string {
+  return value.normalize('NFD').replace(DIACRITICS, '').toLowerCase();
+}
 
 export default function StockScreen() {
   const router = useRouter();
   const topInset = useTopInset();
+  const { commitWithUndo } = useFeedback();
 
-  const [items, setItems] = useState<StockItem[]>([]);
+  /**
+   * L'inventaire entier, tel que le serveur le rend. Recherche, emplacement,
+   * catégorie et jour se calculent ensuite en mémoire.
+   *
+   * Ils passaient tous par l'URL, et `load` dépendait donc de `search` : taper
+   * « tomate » lançait six requêtes, chacune rechargeant au passage le
+   * référentiel — et rien n'empêchait la réponse d'un préfixe court d'arriver
+   * après celle du mot entier, ni donc d'afficher des résultats qui ne
+   * correspondaient plus au champ.
+   *
+   * Ce même inventaire non filtré alimente l'horizon et le compteur d'urgents,
+   * qui doivent compter le stock et non ce que l'écran montre (leçon nº 6) :
+   * l'ancien compteur baissait dès qu'on filtrait sur « Frigo ».
+   */
+  const [items, setItems] = useState<StockItem[] | null>(null);
   const [reference, setReference] = useState<Reference | null>(null);
+
   const [search, setSearch] = useState('');
   const [location, setLocation] = useState<string | null>(null);
   const [category, setCategory] = useState<string | null>(null);
-  const [urgentOnly, setUrgentOnly] = useState(false);
+  const [horizon, setHorizon] = useState<HorizonSelection>(null);
   /** Les archives sont un autre inventaire, pas un filtre qui s'ajoute aux autres. */
   const [archived, setArchived] = useState(false);
-  const [loading, setLoading] = useState(true);
+
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Les lots dont le retrait est engagé mais pas encore parti : voir `commitWithUndo`. */
+  const [pending, setPending] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setError(null);
     try {
       const [stock, ref] = await Promise.all([
-        api.stockItems({
-          search: search || undefined,
-          location: location ?? undefined,
-          category: category ?? undefined,
-          expiringWithinDays: urgentOnly ? EXPIRY_FILTER_DAYS : undefined,
-          archived: archived || undefined,
-        }),
+        api.stockItems({ archived: archived || undefined }),
         api.reference(),
       ]);
       setItems(stock.items);
       setReference(ref);
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : 'Chargement impossible.');
+      // Sans cela, un échec réseau laissait `items` à vide, donc l'écran
+      // annonçait « Votre stock est vide » — la seule lecture qui décourage.
+      setItems(null);
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  }, [search, location, category, urgentOnly, archived]);
+  }, [archived]);
 
   // Le stock change depuis d'autres écrans (scan, consommation, recette) :
   // on recharge à chaque retour sur l'onglet.
@@ -99,21 +134,72 @@ export default function StockScreen() {
     }, []),
   );
 
-  if (loading) return <Loader label="Chargement du stock" />;
+  const inventory = items ?? [];
 
-  const urgentCount = items.filter(
-    (item) => item.status === 'expiring_soon' || item.status === 'expired',
+  const visible = useMemo(() => {
+    const needle = fold(search.trim());
+
+    return inventory.filter((item) => {
+      if (!matchesHorizon(item, horizon)) return false;
+      if (null !== location && item.storageLocation !== location) return false;
+      if (null !== category && item.variant.category !== category) return false;
+      if (!needle) return true;
+
+      return (
+        fold(item.variant.culinaryLabel).includes(needle) ||
+        fold(item.variant.name).includes(needle) ||
+        (null !== item.variant.brand && fold(item.variant.brand).includes(needle))
+      );
+    });
+  }, [inventory, search, location, category, horizon]);
+
+  const urgentCount = inventory.filter(
+    (item) => 'expiring_soon' === item.status || 'expired' === item.status,
   ).length;
 
   /** Une liste vide ne veut pas dire la même chose selon qu'on filtre ou non. */
-  const filtering = Boolean(search) || location !== null || category !== null || urgentOnly;
+  const filtering = Boolean(search) || null !== location || null !== category || null !== horizon;
+
+  /**
+   * Retirer un exemplaire sans quitter la liste.
+   *
+   * Le geste le plus fréquent de l'application demandait trois taps et un
+   * changement d'écran : Stock, « J'ai utilisé… », puis la carte. Il en demande
+   * un. La ligne s'estompe aussitôt, rien n'est écrit avant cinq secondes, et
+   * la liste ne se recharge qu'une fois le retrait réellement parti.
+   */
+  function consumeOne(item: StockItem) {
+    haptics.removed();
+    setPending((current) => [...current, item.id]);
+
+    const operationKey = generateOperationKey();
+
+    commitWithUndo({
+      message: `${item.variant.culinaryLabel} — ${unitTaken(item)} retiré${feminine(item) ? 'e' : ''}`,
+      tone: thermalFor(deadlineOf(item).days),
+      commit: async () => {
+        await api.consume(item.id, { mode: 'package' }, operationKey);
+        setPending((current) => current.filter((id) => id !== item.id));
+        await load();
+      },
+      onUndo: () => setPending((current) => current.filter((id) => id !== item.id)),
+      onFailed: (message) => {
+        setPending((current) => current.filter((id) => id !== item.id));
+        setError(message);
+      },
+    });
+  }
 
   return (
     <View style={[styles.flex, topInset]}>
       <FlatList
-        data={items}
+        data={visible}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
+        // Le clavier couvrait la moitié des résultats et ne se repliait pas au
+        // défilement ; le premier tap sur une ligne ne servait qu'à le fermer.
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -127,9 +213,26 @@ export default function StockScreen() {
         ListHeaderComponent={
           <View>
             <ScreenHeader
-              eyebrow={inventoryLabel(items.length, urgentCount, archived)}
+              eyebrow={inventoryLabel(inventory.length, urgentCount, archived, null === items)}
               title={archived ? 'Archives' : 'Mon stock'}
             />
+
+            <ErrorBanner message={error} />
+
+            {/* Les archives sont un inventaire clos : elles n'ont pas d'avenir
+                à dessiner. Le reste du temps, la bande remplace à la fois le
+                filtre « À consommer vite » et les deux raccourcis qui vivaient
+                ici — elle en dit plus, et prend moins de place que les trois. */}
+            {archived || null === items ? null : (
+              <Horizon
+                items={inventory}
+                selection={horizon}
+                onSelect={(value) => {
+                  haptics.select();
+                  setHorizon(value);
+                }}
+              />
+            )}
 
             <View style={styles.search}>
               <Icon name="magnify" size={18} />
@@ -140,12 +243,13 @@ export default function StockScreen() {
                 placeholderTextColor={colors.inkMuted}
                 style={styles.searchInput}
                 returnKeyType="search"
+                autoCorrect={false}
                 accessibilityLabel="Rechercher un aliment"
               />
               {search ? (
                 <Pressable
                   onPress={() => setSearch('')}
-                  hitSlop={8}
+                  hitSlop={14}
                   accessibilityRole="button"
                   accessibilityLabel="Effacer la recherche"
                 >
@@ -154,18 +258,21 @@ export default function StockScreen() {
               ) : null}
             </View>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters}>
-              <Chip
-                label={`À consommer vite${urgentCount ? ` (${urgentCount})` : ''}`}
-                selected={urgentOnly}
-                onPress={() => setUrgentOnly((value) => !value)}
-              />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={styles.filters}
+            >
               {reference?.storageLocations.map((option) => (
                 <Chip
                   key={option.value}
                   label={option.label}
                   selected={location === option.value}
-                  onPress={() => setLocation(location === option.value ? null : option.value)}
+                  onPress={() => {
+                    haptics.select();
+                    setLocation(location === option.value ? null : option.value);
+                  }}
                 />
               ))}
               {reference?.categories.map((name) => (
@@ -173,45 +280,35 @@ export default function StockScreen() {
                   key={name}
                   label={name}
                   selected={category === name}
-                  onPress={() => setCategory(category === name ? null : name)}
+                  onPress={() => {
+                    haptics.select();
+                    setCategory(category === name ? null : name);
+                  }}
                 />
               ))}
               {/* Les archives n'étaient atteignables par aucun écran : le geste
                   s'annonçait réversible sans que rien ne permette de le défaire.
                   Placées en dernier, elles ne s'ajoutent pas aux filtres — elles
                   ouvrent un autre inventaire. */}
-              <Chip label="Archives" selected={archived} onPress={() => setArchived((value) => !value)} />
+              <Chip
+                label="Archives"
+                selected={archived}
+                onPress={() => {
+                  haptics.select();
+                  setHorizon(null);
+                  setArchived((value) => !value);
+                }}
+              />
             </ScrollView>
 
-            <View style={styles.quickActions}>
-              <Button
-                label="J'ai utilisé…"
-                variant="secondary"
-                icon="silverware-fork-knife"
-                onPress={() => router.push('/quick-consume')}
-                hint="Retirer une quantité du stock"
-                style={styles.quickAction}
-              />
-              <Button
-                label="Vérifier"
-                variant="secondary"
-                icon="clipboard-check-outline"
-                onPress={() => router.push('/review')}
-                hint="Confirmer les lots dont l'état est incertain"
-                style={styles.quickAction}
-              />
-            </View>
-
-            <ErrorBanner message={error} />
+            {null === items ? <Skeleton /> : null}
           </View>
         }
         ListEmptyComponent={
-          // « Votre stock est vide » sous une recherche active est faux, et c'est
-          // la seule lecture qui décourage : on croit avoir perdu son inventaire
-          // alors qu'on a simplement tapé un mot qui ne correspond à rien.
-          // Les archives ajoutent un troisième cas, qui ne dit pas la même chose
-          // que les deux autres : « rien n'a été rangé ici », pas « rien à voir ».
-          archived && !filtering ? (
+          // Un chargement, un échec, une recherche sans résultat et un stock
+          // réellement vide sont quatre choses différentes. Elles s'affichaient
+          // toutes comme la dernière.
+          null === items ? null : archived && !filtering ? (
             <EmptyState
               icon="archive-outline"
               title="Aucun lot archivé"
@@ -237,7 +334,12 @@ export default function StockScreen() {
           )
         }
         renderItem={({ item }) => (
-          <StockRow item={item} onPress={() => router.push(`/item/${item.id}`)} />
+          <StockRow
+            item={item}
+            pending={pending.includes(item.id)}
+            onPress={() => router.push(`/item/${item.id}`)}
+            onConsumeOne={() => consumeOne(item)}
+          />
         )}
       />
 
@@ -254,7 +356,8 @@ export default function StockScreen() {
 }
 
 /** La rubrique du titre porte le compte réel — pas un mot de remplissage. */
-function inventoryLabel(count: number, urgent: number, archived: boolean): string {
+function inventoryLabel(count: number, urgent: number, archived: boolean, loading: boolean): string {
+  if (loading) return 'Lecture du stock';
   if (archived) return `${count} lot${count > 1 ? 's' : ''} archivé${count > 1 ? 's' : ''}`;
   if (0 === count) return 'Aucun lot';
 
@@ -263,7 +366,45 @@ function inventoryLabel(count: number, urgent: number, archived: boolean): strin
   return urgent > 0 ? `${lots} · ${urgent} à traiter` : lots;
 }
 
-function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
+/**
+ * « Un exemplaire » ne veut rien dire d'une courgette.
+ *
+ * Le geste serveur est le même (`mode: 'package'`), le mot ne l'est pas — c'est
+ * le vocabulaire que `quick-consume` emploie déjà, repris ici pour que le même
+ * retrait s'annonce de la même façon aux deux endroits.
+ */
+function unitTaken(item: StockItem): string {
+  if ('fresh' !== item.variant.nature) return 'un exemplaire';
+  if (!item.isDiscreteUnit) return 'une portion';
+
+  return 'unité' === item.unitLabel ? `un ${item.variant.name.toLowerCase()}` : `un ${item.unitLabel}`;
+}
+
+function feminine(item: StockItem): boolean {
+  return 'fresh' === item.variant.nature && !item.isDiscreteUnit;
+}
+
+/**
+ * Le retrait direct n'est proposé que là où « un de moins » veut dire quelque
+ * chose : un lot d'exemplaires, ou une unité qui se compte. Sur 600 g de
+ * courgettes en vrac, il n'y a pas d'unité à retirer, et la fiche reste le bon
+ * endroit — c'est la même retenue que la leçon nº 35.
+ */
+function offersDirectConsume(item: StockItem): boolean {
+  return !item.isArchived && (item.isDiscreteUnit || item.numberOfPackages > 1);
+}
+
+const StockRow = React.memo(function StockRow({
+  item,
+  pending,
+  onPress,
+  onConsumeOne,
+}: {
+  item: StockItem;
+  pending: boolean;
+  onPress: () => void;
+  onConsumeOne: () => void;
+}) {
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
   const deadline = deadlineOf(item);
   const level = thermalFor(deadline.days);
@@ -278,18 +419,18 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
     .join(' · ');
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      accessibilityRole="button"
-      // Sans cela, le lecteur d'écran énumère cinq textes séparés puis un badge,
-      // sans dire qu'ils forment une ligne ni qu'elle s'ouvre.
-      accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${deadlineSentence(deadline.days, deadline.estimated)}`}
-      accessibilityHint="Ouvre la fiche de l'aliment"
-    >
+    <View style={[styles.row, pending && styles.rowPending]}>
       <View style={[styles.rowRail, { backgroundColor: thermal[level].line }]} />
 
-      <View style={styles.rowMain}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.rowMain, pressed && styles.rowPressed]}
+        accessibilityRole="button"
+        // Sans cela, le lecteur d'écran énumère cinq textes séparés puis un badge,
+        // sans dire qu'ils forment une ligne ni qu'elle s'ouvre.
+        accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${deadlineSentence(deadline.days, deadline.estimated)}`}
+        accessibilityHint="Ouvre la fiche de l'aliment"
+      >
         <View style={styles.rowTop}>
           {/* Le libellé culinaire distingue « Tomates » de « Tomates (en conserve) » :
               ce sont deux stocks, et la liste doit le montrer. */}
@@ -307,10 +448,23 @@ function StockRow({ item, onPress }: { item: StockItem; onPress: () => void }) {
         </Text>
 
         {note ? <Text style={[text.small, styles.rowNote]}>{note}</Text> : null}
-      </View>
-    </Pressable>
+      </Pressable>
+
+      {offersDirectConsume(item) ? (
+        <Pressable
+          onPress={onConsumeOne}
+          disabled={pending}
+          accessibilityRole="button"
+          accessibilityLabel={`Retirer ${unitTaken(item)} de ${item.variant.culinaryLabel}`}
+          accessibilityState={{ disabled: pending }}
+          style={({ pressed }) => [styles.take, pressed && !pending && styles.takePressed]}
+        >
+          <Text style={styles.takeLabel}>−1</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.ground },
@@ -328,9 +482,12 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   searchInput: { flex: 1, ...text.body, paddingVertical: 12 },
-  filters: { marginTop: spacing.md, marginHorizontal: -spacing.xl, paddingHorizontal: spacing.xl },
-  quickActions: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
-  quickAction: { flex: 1 },
+  filters: {
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+    marginHorizontal: -spacing.xl,
+    paddingHorizontal: spacing.xl,
+  },
 
   row: {
     backgroundColor: colors.surface,
@@ -339,8 +496,11 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     marginBottom: spacing.sm,
     flexDirection: 'row',
+    alignItems: 'stretch',
     overflow: 'hidden',
   },
+  /** Le retrait est engagé et part dans cinq secondes : la ligne le montre. */
+  rowPending: { opacity: 0.45 },
   rowPressed: { backgroundColor: colors.surfaceSunk },
   rowRail: { width: 3 },
   rowMain: { flex: 1, padding: spacing.lg, paddingLeft: spacing.lg - 3 + spacing.xs },
@@ -348,6 +508,16 @@ const styles = StyleSheet.create({
   rowTitle: { flex: 1 },
   rowMeta: { marginTop: spacing.sm },
   rowNote: { marginTop: 2 },
+
+  take: {
+    width: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: 1,
+    borderLeftColor: colors.border,
+  },
+  takePressed: { backgroundColor: colors.surfaceSunk },
+  takeLabel: { fontFamily: font.monoSemiBold, fontSize: 14, lineHeight: 18, color: colors.ink },
 
   add: {
     position: 'absolute',
