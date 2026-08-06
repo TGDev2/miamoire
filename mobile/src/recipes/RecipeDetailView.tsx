@@ -1,6 +1,16 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../api/client';
 import type {
@@ -14,6 +24,8 @@ import type {
   Reference,
 } from '../api/types';
 import { Badge, Button, Card, Chip, DateField, ErrorBanner, SectionTitle } from '../components/ui';
+import * as haptics from '../haptics';
+import { CookMode } from './CookMode';
 import { colors, feasibilityPresentation, font, mealSlotOptions, radius, spacing, text, thermal } from '../theme';
 
 /**
@@ -74,6 +86,16 @@ export function RecipeDetailView({
   const [resolvingKey, setResolvingKey] = useState<string | null>(null);
 
   /**
+   * Le mode cuisine, et les étapes déjà faites.
+   *
+   * L'avancement vit ici plutôt que dans le mode lui-même : fermer le plan de
+   * travail pour vérifier une quantité, puis y revenir, ne doit pas décocher
+   * les quatre étapes qu'on venait de faire.
+   */
+  const [cooking, setCooking] = useState(false);
+  const [stepsDone, setStepsDone] = useState<boolean[]>(() => recipe.steps.map(() => false));
+
+  /**
    * L'apprentissage par la recette.
    *
    * Quand l'inventaire ignore la forme d'un aliment, le modèle DÉCLARE celle
@@ -108,7 +130,12 @@ export function RecipeDetailView({
     };
   }, []);
 
-  const cutLabels = new Map((reference?.productCuts ?? []).map((option) => [option.value, option.label]));
+  // Recalculée à chaque rendu, elle se reconstruisait à chaque caractère tapé
+  // dans un champ de quantité — pour un référentiel qui, lui, ne bouge pas.
+  const cutLabels = useMemo(
+    () => new Map((reference?.productCuts ?? []).map((option) => [option.value, option.label])),
+    [reference],
+  );
 
   /** Ouvre le choix : les découpes plausibles pour CET aliment, telles que le serveur les connaît. */
   async function openCorrection(key: string) {
@@ -341,7 +368,23 @@ export function RecipeDetailView({
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    // Les champs de quantité sont en bas de page, et le clavier les couvrait :
+    // on corrigeait « 250 » en « 180 » sans voir ce qu'on tapait.
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.select({ ios: 'padding', default: undefined })}
+    >
+      <CookMode
+        recipe={recipe}
+        visible={cooking}
+        done={stepsDone}
+        onToggleStep={(position) =>
+          setStepsDone((current) => current.map((value, index) => (index === position ? !value : value)))
+        }
+        onClose={() => setCooking(false)}
+      />
+
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
 
       <Badge label={presentation.label} level={presentation.level} />
@@ -354,6 +397,24 @@ export function RecipeDetailView({
         </Text>
         {recipe.includesSideDish ? <Text style={styles.meta}>avec accompagnement</Text> : null}
       </View>
+
+      {/* « Préparation » était la sixième rubrique, sous le badge, le résumé,
+          les métadonnées, les ustensiles, deux boutons et leurs textes d'aide,
+          les ingrédients, les manquants et les adaptations — un défilement à
+          refaire à chaque ouverture, alors que c'est la seule chose dont on ait
+          besoin une fois devant les plaques. On y entre d'ici. */}
+      {recipe.steps.length > 0 ? (
+        <Button
+          label="Passer en mode cuisine"
+          icon="chef-hat"
+          onPress={() => {
+            haptics.tap();
+            setCooking(true);
+          }}
+          hint="Grandes étapes à cocher, écran qui reste allumé"
+          style={styles.cookMode}
+        />
+      ) : null}
 
       {recipe.utensils && recipe.utensils.length > 0 ? (
         <>
@@ -439,6 +500,10 @@ export function RecipeDetailView({
               <Pressable
                 onPress={() => openCorrection(key)}
                 disabled={correctionBusy}
+                // Une ligne de 13 px sans marge : la cible la plus fine de
+                // l'application, pour le geste qui apprend une découpe au foyer
+                // une fois pour toutes.
+                hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
                 accessibilityRole="button"
                 accessibilityLabel={`Forme supposée : ${assumed}`}
                 accessibilityHint="Corrige la découpe de cet aliment, une fois pour toutes"
@@ -591,7 +656,8 @@ export function RecipeDetailView({
           />
         </Card>
       )}
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -663,6 +729,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   meta: { fontFamily: font.monoMedium, fontSize: 11, lineHeight: 15, color: colors.ink },
+  cookMode: { marginTop: spacing.lg },
   save: { marginTop: spacing.lg },
   saved: { backgroundColor: colors.surfaceSunk },
   planCard: { marginTop: spacing.md },
