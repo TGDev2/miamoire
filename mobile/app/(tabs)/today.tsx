@@ -2,8 +2,10 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { ApiError, api, generateOperationKey } from '../../src/api/client';
+import { api, generateOperationKey } from '../../src/api/client';
 import type { MealPlanEntry, MealPlanOverview, SaveTodayCandidate } from '../../src/api/types';
+import { useFeedback } from '../../src/components/Feedback';
+import * as haptics from '../../src/haptics';
 import {
   Button,
   Card,
@@ -22,7 +24,7 @@ import {
 import { deadlineOf } from '../../src/deadline';
 import { useEnterAnimation, useReducedMotion } from '../../src/motion';
 import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
-import { colors, deadlineSentence, spacing, text, thermalFor } from '../../src/theme';
+import { colors, deadlineSentence, spacing, text, thermalFor, type ThermalLevel } from '../../src/theme';
 
 type LoadState<T> =
   | { status: 'loading' }
@@ -45,11 +47,19 @@ export default function TodayScreen() {
   const reducedMotion = useReducedMotion();
   const topInset = useTopInset();
 
+  const { commitWithUndo } = useFeedback();
+
   const [urgent, setUrgent] = useState<LoadState<SaveTodayCandidate[]>>({ status: 'loading' });
   const [review, setReview] = useState<LoadState<number>>({ status: 'loading' });
   const [mealPlan, setMealPlan] = useState<LoadState<MealPlanOverview>>({ status: 'loading' });
   const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /**
+   * Les lots dont le sort est engagé, mais dont la requête n'est pas partie.
+   *
+   * Masquer plutôt que retirer : l'ordre de la liste est celui de l'urgence, et
+   * une annulation doit remettre le lot à SA place, pas en fin de file.
+   */
+  const [settled, setSettled] = useState<string[]>([]);
 
   const operationKeys = useRef(new Map<string, string>());
 
@@ -92,34 +102,50 @@ export default function TodayScreen() {
     }, []),
   );
 
-  function removeUrgentItem(itemId: string) {
-    setUrgent((current) =>
-      current.status === 'ready'
-        ? { status: 'ready', value: current.value.filter((candidate) => candidate.stockItem.id !== itemId) }
-        : current,
-    );
-  }
+  /**
+   * Les quatre gestes de la carte, avec cinq secondes pour se raviser.
+   *
+   * « J'ai tout consommé » et « Jeté » sont irréversibles et l'API n'a pas
+   * d'inverse à leur opposer. Les faire confirmer aurait alourdi le parcours le
+   * plus fréquent de l'application ; retenir la requête cinq secondes rend le
+   * geste réversible sans coûter un seul tap. Voir `Feedback.tsx`.
+   */
+  function run(
+    candidate: SaveTodayCandidate,
+    actionId: string,
+    message: string,
+    tone: ThermalLevel,
+    action: (operationKey: string) => Promise<unknown>,
+  ) {
+    const itemId = candidate.stockItem.id;
+    const mapKey = `${itemId}:${actionId}`;
 
-  async function run(itemId: string, actionId: string, action: (operationKey: string) => Promise<unknown>) {
     setActionError(null);
-    setBusy(true);
-    const operationKey = operationKeyFor(itemId, actionId);
+    setSettled((current) => [...current, itemId]);
+    haptics.removed();
 
-    try {
-      await action(operationKey);
-      operationKeys.current.delete(`${itemId}:${actionId}`);
-      removeUrgentItem(itemId);
-    } catch (exception) {
-      if (!(exception instanceof ApiError) || exception.status !== 0) {
-        operationKeys.current.delete(`${itemId}:${actionId}`);
-      }
-      setActionError(errorMessage(exception));
-    } finally {
-      setBusy(false);
-    }
+    commitWithUndo({
+      message: `${candidate.stockItem.variant.culinaryLabel} — ${message}`,
+      tone,
+      commit: async () => {
+        await action(operationKeyFor(itemId, actionId));
+        operationKeys.current.delete(mapKey);
+      },
+      onUndo: () => {
+        operationKeys.current.delete(mapKey);
+        setSettled((current) => current.filter((id) => id !== itemId));
+      },
+      onFailed: (failure) => {
+        setSettled((current) => current.filter((id) => id !== itemId));
+        setActionError(failure);
+      },
+    });
   }
 
-  const urgentItems = urgent.status === 'ready' ? urgent.value : [];
+  const urgentItems =
+    urgent.status === 'ready'
+      ? urgent.value.filter((candidate) => !settled.includes(candidate.stockItem.id))
+      : [];
   const reviewCount = review.status === 'ready' ? review.value : 0;
   const readyEntry =
     mealPlan.status === 'ready' ? mealPlan.value.entries.find((entry) => entry.plan?.status === 'ready') ?? null : null;
@@ -168,25 +194,24 @@ export default function TodayScreen() {
               hero={0 === index}
               index={index}
               animate={!reducedMotion}
-              busy={busy}
               onOpen={() => router.push(`/item/${candidate.stockItem.id}`)}
               onConsumed={() =>
-                run(candidate.stockItem.id, 'consumed', (operationKey) =>
+                run(candidate, 'consumed', 'tout consommé', 'calm', (operationKey) =>
                   api.consume(candidate.stockItem.id, { mode: 'all' }, operationKey),
                 )
               }
               onSnoozed={() =>
-                run(candidate.stockItem.id, 'snoozed', (operationKey) =>
+                run(candidate, 'snoozed', 'rappel repoussé', 'calm', (operationKey) =>
                   api.snoozeStockItem(candidate.stockItem.id, operationKey),
                 )
               }
               onDiscarded={() =>
-                run(candidate.stockItem.id, 'discarded', (operationKey) =>
+                run(candidate, 'discarded', 'jeté', 'critical', (operationKey) =>
                   api.discard(candidate.stockItem.id, operationKey, 'Jeté depuis Aujourd\'hui'),
                 )
               }
               onFrozen={() =>
-                run(candidate.stockItem.id, 'frozen', (operationKey) =>
+                run(candidate, 'frozen', 'congelé', 'safe', (operationKey) =>
                   api.freezeStockItem(candidate.stockItem.id, operationKey),
                 )
               }
@@ -303,7 +328,6 @@ function TodayCard({
   hero,
   index,
   animate,
-  busy,
   onOpen,
   onConsumed,
   onSnoozed,
@@ -315,7 +339,6 @@ function TodayCard({
   hero: boolean;
   index: number;
   animate: boolean;
-  busy: boolean;
   onOpen: () => void;
   onConsumed: () => void;
   onSnoozed: () => void;
@@ -361,14 +384,17 @@ function TodayCard({
           <Text style={[text.label, styles.reasons]}>{reasons}</Text>
         </Pressable>
 
+        {/* Plus aucun `disabled` global : la requête ne part qu'après cinq
+            secondes, il n'y a donc plus de fenêtre d'attente à protéger — et
+            la carte disparaît de la liste dès l'appui. */}
         <View style={styles.actions}>
-          <Button label="J'ai tout consommé" onPress={onConsumed} disabled={busy} style={styles.actionMain} />
-          <Button label="Jeté" variant="danger" onPress={onDiscarded} disabled={busy} style={styles.actionSide} />
+          <Button label="J'ai tout consommé" onPress={onConsumed} style={styles.actionMain} />
+          <Button label="Jeté" variant="danger" onPress={onDiscarded} style={styles.actionSide} />
         </View>
         <View style={styles.minorActions}>
-          <Button label="Rappeler plus tard" variant="ghost" onPress={onSnoozed} disabled={busy} />
+          <Button label="Rappeler plus tard" variant="ghost" onPress={onSnoozed} />
           {'freezer' !== item.storageLocation ? (
-            <Button label="Congelé" variant="ghost" onPress={onFrozen} disabled={busy} />
+            <Button label="Congelé" variant="ghost" onPress={onFrozen} />
           ) : null}
         </View>
       </Card>

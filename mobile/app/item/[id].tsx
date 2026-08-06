@@ -5,8 +5,22 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 
 import { ApiError, api, generateOperationKey } from '../../src/api/client';
 import type { Reference, StockItem, StockMovement } from '../../src/api/types';
+import { useFeedback } from '../../src/components/Feedback';
+import * as haptics from '../../src/haptics';
 
 type ReferenceUnit = Reference['units'][number];
+
+/**
+ * Les seules actions qui lisent le champ « Quantité », et donc les seules qui
+ * ont le droit de le vider.
+ *
+ * Toute écriture le remettait à zéro, sans rapport avec ce qu'elle faisait :
+ * taper « 250 » puis cocher la puce « Surgelé » effaçait les 250.
+ */
+const CONSUMES_AMOUNT = new Set(['consume-quantity', 'add-quantity', 'correct-quantity']);
+
+/** Assez pour « que s'est-il passé récemment sur ce lot ? ». Le reste se déplie. */
+const HISTORY_PREVIEW = 8;
 import {
   Badge,
   Button,
@@ -27,12 +41,20 @@ import { colors, font, radius, spacing, statusPresentation, text, thermal, therm
 export default function StockItemScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { notify, commitWithUndo } = useFeedback();
 
   const [item, setItem] = useState<StockItem | null>(null);
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [reference, setReference] = useState<Reference | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /**
+   * L'identifiant de l'action en cours, et non un booléen.
+   *
+   * Un seul drapeau mettait les cinquante cibles de l'écran à 40 % d'opacité
+   * sans jamais dire laquelle travaillait : l'écran se figeait sans raison
+   * apparente. Le bouton concerné porte maintenant son propre indicateur.
+   */
+  const [busy, setBusy] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
@@ -43,6 +65,7 @@ export default function StockItemScreen() {
   /** Unité choisie mais pas encore appliquée : elle attend une quantité. */
   const [pendingUnit, setPendingUnit] = useState<ReferenceUnit | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState('');
+  const [fullHistory, setFullHistory] = useState(false);
 
   /**
    * Une clé par geste, conservée tant qu'une coupure réseau peut le faire
@@ -92,15 +115,18 @@ export default function StockItemScreen() {
    */
   async function run(actionId: string, action: (operationKey: string) => Promise<unknown>) {
     setError(null);
-    setBusy(true);
+    setBusy(actionId);
     const operationKey = operationKeyFor(actionId);
 
     try {
       await action(operationKey);
       operationKeys.current.delete(actionId);
       await load();
-      setAmount('');
-      setAddPurchaseDate(null);
+
+      // Seules les actions qui LISENT ces champs les vident. Cocher « Surgelé »
+      // effaçait le « 250 » qu'on venait de taper dans « Consommer ».
+      if (CONSUMES_AMOUNT.has(actionId)) setAmount('');
+      if ('add-quantity' === actionId) setAddPurchaseDate(null);
     } catch (exception) {
       // Une panne de transport (status 0) n'a rien pu écrire : la même clé sert
       // au prochain essai. Toute autre réponse est déjà tranchée par le serveur.
@@ -115,7 +141,7 @@ export default function StockItemScreen() {
         setError(exception instanceof Error ? exception.message : 'Action impossible.');
       }
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -134,20 +160,35 @@ export default function StockItemScreen() {
    * à rien : « Jeter le produit », juste au-dessus, est le geste qui déclare une
    * perte, et c'est le seul.
    */
-  function confirmArchive() {
+  function archive() {
+    void run('archive', async (operationKey) => {
+      await api.archiveStockItem(id, operationKey, 'Archivé depuis la fiche');
+      notify('Lot archivé — retrouvable dans « Archives »', 'calm');
+      router.back();
+    });
+  }
+
+  /**
+   * Déclarer une perte est définitif, et l'API n'a pas d'inverse : c'est le seul
+   * geste de cet écran qui mérite qu'on s'arrête. Il partait en un appui, à côté
+   * d'un archivage réversible qui, lui, en demandait deux.
+   */
+  function confirmDiscard() {
     Alert.alert(
-      'Archiver cet aliment ?',
-      'Il quitte votre inventaire sans rien perdre : sa quantité et son historique sont conservés, et vous pourrez le restaurer depuis le filtre « Archives ».',
+      'Jeter ce produit ?',
+      `Vous déclarez une perte de ${item?.displayQuantity} ${item?.displayUnit}. Le lot quitte l'inventaire et son historique la garde en mémoire. C'est définitif.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Archiver',
+          text: 'Jeter',
           style: 'destructive',
-          onPress: () =>
-            run('archive', async (operationKey) => {
-              await api.archiveStockItem(id, operationKey, 'Archivé depuis la fiche');
-              router.back();
-            }),
+          onPress: () => {
+            haptics.removed();
+            void run('discard', async (operationKey) => {
+              await api.discard(id, operationKey, 'Produit jeté');
+              notify('Produit jeté', 'critical');
+            });
+          },
         },
       ],
     );
@@ -166,6 +207,7 @@ export default function StockItemScreen() {
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
   const deadline = deadlineOf(item);
   const level = thermalFor(deadline.days);
+  const visibleMovements = fullHistory ? movements : movements.slice(0, HISTORY_PREVIEW);
 
   /**
    * Un produit frais n'a pas d'emballage, donc pas d'exemplaire à entamer ni à
@@ -322,10 +364,10 @@ export default function StockItemScreen() {
             onPress={() =>
               run('consume-units', (operationKey) => api.consume(id, { mode: 'units', delta: -1 }, operationKey))
             }
-            disabled={busy}
+            disabled={null !== busy}
             accessibilityRole="button"
             accessibilityLabel={`Consommer un ${item.unitLabel}`}
-            accessibilityState={{ disabled: busy }}
+            accessibilityState={{ disabled: null !== busy }}
           >
             <Text style={styles.unitGlyph} importantForAccessibility="no">
               −1
@@ -342,10 +384,10 @@ export default function StockItemScreen() {
             onPress={() =>
               run('add-unit', (operationKey) => api.addQuantity(id, { quantity: 1 }, operationKey))
             }
-            disabled={busy}
+            disabled={null !== busy}
             accessibilityRole="button"
             accessibilityLabel={`Ajouter un ${item.unitLabel}`}
-            accessibilityState={{ disabled: busy }}
+            accessibilityState={{ disabled: null !== busy }}
           >
             <Text style={styles.unitGlyph} importantForAccessibility="no">
               +1
@@ -376,7 +418,8 @@ export default function StockItemScreen() {
               api.consume(id, { mode: 'quantity', quantity: value }, operationKey),
             );
           }}
-          disabled={busy}
+          disabled={null !== busy}
+          loading={'consume-quantity' === busy}
         />
       </View>
 
@@ -384,10 +427,22 @@ export default function StockItemScreen() {
         <Button
           label="Tout consommer"
           variant="secondary"
-          onPress={() =>
-            run('consume-all', (operationKey) => api.consume(id, { mode: 'all' }, operationKey))
-          }
-          disabled={busy}
+          // Vider le lot d'un coup est aussi définitif que le jeter : la
+          // pastille d'annulation le rend réversible sans ajouter de tap.
+          onPress={() => {
+            haptics.removed();
+            const label = item.variant.culinaryLabel;
+            commitWithUndo({
+              message: `${label} — tout consommé`,
+              commit: async () => {
+                await api.consume(id, { mode: 'all' }, operationKeyFor('consume-all'));
+                operationKeys.current.delete('consume-all');
+                await load();
+              },
+              onFailed: setError,
+            });
+          }}
+          disabled={null !== busy}
         />
         {/* Un produit frais compté se retire déjà à l'unité par le −1 ci-dessus :
             « retirer un exemplaire » ferait deux boutons pour un seul geste. */}
@@ -398,7 +453,8 @@ export default function StockItemScreen() {
             onPress={() =>
               run('consume-package', (operationKey) => api.consume(id, { mode: 'package' }, operationKey))
             }
-            disabled={busy}
+            disabled={null !== busy}
+            loading={'consume-package' === busy}
           />
         )}
         {/* Le geste porte sur UN exemplaire : ouvrir un lot de trois sachets
@@ -411,7 +467,8 @@ export default function StockItemScreen() {
             onPress={() =>
               run('toggle-opened', (operationKey) => api.setOpened(id, !item.isOpened, operationKey))
             }
-            disabled={busy}
+            disabled={null !== busy}
+            loading={'toggle-opened' === busy}
           />
         )}
         <Button
@@ -431,7 +488,7 @@ export default function StockItemScreen() {
               ),
             );
           }}
-          disabled={busy}
+          disabled={null !== busy}
         />
       </View>
 
@@ -457,7 +514,7 @@ export default function StockItemScreen() {
               ],
             )
           }
-          disabled={busy}
+          disabled={null !== busy}
           style={styles.spaced}
         />
       ) : null}
@@ -534,7 +591,8 @@ export default function StockItemScreen() {
             api.correct(id, { quantity: value }, operationKey, item.revision),
           );
         }}
-        disabled={busy}
+        disabled={null !== busy}
+        loading={'correct-quantity' === busy}
       />
 
       <SectionTitle>Modifier</SectionTitle>
@@ -620,7 +678,8 @@ export default function StockItemScreen() {
                       api.changeUnit(id, unit, value, operationKey, item.revision),
                     );
                   }}
-                  disabled={busy}
+                  disabled={null !== busy}
+                  loading={'unit-pending' === busy}
                   style={styles.flex}
                 />
                 <Button label="Annuler" variant="ghost" onPress={() => setPendingUnit(null)} />
@@ -755,7 +814,8 @@ export default function StockItemScreen() {
                 api.updateStockItem(id, { estimateExpiration: true }, operationKey),
               )
             }
-            disabled={busy}
+            disabled={null !== busy}
+            loading={'estimate-expiration' === busy}
             style={styles.spaced}
           />
 
@@ -779,7 +839,8 @@ export default function StockItemScreen() {
             onPress={() =>
               run('rename', (operationKey) => api.updateStockItem(id, { name: editName }, operationKey))
             }
-            disabled={busy}
+            disabled={null !== busy}
+            loading={'rename' === busy}
             style={styles.spaced}
           />
           <Button label="Fermer" variant="ghost" onPress={() => setEditing(false)} style={styles.spaced} />
@@ -793,12 +854,17 @@ export default function StockItemScreen() {
         />
       )}
 
+      {/* Les deux gardes de cet écran étaient à l'envers : « Jeter » et « Tout
+          consommer » — irréversibles, sans inverse côté serveur — partaient en
+          un seul appui, tandis qu'« Archiver », documenté juste au-dessus comme
+          ne touchant à rien, exigeait une confirmation. */}
       <SectionTitle>Retirer</SectionTitle>
       <Button
         label="Jeter le produit"
         variant="danger"
-        onPress={() => run('discard', (operationKey) => api.discard(id, operationKey, 'Produit jeté'))}
-        disabled={busy || item.remainingQuantity <= 0}
+        onPress={confirmDiscard}
+        disabled={null !== busy || item.remainingQuantity <= 0}
+        loading={'discard' === busy}
       />
       {item.isArchived ? (
         <Button
@@ -808,11 +874,22 @@ export default function StockItemScreen() {
           style={styles.spaced}
         />
       ) : (
-        <Button label="Archiver la ligne" variant="ghost" onPress={confirmArchive} style={styles.spaced} />
+        <Button
+          label="Archiver la ligne"
+          variant="ghost"
+          onPress={archive}
+          disabled={null !== busy}
+          loading={'archive' === busy}
+          style={styles.spaced}
+        />
       )}
 
+      {/* L'API ne pagine pas les mouvements et cette rubrique est la dernière :
+          un lot manipulé tous les jours pendant des mois montait des centaines
+          de vues qu'il fallait traverser pour atteindre le bas de la page. Les
+          récents répondent à la question qu'on se pose ; le reste se déplie. */}
       <SectionTitle>Historique</SectionTitle>
-      {movements.map((movement) => (
+      {visibleMovements.map((movement) => (
         <View
           key={movement.id}
           style={styles.movement}
@@ -846,6 +923,15 @@ export default function StockItemScreen() {
           </View>
         </View>
       ))}
+
+      {movements.length > visibleMovements.length ? (
+        <Button
+          label={`Voir les ${movements.length - visibleMovements.length} mouvements plus anciens`}
+          variant="ghost"
+          onPress={() => setFullHistory(true)}
+          style={styles.spaced}
+        />
+      ) : null}
     </ScrollView>
   );
 }

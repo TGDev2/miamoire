@@ -104,6 +104,15 @@ interface ShoppingSessionState {
   addManualLine: () => void;
   updateLine: (id: string, patch: Partial<ShoppingSessionLine>) => void;
   removeLine: (id: string) => void;
+  /**
+   * Défait exactement le dernier `addScannedLine` de ce code-barres : le compte
+   * redescend d'un exemplaire, et la ligne disparaît si c'était le seul.
+   *
+   * L'erreur la plus probable d'un retour de courses est de scanner le mauvais
+   * article, ou deux fois le même. Elle n'était réparable que depuis l'écran de
+   * validation, deux navigations plus loin.
+   */
+  undoScan: (barcode: string) => void;
   clear: () => void;
   /** Clé d'opération stable par ligne, tant qu'elle n'a pas été validée. */
   operationKeyFor: (lineId: string) => string;
@@ -313,6 +322,22 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
     operationKeys.current.delete(id);
   }, []);
 
+  const undoScan = useCallback((barcode: string) => {
+    setLines((current) => {
+      const line = current.find((entry) => entry.barcode === barcode);
+      if (undefined === line) return current;
+
+      if (line.numberOfPackages > 1) {
+        return current.map((entry) =>
+          entry.id === line.id ? { ...entry, numberOfPackages: entry.numberOfPackages - 1 } : entry,
+        );
+      }
+
+      operationKeys.current.delete(line.id);
+      return current.filter((entry) => entry.id !== line.id);
+    });
+  }, []);
+
   const clear = useCallback(() => {
     setLines([]);
     operationKeys.current.clear();
@@ -336,8 +361,26 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   );
 
   const value = useMemo(
-    () => ({ lines, addScannedLine, addManualLine, updateLine, removeLine, clear, operationKeyFor }),
-    [lines, addScannedLine, addManualLine, updateLine, removeLine, clear, operationKeyFor],
+    () => ({
+      lines,
+      addScannedLine,
+      addManualLine,
+      updateLine,
+      removeLine,
+      undoScan,
+      clear,
+      operationKeyFor,
+    }),
+    [
+      lines,
+      addScannedLine,
+      addManualLine,
+      updateLine,
+      removeLine,
+      undoScan,
+      clear,
+      operationKeyFor,
+    ],
   );
 
   return <ShoppingSessionContext.Provider value={value}>{children}</ShoppingSessionContext.Provider>;

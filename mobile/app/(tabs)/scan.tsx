@@ -1,13 +1,14 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../../src/api/client';
-import { Button, Icon } from '../../src/components/ui';
+import { Button, Icon, Loader } from '../../src/components/ui';
+import * as haptics from '../../src/haptics';
 import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
-import { colors, font, radius, spacing, text } from '../../src/theme';
+import { colors, font, radius, spacing, text, thermal } from '../../src/theme';
 
 /** Codes-barres réellement utilisés sur les emballages alimentaires. */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39'] as const;
@@ -26,8 +27,12 @@ export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [active, setActive] = useState(true);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [listCount, setListCount] = useState(0);
-  const { lines, addScannedLine, addManualLine } = useShoppingSession();
+  /** `null` : la requête a échoué. Distinct de zéro, qui veut dire « liste vide ». */
+  const [listCount, setListCount] = useState<number | null>(null);
+  const [torch, setTorch] = useState(false);
+  /** Le dernier code lu, pour pouvoir le défaire sans quitter la caméra. */
+  const [lastScan, setLastScan] = useState<{ barcode: string; label: string } | null>(null);
+  const { lines, addScannedLine, addManualLine, undoScan } = useShoppingSession();
 
   const lastSeenAt = useRef(new Map<string, number>());
   const pendingLookups = useRef(new Set<string>());
@@ -39,9 +44,15 @@ export default function ScanScreen() {
       api
         .shoppingList()
         .then((response) => setListCount(response.items.length))
-        .catch(() => undefined);
+        // Le compte échouait en silence et le bouton affichait « Liste » tout
+        // court — indistinguable d'une liste vide. On dit désormais qu'on ne
+        // sait pas plutôt que de laisser croire qu'il n'y a rien à acheter.
+        .catch(() => setListCount(null));
 
-      return () => setActive(false);
+      return () => {
+        setActive(false);
+        setTorch(false);
+      };
     }, []),
   );
 
@@ -57,6 +68,14 @@ export default function ScanScreen() {
     feedbackTimer.current = setTimeout(() => setFeedback(null), 1200);
   }
 
+  /**
+   * Le geste réel : bras tendu, produit devant l'objectif, écran non regardé.
+   *
+   * Le seul accusé de réception était une pastille de 1 200 ms — soit exactement
+   * la fenêtre anti-doublon, si bien qu'un produit laissé dans le cadre
+   * incrémentait son compte au moment précis où le retour précédent
+   * disparaissait. La vibration, elle, se sent sans regarder.
+   */
   async function onScanned({ data }: { data: string }) {
     const now = Date.now();
     const last = lastSeenAt.current.get(data);
@@ -64,10 +83,14 @@ export default function ScanScreen() {
 
     if (last && now - last < REAPPEAR_GAP_MS) return;
 
-    const alreadyInBasket = lines.some((line) => line.barcode === data);
-    if (alreadyInBasket) {
+    const existing = lines.find((line) => line.barcode === data);
+    if (existing) {
       addScannedLine(data, { product: null, householdVariant: null });
-      showFeedback('+1 exemplaire');
+      haptics.tap();
+      // « +1 exemplaire » ne disait pas de quoi : scanner le mauvais article
+      // deux fois passait inaperçu.
+      showFeedback(`${existing.name} · ${existing.numberOfPackages + 1} exemplaires`);
+      setLastScan({ barcode: data, label: existing.name });
       return;
     }
 
@@ -81,26 +104,53 @@ export default function ScanScreen() {
         householdVariant: result.householdVariant,
         shoppingListItem: result.shoppingListItem,
       });
+
+      const label = result.householdVariant?.name ?? result.product.name;
+      haptics.success();
       showFeedback(
         result.shoppingListItem
           ? `Sur votre liste : ${result.shoppingListItem.label}`
-          : (result.householdVariant?.name ?? result.product.name),
+          : label,
       );
+      setLastScan({ barcode: data, label });
     } catch {
       // Inconnu du catalogue (404) ou réseau indisponible : la ligne est
       // ajoutée quand même, à compléter manuellement à la validation.
+      // La lecture a bien eu lieu — c'est le catalogue qui ne connaît pas ce
+      // code. Le retour reste celui d'un scan pris en compte, pas d'un échec.
       addScannedLine(data, { product: null, householdVariant: null });
+      haptics.tap();
       showFeedback('Produit à compléter');
+      setLastScan({ barcode: data, label: 'Produit à compléter' });
     } finally {
       pendingLookups.current.delete(data);
     }
   }
 
+  function undoLastScan() {
+    if (null === lastScan) return;
+
+    haptics.removed();
+    undoScan(lastScan.barcode);
+    // La fenêtre anti-doublon garde une trace du code : sans cet oubli, le
+    // représenter aussitôt pour se corriger ne ferait rien.
+    lastSeenAt.current.delete(lastScan.barcode);
+    showFeedback(`${lastScan.label} — retiré du panier`);
+    setLastScan(null);
+  }
+
+  // Un `View` vide était indistinguable d'un plantage, même pour une fraction
+  // de seconde, sur un écran dont on attend qu'il montre une image.
   if (!permission) {
-    return <View style={styles.permission} />;
+    return <Loader label="Vérification de l'autorisation caméra" />;
   }
 
   if (!permission.granted) {
+    // Après un second refus sur Android, `requestPermission()` se résout sans
+    // rien afficher : le bouton ne produisait littéralement rien, et l'écran
+    // était un cul-de-sac. Le réglage système est alors le seul chemin.
+    const settingsOnly = !permission.canAskAgain;
+
     return (
       <View style={[styles.permission, { paddingTop: insets.top + spacing.xxl }]}>
         <View style={styles.permissionIcon}>
@@ -108,10 +158,19 @@ export default function ScanScreen() {
         </View>
         <Text style={[text.title, styles.permissionTitle]}>Autoriser la caméra</Text>
         <Text style={[text.small, styles.permissionText]}>
-          Elle ne sert qu'à lire les codes-barres des produits que vous ajoutez. Aucune image n'est
-          enregistrée ni envoyée.
+          {settingsOnly
+            ? 'L\'autorisation a été refusée pour cette application. Elle se réactive depuis les réglages du téléphone.'
+            : 'Elle ne sert qu\'à lire les codes-barres des produits que vous ajoutez. Aucune image n\'est enregistrée ni envoyée.'}
         </Text>
-        <Button label="Autoriser la caméra" onPress={requestPermission} style={styles.permissionAction} />
+        <Button
+          label={settingsOnly ? 'Ouvrir les réglages' : 'Autoriser la caméra'}
+          icon={settingsOnly ? 'cog-outline' : undefined}
+          onPress={() => {
+            if (settingsOnly) void Linking.openSettings();
+            else void requestPermission();
+          }}
+          style={styles.permissionAction}
+        />
         <Button
           label="Saisir un aliment à la main"
           variant="secondary"
@@ -128,24 +187,62 @@ export default function ScanScreen() {
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
+          enableTorch={torch}
           barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
           onBarcodeScanned={(event) => void onScanned(event)}
         />
       ) : (
-        <View style={[StyleSheet.absoluteFill, styles.paused]} />
+        // Revenir sur l'onglet remonte la caméra à froid : plusieurs centaines
+        // de millisecondes de noir, sur un écran qui EST une caméra. Sans un
+        // mot, on croit l'application figée.
+        <View style={[StyleSheet.absoluteFill, styles.paused]}>
+          <Text style={styles.pausedText}>Caméra en pause</Text>
+        </View>
       )}
 
       <View style={[styles.topBar, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
         <Text style={styles.topLabel}>Retour de courses</Text>
-        <Pressable
-          onPress={() => router.push('/shopping-list')}
-          accessibilityRole="button"
-          accessibilityLabel={`Liste de courses, ${listCount} article${listCount > 1 ? 's' : ''}`}
-          style={({ pressed }) => [styles.listButton, pressed && styles.listButtonPressed]}
-        >
-          <Icon name="format-list-checks" size={16} color={colors.ink} />
-          <Text style={styles.listButtonText}>{listCount > 0 ? `Liste · ${listCount}` : 'Liste'}</Text>
-        </Pressable>
+
+        <View style={styles.topActions}>
+          {/* Les codes-barres se lisent souvent dans un placard, un coffre ou
+              une réserve : la torche fait partie du geste. */}
+          <Pressable
+            onPress={() => {
+              haptics.select();
+              setTorch((current) => !current);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={torch ? 'Éteindre la torche' : 'Allumer la torche'}
+            accessibilityState={{ selected: torch }}
+            style={({ pressed }) => [
+              styles.topButton,
+              torch && styles.topButtonOn,
+              pressed && styles.listButtonPressed,
+            ]}
+          >
+            <Icon
+              name={torch ? 'flashlight' : 'flashlight-off'}
+              size={18}
+              color={torch ? colors.onInk : colors.ink}
+            />
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push('/shopping-list')}
+            accessibilityRole="button"
+            accessibilityLabel={
+              null === listCount
+                ? 'Liste de courses, nombre inconnu'
+                : `Liste de courses, ${listCount} article${listCount > 1 ? 's' : ''}`
+            }
+            style={({ pressed }) => [styles.listButton, pressed && styles.listButtonPressed]}
+          >
+            <Icon name="format-list-checks" size={16} color={colors.ink} />
+            <Text style={styles.listButtonText}>
+              {null !== listCount && listCount > 0 ? `Liste · ${listCount}` : 'Liste'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.overlay} pointerEvents="box-none">
@@ -171,11 +268,28 @@ export default function ScanScreen() {
       </View>
 
       <View style={[styles.footer, { paddingBottom: spacing.lg + insets.bottom }]}>
-        <Text style={styles.count}>
-          {0 === lines.length
-            ? 'Aucun produit scanné'
-            : `${lines.length} produit${lines.length > 1 ? 's' : ''} dans le panier`}
-        </Text>
+        <View style={styles.countRow}>
+          <Text style={styles.count}>
+            {0 === lines.length
+              ? 'Aucun produit scanné'
+              : `${lines.length} produit${lines.length > 1 ? 's' : ''} dans le panier`}
+          </Text>
+          {/* L'erreur la plus probable du parcours — le mauvais article, ou
+              deux fois le même — ne se réparait qu'après « Terminer », deux
+              navigations plus loin. */}
+          {null === lastScan ? null : (
+            <Pressable
+              onPress={undoLastScan}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={`Annuler le dernier scan, ${lastScan.label}`}
+              style={({ pressed }) => [styles.undo, pressed && styles.listButtonPressed]}
+            >
+              <Icon name="undo-variant" size={16} color={thermal.critical.line} />
+              <Text style={styles.undoText}>Annuler</Text>
+            </Pressable>
+          )}
+        </View>
         <View style={styles.footerRow}>
           <Button
             label="Saisie manuelle"
@@ -200,7 +314,8 @@ export default function ScanScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#000000' },
-  paused: { backgroundColor: '#000000' },
+  paused: { backgroundColor: '#000000', alignItems: 'center', justifyContent: 'center' },
+  pausedText: { ...text.label, color: '#8B9AA3' },
 
   permission: {
     flex: 1,
@@ -235,6 +350,16 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.7)',
     textShadowRadius: 6,
   },
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  topButton: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topButtonOn: { backgroundColor: colors.ink },
   listButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -242,7 +367,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.sm,
     paddingHorizontal: spacing.md,
-    minHeight: 36,
+    // 36 px sur le seul lien vers la liste de courses depuis cet écran, dans la
+    // zone la moins atteignable au pouce.
+    minHeight: 44,
   },
   listButtonPressed: { backgroundColor: colors.surfaceSunk },
   listButtonText: { fontFamily: font.monoMedium, fontSize: 11, color: colors.ink },
@@ -287,7 +414,24 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  count: { ...text.label, textAlign: 'center', marginBottom: spacing.md },
+  countRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+    minHeight: 32,
+  },
+  count: { ...text.label },
+  undo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 32,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  undoText: { ...text.label, color: thermal.critical.line },
   footerRow: { flexDirection: 'row', gap: spacing.sm },
   footerButton: { flex: 1 },
 });

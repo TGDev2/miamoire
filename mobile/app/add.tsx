@@ -1,9 +1,20 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
+import { useFeedback } from '../src/components/Feedback';
+import * as haptics from '../src/haptics';
 import type {
   FoodNature,
   FoodProfile,
@@ -58,6 +69,7 @@ function isCountedUnit(unit: Unit): boolean {
 
 export default function AddScreen() {
   const router = useRouter();
+  const { notify } = useFeedback();
   const { barcode } = useLocalSearchParams<{ barcode?: string }>();
 
   const [reference, setReference] = useState<Reference | null>(null);
@@ -300,7 +312,33 @@ export default function AddScreen() {
     if (isCountedUnit(to)) setQuantity('');
   }
 
-  async function submit() {
+  /**
+   * Vide ce qui décrit UN article, garde ce qui décrit la session.
+   *
+   * L'emplacement reste : on range en général un sac de courses au même endroit,
+   * et le redemander à chaque article serait la question de trop.
+   */
+  function resetForNext() {
+    setName('');
+    setBrand('');
+    setQuantity('');
+    setTraits([]);
+    setCut(null);
+    setCutTouched(false);
+    setNote('');
+    setBatches([newBatch()]);
+    setProfile(null);
+    setNatureOverride(null);
+    setProduct(null);
+    unitTouched.current = false;
+  }
+
+  /**
+   * @param andAnother Enchaîner un second article sans repasser par le stock.
+   *   Rentrer six courses demandait six fois le parcours complet, navigation
+   *   comprise, alors que le geste réel est de vider un sac de courses.
+   */
+  async function submit(andAnother = false) {
     setError(null);
 
     // Un aliment compté n'a rien à saisir de plus : chaque exemplaire vaut une pièce.
@@ -351,7 +389,15 @@ export default function AddScreen() {
         operationKey.current,
       );
       operationKey.current = null;
-      router.replace('/(tabs)');
+
+      // L'écran était remplacé sans un mot : rien ne confirmait que le lot
+      // existait, et l'on atterrissait à la racine des onglets.
+      const added = product?.name ?? name.trim();
+      haptics.success();
+      notify(`${added} ajouté au stock`, 'safe');
+
+      if (andAnother) resetForNext();
+      else router.replace('/(tabs)');
     } catch (exception) {
       // Une panne de transport n'a rien pu écrire : la même clé sert au prochain essai.
       if (!(exception instanceof ApiError) || exception.status !== 0) {
@@ -368,7 +414,13 @@ export default function AddScreen() {
   const compatibleUnits = reference?.units ?? [];
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    // « Note » et le bouton d'envoi sont les deux derniers éléments de la page :
+    // ouvrir le clavier sur la note masquait le bouton qui valide le formulaire.
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.select({ ios: 'padding', default: undefined })}
+    >
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
 
       {product ? (
@@ -408,6 +460,10 @@ export default function AddScreen() {
             value={name}
             onChangeText={setName}
             placeholder="Courgettes, riz, reste de gratin…"
+            // C'est le seul champ vraiment obligatoire, et l'on arrive ici pour
+            // le remplir : deux appuis pour commencer à taper étaient deux de trop.
+            autoFocus
+            returnKeyType="next"
           />
           <Field label="Marque (facultatif)" value={brand} onChangeText={setBrand} />
         </>
@@ -720,8 +776,18 @@ export default function AddScreen() {
         placeholder="Reste du repas de dimanche…"
       />
 
-      <Button label="Ajouter au stock" onPress={submit} loading={busy} />
-    </ScrollView>
+      <Button label="Ajouter au stock" onPress={() => submit()} loading={busy} disabled={busy} />
+      <Button
+        label="Ajouter et en saisir un autre"
+        variant="secondary"
+        icon="playlist-plus"
+        onPress={() => submit(true)}
+        disabled={busy}
+        hint="Garde l'emplacement et rouvre un formulaire vierge"
+        style={styles.submitAgain}
+      />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -754,6 +820,7 @@ function formatNumber(value: number): string {
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   flex: { flex: 1 },
+  submitAgain: { marginTop: spacing.sm },
   productCard: { marginBottom: spacing.lg },
   productRow: { flexDirection: 'row', gap: spacing.md },
   thumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: colors.surfaceSunk },

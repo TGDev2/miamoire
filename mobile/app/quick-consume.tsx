@@ -4,8 +4,10 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
 import type { QuickConsumeCandidate } from '../src/api/types';
+import { useFeedback } from '../src/components/Feedback';
 import { Badge, Button, Card, EmptyState, ErrorBanner, Loader, Stamp } from '../src/components/ui';
 import { deadlineOf } from '../src/deadline';
+import * as haptics from '../src/haptics';
 import { colors, radius, spacing, text, thermalFor } from '../src/theme';
 
 /**
@@ -15,10 +17,16 @@ import { colors, radius, spacing, text, thermalFor } from '../src/theme';
  * « Vérifier mon stock » de rattraper la dérive après coup.
  */
 export default function QuickConsumeScreen() {
+  const { notify } = useFeedback();
+
   const [items, setItems] = useState<QuickConsumeCandidate[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /**
+   * L'identifiant du lot en cours, et non un booléen : un seul drapeau gelait
+   * les quarante boutons de l'écran sans dire lequel travaillait.
+   */
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [amounts, setAmounts] = useState<Record<string, string>>({});
 
@@ -50,24 +58,38 @@ export default function QuickConsumeScreen() {
   function removeItem(itemId: string) {
     setItems((current) => (current ?? []).filter((candidate) => candidate.stockItem.id !== itemId));
     setExpandedId((current) => (current === itemId ? null : current));
+    // Sans cette purge, revenir sur l'écran repréremplissait le champ « Autre
+    // quantité » avec le chiffre saisi pour la fois précédente.
+    setAmounts((current) => {
+      const { [itemId]: removed, ...rest } = current;
+      return rest;
+    });
   }
 
-  async function run(itemId: string, actionId: string, action: (operationKey: string) => Promise<unknown>) {
+  async function run(
+    itemId: string,
+    actionId: string,
+    /** Ce qui vient de se passer, au passé. La carte disparaît sans cela sans un mot. */
+    message: string,
+    action: (operationKey: string) => Promise<unknown>,
+  ) {
     setActionError(null);
-    setBusy(true);
+    setBusyId(itemId);
     const operationKey = operationKeyFor(itemId, actionId);
 
     try {
       await action(operationKey);
       operationKeys.current.delete(`${itemId}:${actionId}`);
       removeItem(itemId);
+      haptics.success();
+      notify(message);
     } catch (exception) {
       if (!(exception instanceof ApiError) || exception.status !== 0) {
         operationKeys.current.delete(`${itemId}:${actionId}`);
       }
       setActionError(exception instanceof Error ? exception.message : 'Action impossible.');
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   }
 
@@ -81,8 +103,11 @@ export default function QuickConsumeScreen() {
       return;
     }
 
-    void run(itemId, 'other-quantity', (operationKey) =>
-      api.consume(itemId, { mode: 'quantity', quantity: value }, operationKey),
+    void run(
+      itemId,
+      'other-quantity',
+      `${candidate.stockItem.variant.culinaryLabel} — ${value} ${candidate.stockItem.displayUnit} retirés`,
+      (operationKey) => api.consume(itemId, { mode: 'quantity', quantity: value }, operationKey),
     );
   }
 
@@ -111,14 +136,17 @@ export default function QuickConsumeScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    // Le champ « Autre quantité » et son bouton « Confirmer » sont sur la même
+    // ligne : sans cela, le premier appui sur « Confirmer » ne faisait que
+    // replier le clavier, et il en fallait un second.
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={actionError} />
 
       {(items ?? []).map((candidate) => (
         <QuickConsumeCard
           key={candidate.stockItem.id}
           candidate={candidate}
-          busy={busy}
+          busy={busyId === candidate.stockItem.id}
           expanded={expandedId === candidate.stockItem.id}
           amount={amounts[candidate.stockItem.id] ?? ''}
           onChangeAmount={(value) =>
@@ -129,18 +157,33 @@ export default function QuickConsumeScreen() {
           }
           onConfirmOtherQuantity={() => confirmOtherQuantity(candidate)}
           onOnePackage={() =>
-            run(candidate.stockItem.id, 'one-package', (operationKey) =>
-              api.consume(candidate.stockItem.id, { mode: 'package' }, operationKey),
+            run(
+              candidate.stockItem.id,
+              'one-package',
+              `${candidate.stockItem.variant.culinaryLabel} — un de moins`,
+              (operationKey) => api.consume(candidate.stockItem.id, { mode: 'package' }, operationKey),
             )
           }
           onHalf={() =>
-            run(candidate.stockItem.id, 'half', (operationKey) =>
-              api.correct(candidate.stockItem.id, { fillLevel: 'half' }, operationKey, candidate.stockItem.revision),
+            run(
+              candidate.stockItem.id,
+              'half',
+              `${candidate.stockItem.variant.culinaryLabel} — corrigé à la moitié`,
+              (operationKey) =>
+                api.correct(
+                  candidate.stockItem.id,
+                  { fillLevel: 'half' },
+                  operationKey,
+                  candidate.stockItem.revision,
+                ),
             )
           }
           onFinished={() =>
-            run(candidate.stockItem.id, 'finished', (operationKey) =>
-              api.consume(candidate.stockItem.id, { mode: 'all' }, operationKey),
+            run(
+              candidate.stockItem.id,
+              'finished',
+              `${candidate.stockItem.variant.culinaryLabel} — terminé`,
+              (operationKey) => api.consume(candidate.stockItem.id, { mode: 'all' }, operationKey),
             )
           }
         />
@@ -211,8 +254,11 @@ function QuickConsumeCard({
           disabled={busy}
           style={styles.rowItem}
         />
+        {/* « Environ la moitié » corrige ce qu'il reste, « Terminé » retire
+            tout : deux gestes de natures opposées, rendus jusqu'ici avec
+            exactement le même poids et les mêmes mots. Le verbe les sépare. */}
         <Button
-          label="Environ la moitié"
+          label="Il en reste la moitié"
           variant="secondary"
           onPress={onHalf}
           disabled={busy}
@@ -220,7 +266,13 @@ function QuickConsumeCard({
         />
       </View>
       <View style={styles.row}>
-        <Button label="Terminé" variant="secondary" onPress={onFinished} disabled={busy} style={styles.rowItem} />
+        <Button
+          label="J'ai tout fini"
+          variant="secondary"
+          onPress={onFinished}
+          disabled={busy}
+          style={styles.rowItem}
+        />
         <Button
           label="Autre quantité"
           variant="ghost"

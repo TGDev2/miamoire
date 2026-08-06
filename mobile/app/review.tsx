@@ -4,8 +4,10 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
 import type { ReviewCandidate, StockItem } from '../src/api/types';
+import { useFeedback } from '../src/components/Feedback';
 import { Badge, Button, Card, EmptyState, ErrorBanner, Loader, Stamp } from '../src/components/ui';
 import { deadlineOf } from '../src/deadline';
+import * as haptics from '../src/haptics';
 import { useSession } from '../src/session/SessionContext';
 import { colors, deadlineSentence, radius, spacing, text, thermalFor } from '../src/theme';
 
@@ -19,7 +21,18 @@ export default function ReviewScreen() {
   const router = useRouter();
   const { household, refresh } = useSession();
 
+  const { commitWithUndo } = useFeedback();
+
   const [initialCount, setInitialCount] = useState<number | null>(null);
+  /**
+   * Les lots réellement tranchés, comptés un par un.
+   *
+   * Il se déduisait de la longueur restante de la file — jusqu'à ce qu'une mise
+   * en sourdine en retire cinq d'un coup : la barre bondissait et le compteur
+   * sautait de 2/10 à 7/10 sans qu'on ait vérifié quoi que ce soit. Mettre une
+   * catégorie en sourdine raccourcit la file, ce n'est pas la faire avancer.
+   */
+  const [resolved, setResolved] = useState(0);
   const [queue, setQueue] = useState<ReviewCandidate[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -58,6 +71,7 @@ export default function ReviewScreen() {
   }, []);
 
   const advance = useCallback(() => {
+    setResolved((current) => current + 1);
     setQueue((current) => current.slice(1));
   }, []);
 
@@ -91,23 +105,43 @@ export default function ReviewScreen() {
     }
   }
 
-  async function muteCategory(category: string) {
+  /**
+   * Mettre une catégorie en sourdine était irréversible, sans confirmation, et
+   * à un pouce du bouton « Passer ». Le réglage vit dans le foyer, et rien sur
+   * cet écran ne permettait d'y revenir.
+   */
+  function muteCategory(category: string) {
     if (!household) return;
 
     setActionError(null);
-    setBusy(true);
+    haptics.removed();
 
-    try {
-      await api.updateHousehold(household.id, {
-        mutedReviewCategories: [...household.mutedReviewCategories, category],
-      });
-      await refresh();
-      setQueue((current) => current.filter((candidate) => candidate.stockItem.variant.category !== category));
-    } catch (exception) {
-      setActionError(exception instanceof Error ? exception.message : 'Action impossible.');
-    } finally {
-      setBusy(false);
-    }
+    const previous = queue;
+    const previousCount = initialCount ?? queue.length;
+    const kept = queue.filter((candidate) => candidate.stockItem.variant.category !== category);
+
+    setQueue(kept);
+    // La file raccourcit, elle n'avance pas : le total baisse d'autant.
+    setInitialCount(previousCount - (queue.length - kept.length));
+
+    commitWithUndo({
+      message: `« ${category} » ne sera plus proposé à la vérification`,
+      commit: async () => {
+        await api.updateHousehold(household.id, {
+          mutedReviewCategories: [...household.mutedReviewCategories, category],
+        });
+        await refresh();
+      },
+      onUndo: () => {
+        setQueue(previous);
+        setInitialCount(previousCount);
+      },
+      onFailed: (message) => {
+        setQueue(previous);
+        setInitialCount(previousCount);
+        setActionError(message);
+      },
+    });
   }
 
   function goToDetail(itemId: string) {
@@ -147,7 +181,7 @@ export default function ReviewScreen() {
   const current = queue[0];
   const item = current.stockItem;
   const deadline = deadlineOf(item);
-  const resolvedCount = (initialCount ?? queue.length) - queue.length;
+  const resolvedCount = Math.min(resolved, initialCount ?? resolved);
   const position = resolvedCount + 1;
 
   return (
@@ -235,13 +269,25 @@ export default function ReviewScreen() {
         style={styles.spaced}
       />
 
+      {/* « Passer » était l'élément le moins visible de l'écran, alors que c'est
+          l'issue la plus légitime pour quelqu'un d'incertain — précisément
+          l'état de qui ouvre une file de vérification. */}
       <View style={styles.minorRow}>
-        <Button label="Passer" variant="ghost" onPress={advance} disabled={busy} />
+        <Button
+          label="Passer"
+          variant="secondary"
+          icon="chevron-right"
+          onPress={advance}
+          disabled={busy}
+          hint="Reviendra à la prochaine session"
+          style={styles.minorItem}
+        />
         <Button
           label="Corriger précisément"
           variant="ghost"
           onPress={() => goToDetail(item.id)}
           disabled={busy}
+          style={styles.minorItem}
         />
       </View>
 
@@ -287,5 +333,6 @@ const styles = StyleSheet.create({
   spaced: { marginTop: spacing.md },
   row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   rowItem: { flex: 1 },
-  minorRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.sm },
+  minorRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  minorItem: { flex: 1 },
 });
