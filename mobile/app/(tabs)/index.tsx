@@ -175,7 +175,7 @@ export default function StockScreen() {
     const operationKey = generateOperationKey();
 
     commitWithUndo({
-      message: `${item.variant.culinaryLabel} — ${unitTaken(item)} retiré${feminine(item) ? 'e' : ''}`,
+      message: `${item.variant.culinaryLabel} — 1 ${unitTaken(item)} en moins`,
       tone: thermalFor(deadlineOf(item).days),
       commit: async () => {
         await api.consume(item.id, { mode: 'package' }, operationKey);
@@ -213,7 +213,14 @@ export default function StockScreen() {
         ListHeaderComponent={
           <View>
             <ScreenHeader
-              eyebrow={inventoryLabel(inventory.length, urgentCount, archived, null === items)}
+              eyebrow={inventoryLabel({
+                shown: visible.length,
+                total: inventory.length,
+                urgent: urgentCount,
+                archived,
+                filtering,
+                loading: null === items,
+              })}
               title={archived ? 'Archives' : 'Mon stock'}
             />
 
@@ -355,33 +362,56 @@ export default function StockScreen() {
   );
 }
 
-/** La rubrique du titre porte le compte réel — pas un mot de remplissage. */
-function inventoryLabel(count: number, urgent: number, archived: boolean, loading: boolean): string {
+/**
+ * La rubrique du titre porte le compte réel — pas un mot de remplissage.
+ *
+ * Filtrée, elle dit ce que l'écran montre ET sur combien : « 11 lots » posé
+ * au-dessus d'une liste de trois se lit comme une liste incomplète. Le compteur
+ * d'urgents, lui, ne s'affiche que hors filtre : il décrit le stock entier, et
+ * le mêler à un sous-ensemble le rendrait à nouveau ambigu.
+ */
+function inventoryLabel({
+  shown,
+  total,
+  urgent,
+  archived,
+  filtering,
+  loading,
+}: {
+  shown: number;
+  total: number;
+  urgent: number;
+  archived: boolean;
+  filtering: boolean;
+  loading: boolean;
+}): string {
   if (loading) return 'Lecture du stock';
-  if (archived) return `${count} lot${count > 1 ? 's' : ''} archivé${count > 1 ? 's' : ''}`;
-  if (0 === count) return 'Aucun lot';
 
-  const lots = `${count} lot${count > 1 ? 's' : ''}`;
+  const lots = (count: number) => `${count} lot${count > 1 ? 's' : ''}`;
 
-  return urgent > 0 ? `${lots} · ${urgent} à traiter` : lots;
+  if (filtering) return `${lots(shown)} sur ${total}`;
+  if (archived) return `${lots(total)} archivé${total > 1 ? 's' : ''}`;
+  if (0 === total) return 'Aucun lot';
+
+  return urgent > 0 ? `${lots(total)} · ${urgent} à traiter` : lots(total);
 }
 
 /**
- * « Un exemplaire » ne veut rien dire d'une courgette.
+ * Ce dont on retire une unité — le nom, jamais la phrase.
  *
- * Le geste serveur est le même (`mode: 'package'`), le mot ne l'est pas — c'est
- * le vocabulaire que `quick-consume` emploie déjà, repris ici pour que le même
- * retrait s'annonce de la même façon aux deux endroits.
+ * « Un exemplaire » ne veut rien dire d'une courgette : le geste serveur est le
+ * même (`mode: 'package'`), le mot ne l'est pas.
+ *
+ * Aucune tentative d'accorder un article sur le nom de l'aliment : il est
+ * enregistré tel que la personne l'a écrit, souvent au pluriel, et « un
+ * courgettes retiré » est exactement ce que produit une règle qui essaie. Les
+ * appelants composent donc « 1 <nom> en moins », qui ne s'accorde avec rien.
  */
 function unitTaken(item: StockItem): string {
-  if ('fresh' !== item.variant.nature) return 'un exemplaire';
-  if (!item.isDiscreteUnit) return 'une portion';
+  if ('fresh' !== item.variant.nature) return 'exemplaire';
+  if (!item.isDiscreteUnit) return 'portion';
 
-  return 'unité' === item.unitLabel ? `un ${item.variant.name.toLowerCase()}` : `un ${item.unitLabel}`;
-}
-
-function feminine(item: StockItem): boolean {
-  return 'fresh' === item.variant.nature && !item.isDiscreteUnit;
+  return item.unitLabel;
 }
 
 /**
@@ -455,7 +485,7 @@ const StockRow = React.memo(function StockRow({
           onPress={onConsumeOne}
           disabled={pending}
           accessibilityRole="button"
-          accessibilityLabel={`Retirer ${unitTaken(item)} de ${item.variant.culinaryLabel}`}
+          accessibilityLabel={`Retirer 1 ${unitTaken(item)} de ${item.variant.culinaryLabel}`}
           accessibilityState={{ disabled: pending }}
           style={({ pressed }) => [styles.take, pressed && !pending && styles.takePressed]}
         >

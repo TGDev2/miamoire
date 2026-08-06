@@ -32,13 +32,22 @@ import * as haptics from '../haptics';
 import { colors, font, radius, spacing, text, thermal } from '../theme';
 
 /**
- * Ce qui se lit comme une mesure dans une instruction.
+ * Ce qui se lit comme une durée ou une température dans une instruction.
  *
- * `10 min`, `180 °C`, `2 h` — la règle typographique de l'application veut que
- * tout ce qui est chiffré soit composé en machine. Ici elle a un usage concret :
- * ce sont exactement les fragments qu'on cherche des yeux en relevant la tête.
+ * `10 min`, `180 °C`, `3 à 4 minutes` — la règle typographique de l'application
+ * veut que tout ce qui est chiffré soit composé en machine. Ici elle a un usage
+ * concret : ce sont exactement les fragments qu'on cherche des yeux en relevant
+ * la tête d'une casserole.
+ *
+ * L'intervalle fait partie du motif. Sans lui, « pendant 3 à 4 minutes » ne
+ * détachait que « 4 minutes » et donnait à lire une fourchette coupée en deux.
+ *
+ * Les poids et les longueurs restent en texte courant, volontairement : on les
+ * a mesurés à la préparation, et détacher la moitié d'une phrase ne détache
+ * plus rien.
  */
-const MEASURE = /(\d+(?:[.,]\d+)?\s?(?:°C|°|min(?:utes?)?|h(?:eures?)?|s(?:econdes?)?)\b)/gi;
+const MEASURE =
+  /(\d+(?:[.,]\d+)?(?:\s?(?:à|-|–)\s?\d+(?:[.,]\d+)?)?\s?(?:°C|°|min(?:utes?)?|h(?:eures?)?|secondes?)\b)/gi;
 
 function StepText({ value }: { value: string }) {
   const parts = useMemo(() => value.split(MEASURE), [value]);
