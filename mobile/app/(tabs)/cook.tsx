@@ -1,5 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
@@ -20,11 +20,37 @@ import {
   useTopInset,
 } from '../../src/components/ui';
 import { IngredientPicker } from '../../src/components/IngredientPicker';
-import { useRecipes } from '../../src/recipes/RecipeContext';
-import { spacing, text } from '../../src/theme';
+import * as haptics from '../../src/haptics';
+import { useRecipes, type GenerationRequest } from '../../src/recipes/RecipeContext';
+import {
+  defaultPreferences,
+  readPreferences,
+  writePreferences,
+  type CookPreferences,
+} from '../../src/recipes/preferences';
+import { colors, font, spacing, text, thermal } from '../../src/theme';
 
-const TIME_OPTIONS = [15, 30, 45, 60];
+// Un plat mijoté du dimanche n'entrait dans aucune des quatre bornes : la plus
+// longue disait « moins de 60 min », et il n'existait aucune façon de dire
+// « prenez le temps qu'il faut ».
+const TIME_OPTIONS = [15, 30, 45, 60, 90];
 const MAX_PRIORITY_KEYS = 3;
+
+/**
+ * Ce que le serveur fait pendant qu'on attend, dans l'ordre où il le fait.
+ *
+ * Ce n'est pas une barre de progression déguisée : le serveur n'en rend aucune,
+ * et prétendre le contraire serait mentir. C'est la vraie séquence du
+ * traitement — agréger l'inventaire, interroger le modèle, revérifier
+ * exclusions et quantités — avec des seuils tirés des durées observées. Le
+ * chiffre qui, lui, est exact, c'est le temps écoulé.
+ */
+const PHASES = [
+  { after: 0, label: 'Lecture de votre inventaire' },
+  { after: 8, label: 'Composition des propositions' },
+  { after: 26, label: 'Vérification de vos exclusions et de vos quantités' },
+  { after: 55, label: "C'est plus long que d'habitude. On attend encore." },
+];
 
 export default function CookScreen() {
   const router = useRouter();
@@ -34,14 +60,10 @@ export default function CookScreen() {
 
   const [reference, setReference] = useState<Reference | null>(null);
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
-  // Un foyer sans membre déclaré retombe sur 2 convives, une supposition
-  // raisonnable plutôt qu'une vraie donnée manquante.
-  const [people, setPeople] = useState(() => Math.max(1, household?.members.length ?? 2));
-  const [mealType, setMealType] = useState<string | null>(null);
-  const [mealTemperature, setMealTemperature] = useState<string | null>(null);
-  const [maxMinutes, setMaxMinutes] = useState<number | null>(null);
-  const [equipment, setEquipment] = useState<string[]>([]);
-  const [allowExtra, setAllowExtra] = useState(false);
+  /** Les six réglages retenus d'une génération à l'autre. Voir `preferences.ts`. */
+  const [settings, setSettings] = useState<CookPreferences>(() =>
+    defaultPreferences(household?.members.length ?? 0),
+  );
   /**
    * Aliments imposés aux trois recettes, jusqu'à 3. Vide = aucune contrainte,
    * le défaut. Chacun peut porter une quantité à écouler, elle aussi facultative.
@@ -49,9 +71,21 @@ export default function CookScreen() {
   const [priorities, setPriorities] = useState<Priority[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  /** L'écran est-il celui qu'on regarde ? Décide de l'ouverture automatique des résultats. */
+  const [focused, setFocused] = useState(false);
 
-  const { setSuggestion } = useRecipes();
+  const { generation, elapsed, generate, cancelGeneration, acknowledgeGeneration } = useRecipes();
+
+  const { people, mealType, mealTemperature, maxMinutes, equipment, allowExtra } = settings;
+
+  /** Un réglage change : il s'applique et il est retenu, dans le même geste. */
+  const update = useCallback((patch: Partial<CookPreferences>) => {
+    setSettings((current) => {
+      const next = { ...current, ...patch };
+      void writePreferences(next);
+      return next;
+    });
+  }, []);
 
   // Mémorise la dernière valeur de `priorityKeys` appliquée depuis les params,
   // qui restent une simple liste de clés : « Aujourd'hui » désigne des aliments
@@ -60,11 +94,25 @@ export default function CookScreen() {
   // ce qui écraserait silencieusement une édition faite entre-temps par l'utilisateur.
   const appliedParams = useRef<string | null>(null);
 
+  /** Ne relire le disque qu'une fois : ensuite, l'écran fait foi. */
+  const settingsRestored = useRef(false);
+
   const load = useCallback(async () => {
     try {
       const [ref, inv] = await Promise.all([api.reference(), api.inventory()]);
       setReference(ref);
       setInventory(inv);
+
+      if (!settingsRestored.current) {
+        settingsRestored.current = true;
+        setSettings(
+          await readPreferences(household?.members.length ?? 0, {
+            mealTypes: ref.mealTypes.map((option) => option.value),
+            mealTemperatures: ref.mealTemperatures.map((option) => option.value),
+            equipment: ref.equipment.map((option) => option.value),
+          }),
+        );
+      }
 
       const incoming = params.priorityKeys ?? null;
       const seeding = incoming !== null && incoming !== appliedParams.current;
@@ -87,42 +135,57 @@ export default function CookScreen() {
     } finally {
       setLoading(false);
     }
-  }, [params.priorityKeys]);
+  }, [household?.members.length, params.priorityKeys]);
 
   useFocusEffect(
     useCallback(() => {
       load();
+      setFocused(true);
+
+      return () => setFocused(false);
     }, [load]),
   );
 
   function toggleEquipment(value: string) {
-    setEquipment((current) =>
-      current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value],
-    );
+    haptics.select();
+    update({
+      equipment: equipment.includes(value)
+        ? equipment.filter((entry) => entry !== value)
+        : [...equipment, value],
+    });
   }
 
-  async function generate() {
-    setError(null);
-    setBusy(true);
-    try {
-      const result = await api.suggestRecipes({
-        people,
-        mealType,
-        mealTemperature,
-        maxMinutes,
-        equipment,
-        exclusions: [],
-        allowExtraIngredients: allowExtra,
-        priorities,
-      });
-      setSuggestion(result);
+  const request: GenerationRequest = {
+    people,
+    mealType,
+    mealTemperature,
+    maxMinutes,
+    equipment,
+    exclusions: [],
+    allowExtraIngredients: allowExtra,
+    priorities,
+  };
+
+  /**
+   * Le résultat s'ouvre tout seul si l'on a attendu devant l'écran, et attend
+   * derrière un bouton si l'on est parti.
+   *
+   * C'est la transition qui décide, pas l'état : sans mémoire du statut
+   * précédent, revenir sur « Cuisiner » rouvrirait les résultats à chaque fois,
+   * y compris une heure plus tard.
+   */
+  const previousStatus = useRef(generation.status);
+
+  useEffect(() => {
+    const was = previousStatus.current;
+    previousStatus.current = generation.status;
+
+    if (focused && 'running' === was && 'ready' === generation.status) {
+      haptics.success();
+      acknowledgeGeneration();
       router.push('/recipes');
-    } catch (exception) {
-      setError(exception instanceof Error ? exception.message : 'Génération impossible.');
-    } finally {
-      setBusy(false);
     }
-  }
+  }, [acknowledgeGeneration, focused, generation.status, router]);
 
   // « Courgettes (400 g) » : la quantité imposée se relit juste au-dessus du
   // bouton, là où on décide de lancer — pas seulement dans la feuille où on l'a
@@ -165,6 +228,28 @@ export default function CookScreen() {
 
       <ErrorBanner message={error} />
 
+      {/* Une génération lancée depuis cet écran puis quittée n'était visible
+          nulle part au retour : elle attend désormais ici. */}
+      {'running' === generation.status ? (
+        <GeneratingCard elapsed={elapsed} onCancel={cancelGeneration} />
+      ) : null}
+
+      {'ready' === generation.status ? (
+        <Card level="safe" style={styles.stateCard}>
+          <Text style={text.label}>Génération terminée</Text>
+          <Text style={[text.heading, styles.stateTitle]}>Vos propositions sont prêtes</Text>
+          <Button
+            label="Voir les recettes"
+            icon="arrow-right"
+            onPress={() => {
+              acknowledgeGeneration();
+              router.push('/recipes');
+            }}
+            style={styles.stateAction}
+          />
+        </Card>
+      ) : null}
+
       <Card style={styles.linkCard}>
         <Row
           icon="calendar-blank-outline"
@@ -181,23 +266,32 @@ export default function CookScreen() {
         />
       </Card>
 
+      {/* Les six réglages ci-dessous sont retenus d'une fois sur l'autre. Une
+          puce déjà choisie se retape pour revenir à « peu importe » — ce que la
+          rubrique dit maintenant, faute de quoi le geste ne s'invente pas. */}
       <SectionTitle>Convives à table</SectionTitle>
       <Stepper
         value={people}
         unitLabel={people > 1 ? 'personnes' : 'personne'}
-        onChange={setPeople}
+        onChange={(value) => update({ people: value })}
         min={1}
         max={20}
       />
 
       <SectionTitle>Type de repas</SectionTitle>
+      <Text style={[text.small, styles.sectionHint]}>
+        Facultatif — retapez pour revenir à « peu importe ».
+      </Text>
       <View style={styles.chips}>
         {reference?.mealTypes.map((option) => (
           <Chip
             key={option.value}
             label={option.label}
             selected={mealType === option.value}
-            onPress={() => setMealType(mealType === option.value ? null : option.value)}
+            onPress={() => {
+              haptics.select();
+              update({ mealType: mealType === option.value ? null : option.value });
+            }}
           />
         ))}
       </View>
@@ -209,7 +303,12 @@ export default function CookScreen() {
             key={option.value}
             label={option.label}
             selected={mealTemperature === option.value}
-            onPress={() => setMealTemperature(mealTemperature === option.value ? null : option.value)}
+            onPress={() => {
+              haptics.select();
+              update({
+                mealTemperature: mealTemperature === option.value ? null : option.value,
+              });
+            }}
           />
         ))}
       </View>
@@ -221,7 +320,10 @@ export default function CookScreen() {
             key={minutes}
             label={`moins de ${minutes} min`}
             selected={maxMinutes === minutes}
-            onPress={() => setMaxMinutes(maxMinutes === minutes ? null : minutes)}
+            onPress={() => {
+              haptics.select();
+              update({ maxMinutes: maxMinutes === minutes ? null : minutes });
+            }}
           />
         ))}
       </View>
@@ -256,7 +358,7 @@ export default function CookScreen() {
           label="Autoriser quelques ingrédients manquants"
           hint="Désactivé, seules les recettes réalisables avec votre stock sont proposées."
           value={allowExtra}
-          onValueChange={setAllowExtra}
+          onValueChange={(value) => update({ allowExtra: value })}
         />
       </Card>
 
@@ -293,16 +395,97 @@ export default function CookScreen() {
         </Card>
       )}
 
-      <Button label="Proposer 3 recettes" onPress={generate} loading={busy} style={styles.submit} />
+      {/* L'échec s'affichait dans la bannière du haut, à dix balayages du geste
+          qui l'avait causé : on regardait le bouton, le message était ailleurs.
+          Il se lit ici, avec de quoi repartir sans retoucher le formulaire. */}
+      {'error' === generation.status ? (
+        <Card level="critical" style={styles.stateCard}>
+          <Text style={text.label}>La génération a échoué</Text>
+          <Text style={[text.body, styles.stateTitle]}>{generation.message}</Text>
+          <View style={styles.retryRow}>
+            <Button
+              label="Réessayer"
+              icon="refresh"
+              onPress={() => generate(generation.request)}
+              style={styles.retryMain}
+            />
+            <Button label="Fermer" variant="ghost" onPress={acknowledgeGeneration} />
+          </View>
+        </Card>
+      ) : null}
+
+      <Button
+        label="Proposer 3 recettes"
+        onPress={() => {
+          haptics.tap();
+          generate(request);
+        }}
+        loading={'running' === generation.status}
+        disabled={'running' === generation.status}
+        hint="Compte environ une minute : le modèle lit tout votre inventaire"
+        style={styles.submit}
+      />
       {/* Rappelé juste au-dessus du geste : la contrainte se pose en haut de
           l'écran et s'applique en bas, et rien ne la rappelait entre les deux. */}
       {priorityLabels.length > 0 ? (
         <Text style={[text.label, styles.submitNote]}>Autour de : {priorityLabels.join(', ')}</Text>
       ) : null}
       <Text style={[text.small, styles.disclaimer]}>
-        Rien ne quitte votre stock sans votre confirmation.
+        Rien ne quitte votre stock sans votre confirmation. Comptez environ une minute.
       </Text>
     </ScrollView>
+  );
+}
+
+/** `73` → `01:13`. Le seul chiffre exact de l'attente, dans la voix machine. */
+function clock(seconds: number): string {
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Ce qu'on regarde pendant quarante à cinquante secondes.
+ *
+ * Il n'y avait rien : le bouton perdait son libellé au profit d'un indicateur,
+ * et l'écran ne disait plus un mot jusqu'au résultat. On ne pouvait ni savoir
+ * où en était la demande, ni renoncer, ni quitter l'écran sans la perdre.
+ */
+function GeneratingCard({ elapsed, onCancel }: { elapsed: number; onCancel: () => void }) {
+  const phase = PHASES.filter((entry) => elapsed >= entry.after).at(-1) ?? PHASES[0];
+  const step = PHASES.indexOf(phase) + 1;
+
+  return (
+    <Card level="safe" style={styles.stateCard}>
+      <View style={styles.waitHead}>
+        <Text style={text.label}>Génération en cours</Text>
+        <Text style={styles.clock}>{clock(elapsed)}</Text>
+      </View>
+
+      <Text
+        style={[text.heading, styles.stateTitle]}
+        accessibilityLiveRegion="polite"
+        accessibilityLabel={`${phase.label}. ${elapsed} secondes écoulées.`}
+      >
+        {phase.label}
+      </Text>
+
+      {/* Quatre segments pour quatre étapes réelles du traitement — pas une
+          progression continue, que le serveur ne rend pas et qu'il faudrait
+          donc inventer. */}
+      <View style={styles.track} importantForAccessibility="no-hide-descendants">
+        {PHASES.map((entry, index) => (
+          <View
+            key={entry.after}
+            style={[styles.segment, index < step ? styles.segmentDone : null]}
+          />
+        ))}
+      </View>
+
+      <Text style={[text.small, styles.stateHint]}>
+        Vous pouvez quitter cet écran : la génération continue, et le résultat vous attendra ici.
+      </Text>
+
+      <Button label="Annuler" variant="ghost" onPress={onCancel} style={styles.stateAction} />
+    </Card>
   );
 }
 
@@ -310,10 +493,25 @@ const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   linkCard: { padding: 0 },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
+  sectionHint: { marginTop: -spacing.sm, marginBottom: spacing.sm },
   toggleCard: { padding: 0 },
   exclusionBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   exclusionHint: { marginTop: spacing.md },
   submit: { marginTop: spacing.xl },
   submitNote: { textAlign: 'center', marginTop: spacing.md },
   disclaimer: { textAlign: 'center', marginTop: spacing.sm },
+
+  stateCard: { marginBottom: spacing.lg },
+  stateTitle: { marginTop: spacing.sm },
+  stateHint: { marginTop: spacing.md },
+  stateAction: { marginTop: spacing.md },
+  retryRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
+  retryMain: { flex: 1 },
+
+  waitHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  clock: { fontFamily: font.monoSemiBold, fontSize: 15, lineHeight: 19, color: colors.ink },
+
+  track: { flexDirection: 'row', gap: 3, marginTop: spacing.lg },
+  segment: { flex: 1, height: 3, borderRadius: 1, backgroundColor: colors.border },
+  segmentDone: { backgroundColor: thermal.safe.line },
 });

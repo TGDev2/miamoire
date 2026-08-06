@@ -551,16 +551,37 @@ export const api = {
    * est vérifiée après génération ; celle d'une simple préférence reste un
    * souhait, comme la préférence elle-même.
    */
-  suggestRecipes: (body: {
-    people: number;
-    mealType?: string | null;
-    mealTemperature?: string | null;
-    maxMinutes?: number | null;
-    equipment: string[];
-    exclusions: string[];
-    allowExtraIngredients: boolean;
-    priorities?: Priority[];
-  }) => request<SuggestionResponse>('/recipes/suggest', { method: 'POST', body }),
+  /**
+   * La seule requête de l'application qui se compte en dizaines de secondes :
+   * elle traverse un modèle de langage. Elle est donc la seule à s'annuler, et
+   * la seule à mériter un message de dépassement à elle.
+   *
+   * Cent vingt secondes : le serveur rend sa main à quatre-vingt-dix, le client
+   * lui laisse de quoi le faire plutôt que de couper avant lui.
+   */
+  suggestRecipes: (
+    body: {
+      people: number;
+      mealType?: string | null;
+      mealTemperature?: string | null;
+      maxMinutes?: number | null;
+      equipment: string[];
+      exclusions: string[];
+      allowExtraIngredients: boolean;
+      priorities?: Priority[];
+    },
+    signal?: AbortSignal,
+  ) =>
+    request<SuggestionResponse>('/recipes/suggest', {
+      method: 'POST',
+      body,
+      signal,
+      timeout: {
+        ms: 120_000,
+        message:
+          'La génération a dépassé deux minutes et a été interrompue. Réessayez, ou réduisez le nombre d\'aliments imposés.',
+      },
+    }),
 
   savedRecipes: () => request<{ recipes: SavedRecipe[] }>('/recipes/saved'),
 

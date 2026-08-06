@@ -1,25 +1,103 @@
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import type { Feasibility, PriorityOutcome, Recipe } from '../src/api/types';
-import { Badge, Card, EmptyState, Icon } from '../src/components/ui';
+import { api } from '../src/api/client';
+import type { Feasibility, InventorySummary, PriorityOutcome, Recipe } from '../src/api/types';
+import { Badge, Button, Card, EmptyState, Icon, Stamp, fromIsoDate } from '../src/components/ui';
+import * as haptics from '../src/haptics';
 import { useRecipes } from '../src/recipes/RecipeContext';
-import { colors, feasibilityPresentation, font, radius, spacing, text, thermal } from '../src/theme';
+import {
+  colors,
+  feasibilityPresentation,
+  font,
+  radius,
+  spacing,
+  text,
+  thermal,
+  thermalFor,
+} from '../src/theme';
 
 /** Ordre d'affichage : le plus immédiatement réalisable en premier. */
 const ORDER: Feasibility[] = ['ready', 'adapted', 'needs_shopping'];
 
+/** L'échéance d'un ingrédient de l'inventaire, réduite à ce que le cachet imprime. */
+interface Urgency {
+  days: number;
+  date: string;
+  estimated: boolean;
+}
+
+/** « 2026-08-09 » → 3, compté en jours entiers et en heure locale. */
+function daysUntil(iso: string): number {
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+
+  return Math.round((fromIsoDate(iso).getTime() - midnight.getTime()) / 86_400_000);
+}
+
 export default function RecipeListScreen() {
   const router = useRouter();
-  const { suggestion } = useRecipes();
+  const { suggestion, lastRequest, generate } = useRecipes();
 
-  if (!suggestion || suggestion.recipes.length === 0) {
+  /**
+   * L'inventaire, uniquement pour ses échéances.
+   *
+   * L'échelle thermique — la seule couleur de l'application, celle qui dit le
+   * temps qui reste — disparaissait de tout le parcours recette. Or c'est
+   * exactement l'écran où l'on choisit quoi sauver : une proposition qui écoule
+   * un lot à J−1 ne le montrait nulle part.
+   */
+  const [inventory, setInventory] = useState<InventorySummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api
+      .inventory()
+      .then((value) => {
+        if (!cancelled) setInventory(value);
+      })
+      // Sans les échéances, les cartes se lisent comme avant : ce n'est pas bloquant.
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const urgencies = useMemo(() => {
+    const map = new Map<string, Urgency>();
+
+    for (const ingredient of inventory?.ingredients ?? []) {
+      if (null === ingredient.earliestExpiration) continue;
+
+      map.set(ingredient.key, {
+        days: daysUntil(ingredient.earliestExpiration),
+        date: ingredient.earliestExpiration,
+        estimated: ingredient.expirationIsEstimated,
+      });
+    }
+
+    return map;
+  }, [inventory]);
+
+  /** Rejouer les mêmes réglages : l'attente, elle, se regarde sur « Cuisiner ». */
+  function regenerate() {
+    if (null === lastRequest) return;
+
+    haptics.tap();
+    generate(lastRequest);
+    router.back();
+  }
+
+  if (!suggestion || 0 === suggestion.recipes.length) {
     return (
       <EmptyState
         icon="pot-steam-outline"
         title="Aucune proposition"
-        description="Revenez à l'onglet Cuisiner pour générer des idées de repas."
+        description="Réglez les convives, le temps et les équipements, puis lancez une génération."
+        action={<Button label="Aller à Cuisiner" onPress={() => router.back()} />}
       />
     );
   }
@@ -57,7 +135,7 @@ export default function RecipeListScreen() {
           <View style={styles.noticeHead}>
             <Icon name="shield-check-outline" size={18} />
             <Text style={text.label}>
-              {suggestion.rejected.length === 1
+              {1 === suggestion.rejected.length
                 ? '1 proposition écartée'
                 : `${suggestion.rejected.length} propositions écartées`}
             </Text>
@@ -74,6 +152,11 @@ export default function RecipeListScreen() {
         </Card>
       ) : null}
 
+      {/* L'ordre était imposé et jamais expliqué. */}
+      <Text style={[text.label, styles.orderNote]}>
+        De la plus immédiatement réalisable à celle qui demande un complément
+      </Text>
+
       {sorted.map((recipe) => {
         const originalIndex = suggestion.recipes.indexOf(recipe);
         return (
@@ -81,10 +164,22 @@ export default function RecipeListScreen() {
             key={`${recipe.recipeName}-${originalIndex}`}
             recipe={recipe}
             desiredIngredients={suggestion.desiredIngredients}
+            urgencies={urgencies}
             onPress={() => router.push(`/recipe/${originalIndex}`)}
           />
         );
       })}
+
+      {null === lastRequest ? null : (
+        <Button
+          label="Relancer avec les mêmes réglages"
+          variant="secondary"
+          icon="refresh"
+          onPress={regenerate}
+          hint="Reprend convives, temps et équipements sans repasser par le formulaire"
+          style={styles.again}
+        />
+      )}
     </ScrollView>
   );
 }
@@ -105,24 +200,56 @@ function usedDesiredLabels(recipe: Recipe, desiredIngredients: PriorityOutcome[]
     .map((entry) => entry.label);
 }
 
+/**
+ * Le lot le plus pressé que la recette écoule.
+ *
+ * C'est le seul chiffre qui départage vraiment trois propositions également
+ * réalisables : celle qui sauve ce qui périme demain n'est pas l'égale de celle
+ * qui entame un paquet de riz.
+ */
+function mostUrgent(recipe: Recipe, urgencies: Map<string, Urgency>): Urgency | null {
+  let earliest: Urgency | null = null;
+
+  for (const ingredient of recipe.ingredientsFromInventory) {
+    // `key` est facultatif sur une recette enregistrée avant ce champ : sans
+    // clé, l'ingrédient ne peut être rattaché à aucun lot.
+    if (undefined === ingredient.key) continue;
+
+    const urgency = urgencies.get(ingredient.key);
+    if (undefined === urgency) continue;
+    if (null === earliest || urgency.days < earliest.days) earliest = urgency;
+  }
+
+  return earliest;
+}
+
 function RecipeCard({
   recipe,
   desiredIngredients,
+  urgencies,
   onPress,
 }: {
   recipe: Recipe;
   desiredIngredients: PriorityOutcome[];
+  urgencies: Map<string, Urgency>;
   onPress: () => void;
 }) {
   const presentation = feasibilityPresentation[recipe.feasibility] ?? feasibilityPresentation.ready;
   const missingEssential = recipe.missingIngredients.filter((entry) => entry.essential);
   const usedDesired = usedDesiredLabels(recipe, desiredIngredients);
+  const urgency = mostUrgent(recipe, urgencies);
+
+  // Le rail thermique de la carte reprend l'échéance qu'elle sauve : une colonne
+  // de propositions se hiérarchise alors d'un regard, comme une liste de lots.
+  const level = null === urgency ? undefined : thermalFor(urgency.days);
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={`${recipe.recipeName}. ${presentation.label}. ${recipe.preparationTime} minutes, ${recipe.servings} ${recipe.servings > 1 ? 'personnes' : 'personne'}, ${recipe.ingredientsFromInventory.length} ingrédients de votre stock${
+        null === urgency ? '' : `. Sauve un lot à ${urgency.days} jours`
+      }${
         missingEssential.length > 0
           ? `. À acheter : ${missingEssential.map((entry) => entry.label).join(', ')}`
           : ''
@@ -130,17 +257,32 @@ function RecipeCard({
       accessibilityHint="Ouvre la recette et sa préparation"
       style={({ pressed }) => [styles.card, pressed && styles.pressed]}
     >
-      <Badge label={presentation.label} level={presentation.level} />
+      {undefined === level ? null : (
+        <View style={[styles.rail, { backgroundColor: thermal[level].line }]} />
+      )}
+
+      <View style={styles.cardHead}>
+        <Badge label={presentation.label} level={presentation.level} />
+        {null === urgency ? null : (
+          <Stamp days={urgency.days} date={urgency.date} estimated={urgency.estimated} decorative />
+        )}
+      </View>
 
       <Text style={[text.title, styles.title]}>{recipe.recipeName}</Text>
       <Text style={[text.small, styles.summary]}>{recipe.summary}</Text>
 
       {/* Trois mesures alignées, dans la voix machine : le temps, les convives,
-          ce que la recette prend déjà chez vous. */}
+          ce que la recette prend déjà chez vous. Ce sont les seuls chiffres
+          comparables entre les propositions, et ils étaient les plus petits de
+          l'écran — la valeur passe devant, la rubrique la légende. */}
       <View style={styles.metaRow}>
-        <Text style={styles.meta}>{recipe.preparationTime} min</Text>
-        <Text style={styles.meta}>{recipe.servings} pers.</Text>
-        <Text style={styles.meta}>{recipe.ingredientsFromInventory.length} du stock</Text>
+        <Measure value={`${recipe.preparationTime}`} unit="min" caption="Préparation" />
+        <Measure value={`${recipe.servings}`} unit="pers." caption="Convives" />
+        <Measure
+          value={`${recipe.ingredientsFromInventory.length}`}
+          unit=""
+          caption="De votre stock"
+        />
       </View>
 
       {missingEssential.length > 0 ? (
@@ -162,6 +304,20 @@ function RecipeCard({
   );
 }
 
+function Measure({ value, unit, caption }: { value: string; unit: string; caption: string }) {
+  return (
+    <View style={styles.measure}>
+      <Text style={styles.measureValue} numberOfLines={1}>
+        {value}
+        {unit ? <Text style={styles.measureUnit}> {unit}</Text> : null}
+      </Text>
+      <Text style={styles.measureCaption} numberOfLines={1}>
+        {caption}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl },
   card: {
@@ -170,21 +326,28 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.lg,
     padding: spacing.lg,
+    paddingLeft: spacing.lg + spacing.xs,
     marginBottom: spacing.md,
+    overflow: 'hidden',
   },
   pressed: { backgroundColor: colors.surfaceSunk },
+  rail: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
+  cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   title: { marginTop: spacing.md },
   summary: { marginTop: spacing.xs },
+
   metaRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.lg,
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  meta: { fontFamily: font.monoMedium, fontSize: 11, lineHeight: 15, color: colors.ink },
+  measure: { flex: 1 },
+  measureValue: { fontFamily: font.monoSemiBold, fontSize: 17, lineHeight: 22, color: colors.ink },
+  measureUnit: { fontFamily: font.mono, fontSize: 11, color: colors.inkMuted },
+  measureCaption: { ...text.label, fontSize: 9, marginTop: 2 },
+
   missing: { marginTop: spacing.md, color: thermal.soon.line, fontFamily: font.sansMedium },
   detail: { marginTop: spacing.xs },
 
@@ -193,4 +356,7 @@ const styles = StyleSheet.create({
   noticeTitle: { marginTop: spacing.sm },
   noticeLine: { marginTop: spacing.xs },
   noticeFooter: { marginTop: spacing.sm },
+
+  orderNote: { marginBottom: spacing.md },
+  again: { marginTop: spacing.md },
 });
