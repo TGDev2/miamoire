@@ -591,6 +591,33 @@ class StockServiceTest extends TestCase
         self::assertCount(1, $item->getMovements(), 'Archiver deux fois n\'écrit qu\'un mouvement.');
     }
 
+    /**
+     * Refaire l'inventaire : chaque lot est rangé avec son motif, et le compte
+     * ne retient que ce qui a réellement changé — c'est lui que l'application
+     * annonce à l'utilisateur.
+     */
+    public function testArchivingEverythingCountsOnlyWhatActuallyMoved(): void
+    {
+        $tomatoes = $this->item(800, Unit::Gram);
+        $eggs = $this->item(6, Unit::Piece);
+        $alreadyArchived = $this->item(500, Unit::Gram);
+        $this->service->archive($alreadyArchived, $this->member);
+
+        $archived = $this->service->archiveAll([$tomatoes, $eggs, $alreadyArchived], $this->member);
+
+        self::assertSame(2, $archived);
+        self::assertTrue($tomatoes->isArchived());
+        self::assertTrue($eggs->isArchived());
+        self::assertSame(800.0, $tomatoes->getRemainingQuantity(), 'Ranger le stock ne consomme rien.');
+        self::assertCount(1, $alreadyArchived->getMovements(), 'Un lot déjà rangé ne l\'est pas deux fois.');
+
+        $movement = $tomatoes->getMovements()->first();
+        self::assertSame(MovementType::Correction, $movement->getType());
+        self::assertSame(0.0, $movement->getQuantity());
+        self::assertSame('Inventaire remis à zéro', $movement->getReason());
+        self::assertSame($this->member, $movement->getCreatedBy());
+    }
+
     /** Le sens même du mot « réversible » : on retrouve le lot tel qu'on l'a laissé. */
     public function testRestoringBringsTheLotBackWithItsQuantity(): void
     {

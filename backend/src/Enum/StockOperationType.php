@@ -16,11 +16,19 @@ enum StockOperationType: string
      */
     case StockItemMutation = 'stock_item_mutation';
 
+    /**
+     * Tout l'inventaire rangé d'un geste, pour le refaire après une absence.
+     * Un cas à part : ce n'est pas la mutation d'un lot, et le journal doit
+     * pouvoir dire « c'est ici qu'on est reparti de zéro ».
+     */
+    case InventoryReset = 'inventory_reset';
+
     public function label(): string
     {
         return match ($this) {
             self::RecipeConfirmation => 'Confirmation de recette',
             self::StockItemMutation => 'Modification de lot',
+            self::InventoryReset => 'Inventaire remis à zéro',
         };
     }
 }

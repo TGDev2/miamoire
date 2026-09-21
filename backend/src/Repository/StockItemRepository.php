@@ -117,6 +117,41 @@ class StockItemRepository extends ServiceEntityRepository
     }
 
     /**
+     * L'inventaire courant, verrouillé pour la durée de la transaction en cours.
+     *
+     * Même règle que `ownedStockItemForUpdate()` : verrouiller AVANT de lire.
+     * On ne sélectionne donc que les identifiants, puis chaque lot est chargé
+     * par le verrou lui-même — une relecture par requête rendrait les lots
+     * apparus entre-temps sans verrou. Un lot vidé ou archivé pendant l'attente
+     * n'est plus de l'inventaire : il est écarté ici, sur l'état relu.
+     *
+     * @return list<StockItem>
+     */
+    public function findAvailableForUpdate(Household $household): array
+    {
+        // Une colonne scalaire revient brute, en chaîne : le type `uuid` n'est
+        // appliqué qu'à l'hydratation d'une entité.
+        $ids = array_map(
+            static fn (string $id): Uuid => Uuid::fromString($id),
+            $this->baseQuery($household, false, false)->select('s.id')->getQuery()->getSingleColumnResult(),
+        );
+
+        $this->lockForUpdate($ids);
+
+        $items = [];
+
+        foreach ($ids as $id) {
+            $item = $this->find($id);
+
+            if (null !== $item && !$item->isArchived() && !$item->isEmpty()) {
+                $items[] = $item;
+            }
+        }
+
+        return $items;
+    }
+
+    /**
      * Les autres lots du même aliment — deux bouteilles, deux dates.
      *
      * @return list<StockItem>

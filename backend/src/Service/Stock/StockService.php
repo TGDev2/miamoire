@@ -550,6 +550,29 @@ class StockService
         return $item;
     }
 
+    /**
+     * Refaire l'inventaire : tout ce qui est en stock passe aux archives d'un
+     * seul geste. Même archivage que lot par lot — quantités et journal
+     * conservés — donc les taux de consommation survivent à la remise à zéro.
+     *
+     * @param iterable<StockItem> $items
+     *
+     * @return int le nombre de lots réellement rangés
+     */
+    public function archiveAll(iterable $items, Member $author, ?StockOperation $operation = null): int
+    {
+        $archived = 0;
+
+        foreach ($items as $item) {
+            if (!$item->isArchived()) {
+                $this->archive($item, $author, 'Inventaire remis à zéro', $operation);
+                ++$archived;
+            }
+        }
+
+        return $archived;
+    }
+
     public function restore(StockItem $item, Member $author, ?StockOperation $operation = null): StockItem
     {
         if (!$item->isArchived()) {

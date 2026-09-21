@@ -413,6 +413,43 @@ class StockItemController extends AbstractApiController
         return $this->json($response);
     }
 
+    /**
+     * Vide l'inventaire d'un geste, pour le refaire après une absence : chaque
+     * lot en stock est archivé, comme par `DELETE /{id}`. Rien n'est supprimé —
+     * le journal nourrit les taux de consommation — et chaque lot se restaure
+     * depuis les archives.
+     */
+    #[Route('/archive-all', methods: ['POST'])]
+    public function archiveAll(
+        Request $request,
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        StockService $stockService,
+        StockOperationGuard $guard,
+    ): JsonResponse {
+        $payload = JsonPayload::fromRequest($request);
+        $member = $context->requireMember();
+        $household = $context->household();
+
+        $response = $guard->run(
+            $household,
+            $payload->requiredString('operationKey'),
+            StockOperationType::InventoryReset,
+            $this->requestHash($payload),
+            $member,
+            $stockService,
+            static fn (StockOperation $operation): array => [
+                'archivedCount' => $stockService->archiveAll(
+                    $stockItems->findAvailableForUpdate($household),
+                    $member,
+                    $operation,
+                ),
+            ],
+        );
+
+        return $this->json($response);
+    }
+
     #[Route('/{id}/consume', methods: ['POST'])]
     public function consume(
         string $id,
