@@ -117,23 +117,35 @@ class StockItemRepository extends ServiceEntityRepository
     }
 
     /**
-     * L'inventaire courant, verrouillé pour la durée de la transaction en cours.
+     * L'inventaire courant — ou celui d'un seul emplacement —, verrouillé pour
+     * la durée de la transaction en cours.
      *
      * Même règle que `ownedStockItemForUpdate()` : verrouiller AVANT de lire.
      * On ne sélectionne donc que les identifiants, puis chaque lot est chargé
      * par le verrou lui-même — une relecture par requête rendrait les lots
-     * apparus entre-temps sans verrou. Un lot vidé ou archivé pendant l'attente
-     * n'est plus de l'inventaire : il est écarté ici, sur l'état relu.
+     * apparus entre-temps sans verrou. Un lot vidé, archivé ou sorti de
+     * l'emplacement pendant l'attente n'en fait plus partie : il est écarté ici,
+     * sur l'état relu. À l'inverse, un lot entré dans l'emplacement pendant
+     * l'attente n'a pas été vu, et n'est pas pris.
+     *
+     * Le filtre d'emplacement de la requête n'est pas qu'une économie : sans
+     * lui, vider le frigo verrouillerait aussi tout le placard.
      *
      * @return list<StockItem>
      */
-    public function findAvailableForUpdate(Household $household): array
+    public function findAvailableForUpdate(Household $household, ?StorageLocation $location = null): array
     {
+        $query = $this->baseQuery($household, false, false)->select('s.id');
+
+        if (null !== $location) {
+            $query->andWhere('s.storageLocation = :location')->setParameter('location', $location);
+        }
+
         // Une colonne scalaire revient brute, en chaîne : le type `uuid` n'est
         // appliqué qu'à l'hydratation d'une entité.
         $ids = array_map(
             static fn (string $id): Uuid => Uuid::fromString($id),
-            $this->baseQuery($household, false, false)->select('s.id')->getQuery()->getSingleColumnResult(),
+            $query->getQuery()->getSingleColumnResult(),
         );
 
         $this->lockForUpdate($ids);
@@ -143,7 +155,12 @@ class StockItemRepository extends ServiceEntityRepository
         foreach ($ids as $id) {
             $item = $this->find($id);
 
-            if (null !== $item && !$item->isArchived() && !$item->isEmpty()) {
+            if (
+                null !== $item
+                && !$item->isArchived()
+                && !$item->isEmpty()
+                && (null === $location || $item->getStorageLocation() === $location)
+            ) {
                 $items[] = $item;
             }
         }

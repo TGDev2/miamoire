@@ -618,6 +618,16 @@ class StockServiceTest extends TestCase
         self::assertSame($this->member, $movement->getCreatedBy());
     }
 
+    /** Un seul emplacement remis à zéro : le journal du lot dit lequel. */
+    public function testResettingOneLocationNamesItInTheJournal(): void
+    {
+        $milk = $this->item(1000, Unit::Milliliter);
+
+        $this->service->archiveAll([$milk], $this->member, null, StorageLocation::Fridge);
+
+        self::assertSame('Réfrigérateur remis à zéro', $milk->getMovements()->first()->getReason());
+    }
+
     /** Le sens même du mot « réversible » : on retrouve le lot tel qu'on l'a laissé. */
     public function testRestoringBringsTheLotBackWithItsQuantity(): void
     {

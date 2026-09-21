@@ -17,7 +17,9 @@ use App\Service\HouseholdAccessKey;
 use App\Service\Product\VariantIdentity;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Exception\DriverException;
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\HttpFoundation\Response;
@@ -31,7 +33,11 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Le foyer compte quatre lots, un par cas : deux en stock (dont un qui a déjà
  * servi, donc un historique à préserver), un vide, un déjà archivé. Un second
- * foyer a le sien.
+ * foyer a le sien. Tous sont au placard ; les tests d'un seul emplacement
+ * ajoutent ce qu'il leur faut au frigo.
+ *
+ * La portée (`scope`) est obligatoire : une portée perdue ne doit jamais
+ * devenir « tout le stock ».
  */
 class StockArchiveAllTest extends WebTestCase
 {
@@ -47,6 +53,7 @@ class StockArchiveAllTest extends WebTestCase
     private StockItem $pasta;
     private StockItem $empty;
     private StockItem $alreadyArchived;
+    private Household $neighbourHousehold;
     private StockItem $neighbours;
 
     /** @var array<string, string> */
@@ -87,10 +94,10 @@ class StockArchiveAllTest extends WebTestCase
         $this->alreadyArchived = $this->lot($this->household, 'Farine', 1000);
         $this->alreadyArchived->archive();
 
-        $neighbourHousehold = new Household('Foyer voisin');
-        $neighbourHousehold->setAccessKeyHash($keys->hash($keys->generate()));
-        $this->entityManager->persist($neighbourHousehold);
-        $this->neighbours = $this->lot($neighbourHousehold, 'Tomates', 300);
+        $this->neighbourHousehold = new Household('Foyer voisin');
+        $this->neighbourHousehold->setAccessKeyHash($keys->hash($keys->generate()));
+        $this->entityManager->persist($this->neighbourHousehold);
+        $this->neighbours = $this->lot($this->neighbourHousehold, 'Tomates', 300);
 
         $this->entityManager->flush();
 
@@ -265,10 +272,8 @@ class StockArchiveAllTest extends WebTestCase
      */
     public function testALotEmptiedWhileWaitingForItsLockIsLeftAlone(): void
     {
-        $other = $this->spawnConcurrentConsumer((string) $this->tomatoes->getId(), 0.0, 700);
-
-        // Le temps que l'autre processus prenne le verrou avant nous.
-        usleep(250_000);
+        $other = $this->spawnConcurrent('hold_and_consume.php', (string) $this->tomatoes->getId(), '0', 700);
+        $this->waitUntilLocked($this->tomatoes);
 
         $response = $this->archiveAll('reset-key-jjjj0000');
 
@@ -280,11 +285,171 @@ class StockArchiveAllTest extends WebTestCase
         self::assertNotNull($this->column($this->pasta, 'archived_at'));
     }
 
-    private function lot(Household $household, string $label, float $quantity): StockItem
+    /**
+     * Le pire échec possible : une portée mal transmise qui devient « tout le
+     * stock ». Absente, mal nommée, vide, d'une autre casse ou inconnue — toutes
+     * refusées, avant même qu'une opération soit réservée.
+     *
+     * @return iterable<string, array{array<string, mixed>}>
+     */
+    public static function unreadableScopes(): iterable
     {
+        yield 'absente' => [[]];
+        yield 'nulle' => [['scope' => null]];
+        yield 'vide' => [['scope' => '']];
+        yield 'blanche' => [['scope' => '   ']];
+        yield 'en majuscules' => [['scope' => 'ALL']];
+        yield 'inconnue' => [['scope' => 'cellar']];
+        yield 'numérique' => [['scope' => 3]];
+        yield 'mal nommée' => [['location' => 'fridge']];
+    }
+
+    /** @param array<string, mixed> $body */
+    #[DataProvider('unreadableScopes')]
+    public function testAnUnreadableScopeNeverWidensToTheWholeStock(array $body): void
+    {
+        $this->post(['operationKey' => 'reset-key-scope0001'] + $body);
+
+        self::assertSame(Response::HTTP_BAD_REQUEST, $this->client->getResponse()->getStatusCode());
+        self::assertNull($this->column($this->tomatoes, 'archived_at'));
+        self::assertNull($this->column($this->pasta, 'archived_at'));
+        self::assertSame(0, (int) $this->connection()->fetchOne('SELECT count(*) FROM stock_operation'));
+    }
+
+    /**
+     * Lue avant le garde d'opération, une portée invalide ne réserve rien : la
+     * même clé sert aussitôt à la bonne tentative. Lue plus tard, elle aurait
+     * laissé une opération « en cours » qui bloque la clé deux minutes.
+     */
+    public function testAnInvalidScopeDoesNotBurnTheKey(): void
+    {
+        $this->post(['operationKey' => 'reset-key-burn0001', 'scope' => 'cellar']);
+        self::assertSame(Response::HTTP_BAD_REQUEST, $this->client->getResponse()->getStatusCode());
+
+        $response = $this->archiveAll('reset-key-burn0001');
+
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+        self::assertSame(2, $response['archivedCount']);
+    }
+
+    /** Vider le frigo ne touche ni au placard, ni au frigo des voisins — et le journal dit lequel. */
+    public function testResettingTheFridgeLeavesTheRestOfTheStock(): void
+    {
+        $milk = $this->lot($this->household, 'Lait', 1000, StorageLocation::Fridge);
+        $butter = $this->lot($this->household, 'Beurre', 250, StorageLocation::Fridge);
+        $neighboursMilk = $this->lot($this->neighbourHousehold, 'Lait', 500, StorageLocation::Fridge);
+        $this->entityManager->flush();
+
+        $response = $this->archiveAll('reset-key-fridge001', 'fridge');
+
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+        self::assertSame(2, $response['archivedCount']);
+        self::assertNotNull($this->column($milk, 'archived_at'));
+        self::assertNotNull($this->column($butter, 'archived_at'));
+
+        self::assertNull($this->column($this->tomatoes, 'archived_at'), 'Le placard n\'est pas touché.');
+        self::assertNull($this->column($this->pasta, 'archived_at'));
+        self::assertNull($this->column($neighboursMilk, 'archived_at'), 'Le frigo des voisins non plus.');
+
+        self::assertSame(
+            ['Réfrigérateur remis à zéro', 'Réfrigérateur remis à zéro'],
+            $this->connection()->fetchFirstColumn(
+                'SELECT m.reason FROM stock_movement m JOIN stock_operation o ON o.id = m.operation_id WHERE o.type = ?',
+                ['inventory_reset'],
+            ),
+        );
+    }
+
+    public function testReplayingAFridgeResetDoesNotTouchALotAddedSince(): void
+    {
+        $this->lot($this->household, 'Lait', 1000, StorageLocation::Fridge);
+        $this->entityManager->flush();
+        $this->archiveAll('reset-key-fridge002', 'fridge');
+
+        $cream = $this->lot($this->household, 'Crème', 200, StorageLocation::Fridge);
+        $this->entityManager->flush();
+
+        $replay = $this->archiveAll('reset-key-fridge002', 'fridge');
+
+        self::assertTrue($replay['replayed'] ?? false);
+        self::assertSame(1, $replay['archivedCount']);
+        self::assertNull($this->column($cream, 'archived_at'));
+    }
+
+    /**
+     * Une clé réemployée pour une autre portée n'élargit rien : le serveur refuse,
+     * plutôt que de rendre la réponse d'un autre geste ou d'en faire un plus grand.
+     */
+    public function testReusingAKeyForAnotherScopeIsRefused(): void
+    {
+        $this->lot($this->household, 'Lait', 1000, StorageLocation::Fridge);
+        $this->entityManager->flush();
+        $this->archiveAll('reset-key-fridge003', 'fridge');
+
+        $this->archiveAll('reset-key-fridge003', 'all');
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $this->client->getResponse()->getStatusCode());
+        self::assertNull($this->column($this->tomatoes, 'archived_at'));
+    }
+
+    /**
+     * Pendant qu'on vide le frigo, l'autre téléphone range le lait au placard :
+     * il tient le lot, le déplace, valide. Relu sous verrou, le lait n'est plus
+     * au frigo — il reste en stock.
+     */
+    public function testALotMovedOutOfTheFridgeWhileWaitingIsLeftAlone(): void
+    {
+        $milk = $this->lot($this->household, 'Lait', 1000, StorageLocation::Fridge);
+        $butter = $this->lot($this->household, 'Beurre', 250, StorageLocation::Fridge);
+        $this->entityManager->flush();
+
+        $other = $this->spawnConcurrent('hold_and_move.php', (string) $milk->getId(), StorageLocation::Pantry->value, 700);
+        $this->waitUntilLocked($milk);
+
+        $response = $this->archiveAll('reset-key-fridge004', 'fridge');
+
+        $this->waitFor($other);
+
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+        self::assertSame(1, $response['archivedCount']);
+        self::assertNull($this->column($milk, 'archived_at'), 'Le lot sorti du frigo pendant l\'attente ne se range pas.');
+        self::assertSame('pantry', $this->column($milk, 'storage_location'));
+        self::assertNotNull($this->column($butter, 'archived_at'));
+    }
+
+    /**
+     * Le filtre SQL n'est pas qu'une économie : sans lui, vider le frigo
+     * verrouillerait tout le stock du foyer, et attendrait qu'un autre téléphone
+     * ait fini de toucher au placard.
+     */
+    public function testAFridgeResetDoesNotWaitForAPantryLotHeldElsewhere(): void
+    {
+        $this->lot($this->household, 'Lait', 1000, StorageLocation::Fridge);
+        $this->entityManager->flush();
+
+        $other = $this->spawnConcurrent('hold_and_consume.php', (string) $this->tomatoes->getId(), '500', 3000);
+        $this->waitUntilLocked($this->tomatoes);
+
+        $started = microtime(true);
+        $response = $this->archiveAll('reset-key-fridge005', 'fridge');
+        $elapsed = microtime(true) - $started;
+
+        $this->waitFor($other);
+
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+        self::assertSame(1, $response['archivedCount']);
+        self::assertLessThan(1.5, $elapsed, 'La remise à zéro du frigo a attendu un lot du placard.');
+    }
+
+    private function lot(
+        Household $household,
+        string $label,
+        float $quantity,
+        StorageLocation $location = StorageLocation::Pantry,
+    ): StockItem {
         $identity = VariantIdentity::of(mb_strtolower($label), Unit::Gram->family(), []);
         $variant = new HouseholdProductVariant($household, $label, $identity, $identity->slugBase());
-        $lot = new StockItem($household, $variant, max($quantity, 1), Unit::Gram, StorageLocation::Pantry);
+        $lot = new StockItem($household, $variant, max($quantity, 1), Unit::Gram, $location);
         $lot->setRemainingQuantity($quantity);
 
         $this->entityManager->persist($variant);
@@ -294,16 +459,26 @@ class StockArchiveAllTest extends WebTestCase
     }
 
     /** @return array<string, mixed> */
-    private function archiveAll(string $operationKey): array
+    private function archiveAll(string $operationKey, string $scope = 'all'): array
     {
-        $this->client->request('POST', '/api/stock-items/archive-all', server: $this->server, content: $this->body($operationKey));
+        return $this->post(['operationKey' => $operationKey, 'scope' => $scope]);
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     *
+     * @return array<string, mixed>
+     */
+    private function post(array $body): array
+    {
+        $this->client->request('POST', '/api/stock-items/archive-all', server: $this->server, content: json_encode($body, \JSON_THROW_ON_ERROR));
 
         return $this->decode();
     }
 
     private function body(string $operationKey): string
     {
-        return json_encode(['operationKey' => $operationKey], \JSON_THROW_ON_ERROR);
+        return json_encode(['operationKey' => $operationKey, 'scope' => 'all'], \JSON_THROW_ON_ERROR);
     }
 
     /** @return array<string, mixed> */
@@ -342,9 +517,11 @@ class StockArchiveAllTest extends WebTestCase
      * Lance « l'autre téléphone » dans un vrai processus : PHP est mono-thread,
      * et un verrou pris dans le même processus ne bloquerait jamais.
      *
+     * @param string $fixture hold_and_consume.php (nouvelle quantité) ou hold_and_move.php (nouvel emplacement)
+     *
      * @return resource
      */
-    private function spawnConcurrentConsumer(string $lotId, float $newQuantity, int $holdMs)
+    private function spawnConcurrent(string $fixture, string $lotId, string $newValue, int $holdMs)
     {
         $params = $this->entityManager->getConnection()->getParams();
 
@@ -357,12 +534,12 @@ class StockArchiveAllTest extends WebTestCase
 
         $command = sprintf(
             'php %s %s %s %s %s %s %d',
-            escapeshellarg(__DIR__.'/Fixtures/hold_and_consume.php'),
+            escapeshellarg(__DIR__.'/Fixtures/'.$fixture),
             escapeshellarg($dsn),
             escapeshellarg((string) ($params['user'] ?? 'food')),
             escapeshellarg((string) ($params['password'] ?? '')),
             escapeshellarg($lotId),
-            escapeshellarg((string) $newQuantity),
+            escapeshellarg($newValue),
             $holdMs,
         );
 
@@ -379,6 +556,45 @@ class StockArchiveAllTest extends WebTestCase
 
     /** @var array<int, resource> */
     private array $pipes = [];
+
+    /**
+     * Attend que l'autre processus TIENNE le verrou du lot, au lieu de deviner
+     * combien de temps il lui faut pour démarrer : une requête partie avant lui
+     * — ou après lui — resterait verte que le mécanisme testé existe ou non.
+     *
+     * La base est le seul témoin fiable. Une ligne « verrouillé » écrite par le
+     * processus sur sa sortie standard n'arrivait, sous PHPUnit et Windows,
+     * qu'à sa fin : le test attendait la validation au lieu du verrou, et les
+     * mutations restaient vertes. On sonde donc la ligne elle-même, jusqu'à ce
+     * que PostgreSQL réponde qu'elle est prise (SQLSTATE 55P03).
+     */
+    private function waitUntilLocked(StockItem $lot): void
+    {
+        $probe = $this->connection();
+        $deadline = microtime(true) + 5;
+
+        while (microtime(true) < $deadline) {
+            $probe->beginTransaction();
+
+            try {
+                $probe->fetchOne('SELECT id FROM stock_item WHERE id = ? FOR UPDATE NOWAIT', [(string) $lot->getId()]);
+            } catch (DriverException $exception) {
+                // Le convertisseur PostgreSQL de DBAL ne traduit pas 55P03 en
+                // exception dédiée : on lit le code, et le reste remonte.
+                if ('55P03' !== $exception->getSQLState()) {
+                    throw $exception;
+                }
+
+                return;
+            } finally {
+                $probe->rollBack();
+            }
+
+            usleep(20_000);
+        }
+
+        self::fail('Le processus concurrent n\'a jamais pris le verrou du lot.');
+    }
 
     /** @param resource $process */
     private function waitFor($process): void

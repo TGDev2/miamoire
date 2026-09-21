@@ -415,9 +415,9 @@ class StockItemController extends AbstractApiController
 
     /**
      * Vide l'inventaire d'un geste, pour le refaire après une absence : chaque
-     * lot en stock est archivé, comme par `DELETE /{id}`. Rien n'est supprimé —
-     * le journal nourrit les taux de consommation — et chaque lot se restaure
-     * depuis les archives.
+     * lot en stock — ou d'un seul emplacement — est archivé, comme par
+     * `DELETE /{id}`. Rien n'est supprimé — le journal nourrit les taux de
+     * consommation — et chaque lot se restaure depuis les archives.
      */
     #[Route('/archive-all', methods: ['POST'])]
     public function archiveAll(
@@ -431,6 +431,10 @@ class StockItemController extends AbstractApiController
         $member = $context->requireMember();
         $household = $context->household();
 
+        // Lue AVANT le garde : une opération réservée puis rejetée resterait
+        // « en cours » et bloquerait la clé pendant deux minutes.
+        $location = $this->resetScope($payload);
+
         $response = $guard->run(
             $household,
             $payload->requiredString('operationKey'),
@@ -440,14 +444,40 @@ class StockItemController extends AbstractApiController
             $stockService,
             static fn (StockOperation $operation): array => [
                 'archivedCount' => $stockService->archiveAll(
-                    $stockItems->findAvailableForUpdate($household),
+                    $stockItems->findAvailableForUpdate($household, $location),
                     $member,
                     $operation,
+                    $location,
                 ),
             ],
         );
 
         return $this->json($response);
+    }
+
+    /**
+     * La portée d'une remise à zéro : `all`, ou un emplacement.
+     *
+     * Obligatoire, et jamais déduite. Un emplacement facultatif ferait d'une
+     * clé oubliée, mal nommée (`location`, le nom du filtre de la liste) ou vide
+     * une remise à zéro de TOUT le stock — l'échec le plus coûteux possible,
+     * puisque les lots ne reviennent des archives qu'un par un.
+     *
+     * @return StorageLocation|null null pour tout le stock
+     */
+    private function resetScope(JsonPayload $payload): ?StorageLocation
+    {
+        $scope = $payload->requiredString('scope');
+
+        if ('all' === $scope) {
+            return null;
+        }
+
+        return StorageLocation::tryFrom($scope) ?? throw new BadRequestHttpException(sprintf(
+            'Portée « %s » inconnue : attendu « all » ou l\'un de %s.',
+            $scope,
+            implode(', ', array_map(static fn (StorageLocation $location) => '« '.$location->value.' »', StorageLocation::cases())),
+        ));
     }
 
     #[Route('/{id}/consume', methods: ['POST'])]

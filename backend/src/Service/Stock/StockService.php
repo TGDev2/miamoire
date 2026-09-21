@@ -551,21 +551,32 @@ class StockService
     }
 
     /**
-     * Refaire l'inventaire : tout ce qui est en stock passe aux archives d'un
-     * seul geste. Même archivage que lot par lot — quantités et journal
-     * conservés — donc les taux de consommation survivent à la remise à zéro.
+     * Refaire l'inventaire : tout ce qui est en stock — ou dans un seul
+     * emplacement — passe aux archives d'un seul geste. Même archivage que lot
+     * par lot — quantités et journal conservés — donc les taux de consommation
+     * survivent à la remise à zéro.
+     *
+     * Le motif nomme la portée : c'est lui que le journal du lot affiche, et la
+     * seule trace de ce qui a été vidé. Les libellés d'emplacement sont tous
+     * masculins (« Réfrigérateur remis à zéro ») ; un emplacement féminin
+     * demanderait d'accorder.
      *
      * @param iterable<StockItem> $items
      *
      * @return int le nombre de lots réellement rangés
      */
-    public function archiveAll(iterable $items, Member $author, ?StockOperation $operation = null): int
-    {
+    public function archiveAll(
+        iterable $items,
+        Member $author,
+        ?StockOperation $operation = null,
+        ?StorageLocation $location = null,
+    ): int {
+        $reason = null === $location ? 'Inventaire remis à zéro' : sprintf('%s remis à zéro', $location->label());
         $archived = 0;
 
         foreach ($items as $item) {
             if (!$item->isArchived()) {
-                $this->archive($item, $author, 'Inventaire remis à zéro', $operation);
+                $this->archive($item, $author, $reason, $operation);
                 ++$archived;
             }
         }
