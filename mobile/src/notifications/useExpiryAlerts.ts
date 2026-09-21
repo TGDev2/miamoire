@@ -12,7 +12,10 @@ import { syncExpiryNotifications } from './expiry';
  * rouvre l'application sur l'onglet Stock. Un garde par instance de hook les
  * laisserait tous deux partir et reprogrammerait deux fois la même chose.
  */
-let running = false;
+let inFlight: Promise<void> | null = null;
+
+/** Quelqu'un a changé le stock après que la passe en vol l'a lu. */
+let rerun = false;
 
 /**
  * Reprogramme les alertes à partir de l'inventaire complet.
@@ -21,19 +24,38 @@ let running = false;
  * (leçon nº 6) : un filtre d'écran ne doit pas annuler les alertes qu'il masque.
  * Un échec est silencieux — une alerte non programmée ne doit jamais empêcher
  * d'utiliser l'application.
+ *
+ * `fresh` est pour l'appelant qui vient lui-même de changer le stock — vider
+ * l'inventaire, par exemple. Une passe déjà en vol a pu lire l'état d'avant :
+ * absorbé par elle, l'appel laisserait programmées les alertes de lots qui
+ * n'existent plus. Il demande donc une passe de plus, et la promesse ne se
+ * résout qu'après elle. Les appels ordinaires — premier plan, focus — restent
+ * dédoublonnés.
  */
-export async function resyncExpiryAlerts(): Promise<void> {
-  if (running) return;
-  running = true;
-
-  try {
-    const all = await api.stockItems();
-    await syncExpiryNotifications(all.items);
-  } catch {
-    // Silence assumé : voir ci-dessus.
-  } finally {
-    running = false;
+export function resyncExpiryAlerts(options: { fresh?: boolean } = {}): Promise<void> {
+  if (inFlight) {
+    if (options.fresh) rerun = true;
+    return inFlight;
   }
+
+  inFlight = (async () => {
+    try {
+      do {
+        rerun = false;
+
+        try {
+          const all = await api.stockItems();
+          await syncExpiryNotifications(all.items);
+        } catch {
+          // Silence assumé : voir ci-dessus.
+        }
+      } while (rerun);
+    } finally {
+      inFlight = null;
+    }
+  })();
+
+  return inFlight;
 }
 
 /**
