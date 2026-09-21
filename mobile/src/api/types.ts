@@ -1,5 +1,7 @@
 export type Unit = 'g' | 'kg' | 'ml' | 'cl' | 'l' | 'piece' | 'portion';
 export type StorageLocation = 'pantry' | 'fridge' | 'freezer';
+/** Ce qu'une remise à zéro vide : tout le stock, ou un seul emplacement. */
+export type ResetScope = 'all' | StorageLocation;
 
 /**
  * L'état réel d'un produit, au-delà de son nom.

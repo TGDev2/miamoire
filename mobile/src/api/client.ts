@@ -21,6 +21,7 @@ import type {
   Recipe,
   RecipePlan,
   Reference,
+  ResetScope,
   CurrentStockSummary,
   ReviewCandidate,
   SavedRecipe,
@@ -407,12 +408,15 @@ export const api = {
     request<StockItem>(`/stock-items/${id}/restore`, { method: 'POST', body: { operationKey } }),
 
   /**
-   * Range tout l'inventaire courant aux archives, pour le refaire après une
-   * absence. Même archivage que lot par lot : rien n'est effacé, et chaque lot
-   * se restaure depuis les archives.
+   * Range l'inventaire courant aux archives — en entier ou d'un seul
+   * emplacement —, pour le refaire après une absence. Même archivage que lot
+   * par lot : rien n'est effacé, et chaque lot se restaure depuis les archives.
+   *
+   * La portée est toujours envoyée : le serveur refuse son absence, pour
+   * qu'une portée perdue ne devienne jamais « tout le stock ».
    */
-  archiveAllStockItems: (operationKey: string) =>
-    request<{ archivedCount: number }>('/stock-items/archive-all', { method: 'POST', body: { operationKey } }),
+  archiveAllStockItems: (operationKey: string, scope: ResetScope) =>
+    request<{ archivedCount: number }>('/stock-items/archive-all', { method: 'POST', body: { operationKey, scope } }),
 
   /**
    * De quel genre d'aliment s'agit-il, dans quelle unité se saisit-il, et

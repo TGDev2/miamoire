@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../../src/api/client';
-import type { ExclusionSeverity, Reference } from '../../src/api/types';
+import type { ExclusionSeverity, Reference, ResetScope } from '../../src/api/types';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
 import {
   Button,
@@ -23,6 +23,37 @@ import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
 import { useRecipes } from '../../src/recipes/RecipeContext';
 import { useSession } from '../../src/session/SessionContext';
 import { colors, font, radius, spacing, text } from '../../src/theme';
+
+/**
+ * Toutes les formes dont les phrases d'une remise à zéro ont besoin, par portée.
+ * Écrites à la main plutôt que composées : « le réfrigérateur », « du
+ * réfrigérateur » dépendent du genre et de l'initiale du mot. Le type exige une
+ * entrée par emplacement — en ajouter un sans ses phrases ne compile pas.
+ * L'ordre des clés est celui des puces : le cas général d'abord.
+ */
+const RESET_SCOPES: Record<
+  ResetScope,
+  { chip: string; the: string; The: string; of: string; where: string; done: string }
+> = {
+  all: { chip: 'Tout le stock', the: 'le stock', The: 'Le stock', of: 'en stock', where: 'chez vous', done: 'Stock vidé' },
+  pantry: { chip: 'Placard', the: 'le placard', The: 'Le placard', of: 'du placard', where: 'dans le placard', done: 'Placard vidé' },
+  fridge: {
+    chip: 'Réfrigérateur',
+    the: 'le réfrigérateur',
+    The: 'Le réfrigérateur',
+    of: 'du réfrigérateur',
+    where: 'dans le réfrigérateur',
+    done: 'Réfrigérateur vidé',
+  },
+  freezer: {
+    chip: 'Congélateur',
+    the: 'le congélateur',
+    The: 'Le congélateur',
+    of: 'du congélateur',
+    where: 'dans le congélateur',
+    done: 'Congélateur vidé',
+  },
+};
 
 function severityLabel(severity: ExclusionSeverity): string {
   return severity === 'allergy' ? 'Allergie stricte' : severity === 'diet' ? 'Régime' : 'Préférence';
@@ -63,8 +94,12 @@ export default function ProfileScreen() {
   const [reference, setReference] = useState<Reference | null>(null);
   const { setSuggestion } = useRecipes();
   const [resetting, setResetting] = useState(false);
-  /** Gardée seulement après une panne réseau : le geste se rejoue sans se refaire. */
-  const resetKey = useRef<string | null>(null);
+  const [resetScope, setResetScope] = useState<ResetScope>('all');
+  /**
+   * Gardée seulement après une panne réseau, et pour la même portée : le geste
+   * se rejoue sans se refaire. Pour une autre portée, c'est un autre geste.
+   */
+  const resetKey = useRef<{ key: string; scope: ResetScope } | null>(null);
 
   // La liste des allergènes reconnus vient du serveur : elle et la table de
   // détection ne doivent jamais diverger.
@@ -147,28 +182,33 @@ export default function ProfileScreen() {
    * loin de ce bouton.
    */
   async function confirmArchiveAll() {
+    // La portée est figée à l'ouverture : la confirmation parle de celle-là, et
+    // le geste ne vide rien d'autre, même si une puce change entre-temps.
+    const scope = resetScope;
+    const words = RESET_SCOPES[scope];
     setResetting(true);
 
     try {
-      const { items } = await api.stockItems();
+      const { items } = await api.stockItems('all' === scope ? {} : { location: scope });
 
       if (0 === items.length) {
         Alert.alert(
-          'Le stock est déjà vide',
-          'Il n\'y a aucun lot à ranger. Ajoutez directement ce qui se trouve chez vous.',
+          `${words.The} est déjà vide`,
+          `Il n'y a aucun lot à ranger. Ajoutez directement ce qui se trouve ${words.where}.`,
         );
         return;
       }
 
       const subject =
-        1 === items.length ? 'Le seul lot en stock passe' : `Les ${items.length} lots en stock passent`;
+        1 === items.length ? `Le seul lot ${words.of} passe` : `Les ${items.length} lots ${words.of} passent`;
+      const rest = 'all' === scope ? '' : ' Le reste du stock n\'est pas touché.';
 
       Alert.alert(
-        'Vider le stock ?',
-        `${subject} aux archives, pour tout le foyer. Vous ajouterez ensuite ce qui se trouve réellement chez vous.\n\nRien n'est effacé : chaque lot reste dans « Archives », d'où il se restaure un par un, et l'historique de consommation continue de servir aux suggestions de courses.`,
+        `Vider ${words.the} ?`,
+        `${subject} aux archives, pour tout le foyer.${rest} Vous ajouterez ensuite ce qui se trouve réellement ${words.where}.\n\nRien n'est effacé : chaque lot reste dans « Archives », d'où il se restaure un par un, et l'historique de consommation continue de servir aux suggestions de courses.`,
         [
           { text: 'Annuler', style: 'cancel' },
-          { text: 'Vider le stock', style: 'destructive', onPress: archiveAll },
+          { text: `Vider ${words.the}`, style: 'destructive', onPress: () => archiveAll(scope) },
         ],
       );
     } catch (exception) {
@@ -178,12 +218,15 @@ export default function ProfileScreen() {
     }
   }
 
-  async function archiveAll() {
+  async function archiveAll(scope: ResetScope) {
+    const words = RESET_SCOPES[scope];
+    const pending =
+      resetKey.current?.scope === scope ? resetKey.current : { key: generateOperationKey(), scope };
+    resetKey.current = pending;
     setResetting(true);
-    if (!resetKey.current) resetKey.current = generateOperationKey();
 
     try {
-      const { archivedCount } = await api.archiveAllStockItems(resetKey.current);
+      const { archivedCount } = await api.archiveAllStockItems(pending.key, scope);
       resetKey.current = null;
 
       // La dernière suggestion de recettes puisait dans des lots qui viennent d'être rangés.
@@ -191,8 +234,8 @@ export default function ProfileScreen() {
       await resyncExpiryAlerts({ fresh: true });
 
       Alert.alert(
-        'Stock vidé',
-        `${archivedCount} ${archivedCount > 1 ? 'lots rangés' : 'lot rangé'} dans les archives. Ajoutez maintenant ce qui se trouve réellement chez vous.`,
+        words.done,
+        `${archivedCount} ${archivedCount > 1 ? 'lots rangés' : 'lot rangé'} dans les archives. Ajoutez maintenant ce qui se trouve réellement ${words.where}.`,
         [
           { text: 'Plus tard', style: 'cancel' },
           { text: 'Ajouter un aliment', onPress: () => router.push('/add') },
@@ -203,7 +246,7 @@ export default function ProfileScreen() {
       // réponse au lieu de refaire le geste.
       if (!(exception instanceof ApiError) || exception.status !== 0) resetKey.current = null;
       Alert.alert(
-        'Le stock n\'a pas été vidé',
+        `${words.The} n'a pas été vidé`,
         exception instanceof Error ? exception.message : 'Action impossible.',
       );
     } finally {
@@ -441,13 +484,23 @@ export default function ProfileScreen() {
       <SectionTitle>Refaire l'inventaire</SectionTitle>
       <Text style={[text.small, styles.help]}>
         {member
-          ? 'Après une absence, le stock enregistré ne ressemble plus à ce qu\'il y a chez vous ? Videz-le d\'un geste, puis ajoutez ce qui s\'y trouve réellement.'
+          ? 'Après une absence, le stock enregistré ne ressemble plus à ce qu\'il y a chez vous ? Videz-le d\'un geste — en entier, ou un seul emplacement —, puis ajoutez ce qui s\'y trouve réellement.'
           : 'Choisissez d\'abord votre prénom, plus haut : vider le stock est un geste signé.'}
       </Text>
+      <View style={styles.chips}>
+        {(Object.keys(RESET_SCOPES) as ResetScope[]).map((scope) => (
+          <Chip
+            key={scope}
+            label={RESET_SCOPES[scope].chip}
+            selected={resetScope === scope}
+            onPress={() => setResetScope(scope)}
+          />
+        ))}
+      </View>
       <Button
-        label="Vider le stock"
+        label={`Vider ${RESET_SCOPES[resetScope].the}`}
         variant="danger"
-        hint="Range tous les lots du foyer dans les archives, après confirmation"
+        hint={`Range tous les lots ${RESET_SCOPES[resetScope].of} dans les archives, après confirmation`}
         loading={resetting}
         disabled={busy || !member}
         onPress={confirmArchiveAll}
