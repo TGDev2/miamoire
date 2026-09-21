@@ -29,6 +29,13 @@ class OpenFoodFactsClient
     ) {
     }
 
+    /**
+     * `null` est une réponse : Open Food Facts ne connaît pas ce code, ou n'en a
+     * qu'une fiche sans nom. Tout ce qui n'est pas une réponse lève
+     * `OpenFoodFactsUnavailableException`.
+     *
+     * @throws OpenFoodFactsUnavailableException
+     */
     public function fetchProduct(string $barcode): ?OpenFoodFactsProduct
     {
         $url = sprintf('%s/api/v3/product/%s.json', rtrim($this->baseUrl, '/'), rawurlencode($barcode));
@@ -40,21 +47,22 @@ class OpenFoodFactsClient
                 'timeout' => 8,
             ]);
 
-            if (404 === $response->getStatusCode()) {
+            $status = $response->getStatusCode();
+
+            if (404 === $status) {
                 return null;
             }
 
-            /** @var array<string, mixed> $payload */
-            $payload = $response->toArray(false);
+            // Un 200 en HTML — portail captif, page de maintenance — lève ici.
+            /** @var array<string, mixed>|null $payload */
+            $payload = 200 === $status ? $response->toArray(false) : null;
         } catch (ExceptionInterface|TransportException $exception) {
-            // Réseau indisponible ou quota atteint (15 req/min/IP) : on ne bloque
-            // pas l'utilisateur, l'appelant se rabattra sur le cache ou la saisie manuelle.
-            $this->logger->warning('Open Food Facts injoignable', [
-                'barcode' => $barcode,
-                'error' => $exception->getMessage(),
-            ]);
+            throw $this->unavailable($barcode, $exception->getMessage(), $exception);
+        }
 
-            return null;
+        // Un 429 (quota de 15 req/min/IP) ou un 5xx ne dit rien du produit.
+        if (null === $payload) {
+            throw $this->unavailable($barcode, sprintf('Open Food Facts a répondu %d.', $status));
         }
 
         $product = $payload['product'] ?? null;
@@ -63,6 +71,13 @@ class OpenFoodFactsClient
         }
 
         return $this->hydrate($barcode, $product);
+    }
+
+    private function unavailable(string $barcode, string $reason, ?\Throwable $previous = null): OpenFoodFactsUnavailableException
+    {
+        $this->logger->warning('Open Food Facts injoignable', ['barcode' => $barcode, 'error' => $reason]);
+
+        return new OpenFoodFactsUnavailableException($reason, previous: $previous);
     }
 
     /** @param array<string, mixed> $data */

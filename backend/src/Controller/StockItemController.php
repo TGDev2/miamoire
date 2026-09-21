@@ -24,6 +24,7 @@ use App\Repository\ProductRepository;
 use App\Repository\StockItemRepository;
 use App\Repository\StockMovementRepository;
 use App\Service\Freshness\ShelfLifeEstimator;
+use App\Service\OpenFoodFacts\OpenFoodFactsUnavailableException;
 use App\Service\Product\VariantResolver;
 use App\Service\ProductLookupService;
 use App\Service\Stock\StockOperationGuard;
@@ -1022,7 +1023,15 @@ class StockItemController extends AbstractApiController
             return null;
         }
 
-        $product = $lookup->findByBarcode($barcode);
+        try {
+            $product = $lookup->findByBarcode($barcode);
+        } catch (OpenFoodFactsUnavailableException) {
+            // On ignore si Open Food Facts connaît ce code : le lot entre sans
+            // fiche, plutôt que de figer au catalogue partagé une fiche manuelle
+            // — jamais rafraîchie — qui masquerait la vraie pour tous les foyers.
+            return null;
+        }
+
         if (null !== $product) {
             return $product;
         }

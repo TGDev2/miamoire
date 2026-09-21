@@ -7,6 +7,7 @@ namespace App\EventListener;
 use App\Exception\IncompatibleUnitException;
 use App\Exception\StockConflictException;
 use App\Exception\StockException;
+use App\Service\OpenFoodFacts\OpenFoodFactsUnavailableException;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -38,11 +39,18 @@ class ApiExceptionListener
             $exception instanceof StockConflictException => [Response::HTTP_CONFLICT, $exception->getMessage()],
             $exception instanceof IncompatibleUnitException,
             $exception instanceof StockException => [Response::HTTP_UNPROCESSABLE_ENTITY, $exception->getMessage()],
+            // Pas un 404 : « produit inconnu » ouvrirait la saisie manuelle d'un
+            // produit qu'Open Food Facts connaît peut-être. 503 dit de réessayer.
+            $exception instanceof OpenFoodFactsUnavailableException => [
+                Response::HTTP_SERVICE_UNAVAILABLE,
+                'Open Food Facts ne répond pas. Réessayez dans un instant.',
+            ],
             $exception instanceof HttpExceptionInterface => [$exception->getStatusCode(), $exception->getMessage()],
             default => [Response::HTTP_INTERNAL_SERVER_ERROR, 'Une erreur interne est survenue.'],
         };
 
-        if ($status >= 500) {
+        // Une panne d'Open Food Facts est prévue, et déjà journalisée par son client.
+        if ($status >= 500 && !$exception instanceof OpenFoodFactsUnavailableException) {
             $this->logger->error('Erreur API non gérée', ['exception' => $exception]);
         }
 

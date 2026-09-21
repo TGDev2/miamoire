@@ -10,6 +10,7 @@ use App\Enum\Unit;
 use App\Repository\ProductRepository;
 use App\Service\OpenFoodFacts\OpenFoodFactsClient;
 use App\Service\OpenFoodFacts\OpenFoodFactsProduct;
+use App\Service\OpenFoodFacts\OpenFoodFactsUnavailableException;
 use Doctrine\ORM\EntityManagerInterface;
 
 /**
@@ -30,6 +31,12 @@ class ProductLookupService
     ) {
     }
 
+    /**
+     * `null` : ni le catalogue ni Open Food Facts ne connaissent ce code.
+     *
+     * @throws OpenFoodFactsUnavailableException Open Food Facts n'a pas pu répondre
+     *                                           et rien n'est en cache — on ne sait pas
+     */
     public function findByBarcode(string $barcode): ?Product
     {
         $cached = $this->products->findOneByBarcode($barcode);
@@ -38,7 +45,11 @@ class ProductLookupService
             return $cached;
         }
 
-        $remote = $this->client->fetchProduct($barcode);
+        try {
+            $remote = $this->client->fetchProduct($barcode);
+        } catch (OpenFoodFactsUnavailableException $exception) {
+            return $cached ?? throw $exception;
+        }
 
         if (null === $remote) {
             // Une fiche périmée reste plus utile qu'une absence de résultat.
