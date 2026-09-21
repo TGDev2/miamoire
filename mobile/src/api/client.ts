@@ -407,6 +407,14 @@ export const api = {
     request<StockItem>(`/stock-items/${id}/restore`, { method: 'POST', body: { operationKey } }),
 
   /**
+   * Range tout l'inventaire courant aux archives, pour le refaire après une
+   * absence. Même archivage que lot par lot : rien n'est effacé, et chaque lot
+   * se restaure depuis les archives.
+   */
+  archiveAllStockItems: (operationKey: string) =>
+    request<{ archivedCount: number }>('/stock-items/archive-all', { method: 'POST', body: { operationKey } }),
+
+  /**
    * De quel genre d'aliment s'agit-il, dans quelle unité se saisit-il, et
    * combien de temps se garde-t-il ?
    *

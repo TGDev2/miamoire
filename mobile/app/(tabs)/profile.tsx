@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
-import { api } from '../../src/api/client';
+import { ApiError, api, generateOperationKey } from '../../src/api/client';
 import type { ExclusionSeverity, Reference } from '../../src/api/types';
 import { ServerAddressField } from '../../src/components/ServerAddressField';
 import {
@@ -19,6 +19,8 @@ import {
   useTopInset,
 } from '../../src/components/ui';
 import { clearExpiryNotifications, ensureExpiryAlerts } from '../../src/notifications/expiry';
+import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
+import { useRecipes } from '../../src/recipes/RecipeContext';
 import { useSession } from '../../src/session/SessionContext';
 import { colors, font, radius, spacing, text } from '../../src/theme';
 
@@ -59,6 +61,10 @@ export default function ProfileScreen() {
   /** Code fraîchement régénéré : affiché immédiatement, avant tout rechargement. */
   const [issuedKey, setIssuedKey] = useState<string | null>(null);
   const [reference, setReference] = useState<Reference | null>(null);
+  const { setSuggestion } = useRecipes();
+  const [resetting, setResetting] = useState(false);
+  /** Gardée seulement après une panne réseau : le geste se rejoue sans se refaire. */
+  const resetKey = useRef<string | null>(null);
 
   // La liste des allergènes reconnus vient du serveur : elle et la table de
   // détection ne doivent jamais diverger.
@@ -132,6 +138,77 @@ export default function ProfileScreen() {
         },
       ],
     );
+  }
+
+  /**
+   * Refaire l'inventaire. On compte d'abord : la confirmation dit combien de
+   * lots partent, et un stock déjà vide n'a rien à confirmer. Les erreurs
+   * passent par une alerte — la bannière est tout en haut d'un long écran,
+   * loin de ce bouton.
+   */
+  async function confirmArchiveAll() {
+    setResetting(true);
+
+    try {
+      const { items } = await api.stockItems();
+
+      if (0 === items.length) {
+        Alert.alert(
+          'Le stock est déjà vide',
+          'Il n\'y a aucun lot à ranger. Ajoutez directement ce qui se trouve chez vous.',
+        );
+        return;
+      }
+
+      const subject =
+        1 === items.length ? 'Le seul lot en stock passe' : `Les ${items.length} lots en stock passent`;
+
+      Alert.alert(
+        'Vider le stock ?',
+        `${subject} aux archives, pour tout le foyer. Vous ajouterez ensuite ce qui se trouve réellement chez vous.\n\nRien n'est effacé : chaque lot reste dans « Archives », d'où il se restaure un par un, et l'historique de consommation continue de servir aux suggestions de courses.`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { text: 'Vider le stock', style: 'destructive', onPress: archiveAll },
+        ],
+      );
+    } catch (exception) {
+      Alert.alert('Stock injoignable', exception instanceof Error ? exception.message : 'Lecture du stock impossible.');
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  async function archiveAll() {
+    setResetting(true);
+    if (!resetKey.current) resetKey.current = generateOperationKey();
+
+    try {
+      const { archivedCount } = await api.archiveAllStockItems(resetKey.current);
+      resetKey.current = null;
+
+      // La dernière suggestion de recettes puisait dans des lots qui viennent d'être rangés.
+      setSuggestion(null);
+      await resyncExpiryAlerts({ fresh: true });
+
+      Alert.alert(
+        'Stock vidé',
+        `${archivedCount} ${archivedCount > 1 ? 'lots rangés' : 'lot rangé'} dans les archives. Ajoutez maintenant ce qui se trouve réellement chez vous.`,
+        [
+          { text: 'Plus tard', style: 'cancel' },
+          { text: 'Ajouter un aliment', onPress: () => router.push('/add') },
+        ],
+      );
+    } catch (exception) {
+      // Panne réseau : le serveur a peut-être agi. La même clé rejouera sa
+      // réponse au lieu de refaire le geste.
+      if (!(exception instanceof ApiError) || exception.status !== 0) resetKey.current = null;
+      Alert.alert(
+        'Le stock n\'a pas été vidé',
+        exception instanceof Error ? exception.message : 'Action impossible.',
+      );
+    } finally {
+      setResetting(false);
+    }
   }
 
   function setExclusions(next: Array<{ label: string; severity: ExclusionSeverity }>) {
@@ -360,6 +437,21 @@ export default function ProfileScreen() {
 
       <SectionTitle>Serveur</SectionTitle>
       <ServerAddressField />
+
+      <SectionTitle>Refaire l'inventaire</SectionTitle>
+      <Text style={[text.small, styles.help]}>
+        {member
+          ? 'Après une absence, le stock enregistré ne ressemble plus à ce qu\'il y a chez vous ? Videz-le d\'un geste, puis ajoutez ce qui s\'y trouve réellement.'
+          : 'Choisissez d\'abord votre prénom, plus haut : vider le stock est un geste signé.'}
+      </Text>
+      <Button
+        label="Vider le stock"
+        variant="danger"
+        hint="Range tous les lots du foyer dans les archives, après confirmation"
+        loading={resetting}
+        disabled={busy || !member}
+        onPress={confirmArchiveAll}
+      />
 
       <SectionTitle>Changer de foyer</SectionTitle>
       <Text style={[text.small, styles.help]}>
