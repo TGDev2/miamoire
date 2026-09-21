@@ -418,6 +418,28 @@ l'interface affiche « — » plutôt qu'un « 0 g » qui se lirait comme une pe
 > `discard()` écrit un mouvement de même nature, et rien ne les distingue avec
 > certitude. Ils sont laissés tels quels plutôt que reconstitués à l'aveugle.
 
+### Refaire l'inventaire
+
+Après une absence, le stock enregistré ne ressemble plus à ce qu'il y a chez soi.
+`POST /stock-items/archive-all` — « Vider le stock », dans l'onglet Foyer — range
+d'un seul geste tout l'inventaire courant : chaque lot ni vide ni déjà archivé est
+archivé exactement comme par `DELETE /stock-items/{id}`, avec le motif « Inventaire
+remis à zéro », sous une opération `inventory_reset`. La réponse donne
+`archivedCount`, le nombre de lots réellement rangés.
+
+C'est un archivage et non une suppression pour la raison ci-dessus, et une de
+plus : les taux de consommation du conseiller de courses se calculent sur le
+journal. Une remise à zéro qui l'effacerait lui ferait tout réapprendre. Chaque lot
+se restaure depuis les archives, **un par un** — il n'existe pas d'annulation
+groupée, et l'application ne la promet pas.
+
+Les lots sont verrouillés avant d'être lus, comme pour toute mutation : un lot
+qu'un autre téléphone vide pendant l'attente est relu vide, et laissé. Une
+confirmation de recette simultanée verrouille ses lots dans un autre ordre ;
+PostgreSQL peut alors interrompre l'une des deux (interblocage, erreur 500). Elle
+n'a rien écrit ; l'application abandonne la clé sur toute erreur qui n'est pas une
+panne réseau, et le geste se refait aussitôt.
+
 ## Démarrer
 
 ### Prérequis
@@ -835,6 +857,7 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `GET` `PATCH` | `/stock-items/{id}` | Fiche d'un lot et ses lots frères |
 | `DELETE` | `/stock-items/{id}` | Archive le lot ; l'historique est conservé |
 | `POST` | `/stock-items/{id}/restore` | Sort un lot des archives |
+| `POST` | `/stock-items/archive-all` | Archive tout l'inventaire courant, pour le refaire |
 | `POST` | `/stock-items/{id}/consume` | `all` · `package` · `units` · `quantity` |
 | `POST` | `/stock-items/{id}/add` | Réapprovisionnement |
 | `POST` | `/stock-items/{id}/correct` | Quantité exacte ou estimation |
