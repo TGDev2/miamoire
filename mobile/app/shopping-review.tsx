@@ -263,7 +263,11 @@ function ShoppingLineCard({
     <Card style={styles.card}>
       <View style={styles.headerRow}>
         <View style={styles.badges}>
-          {line.isNew ? (
+          {/* Le code seul dit quel produit attend un nom : sans lui, une ligne
+              inconnue ressemble à un objet vide ajouté par erreur. */}
+          {line.isUnknown && line.barcode ? (
+            <Badge label={`Code inconnu · ${line.barcode}`} level="soon" />
+          ) : line.isNew ? (
             <Badge label="Nouveau produit" level="calm" />
           ) : (
             <Badge label="Déjà connu" level="safe" />
