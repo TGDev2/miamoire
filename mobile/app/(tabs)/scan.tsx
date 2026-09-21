@@ -7,16 +7,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError, api } from '../../src/api/client';
 import { Button, Icon } from '../../src/components/ui';
 import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../../src/scan/retailBarcode';
+import { createScanGate } from '../../src/scan/scanGate';
 import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
 import { colors, font, radius, spacing, text, thermal } from '../../src/theme';
-
-/**
- * En-deçà de cette durée, une relecture du même code est le MÊME produit
- * encore dans le cadre (la caméra lit plusieurs fois par seconde tant qu'il y
- * reste) : elle est ignorée. Au-delà, c'est un geste délibéré — le produit a
- * été retiré puis représenté — et ça incrémente son nombre d'exemplaires.
- */
-const REAPPEAR_GAP_MS = 1200;
 
 /**
  * Pendant les courses, on regarde les produits, pas l'écran : un échec doit
@@ -37,7 +30,8 @@ export default function ScanScreen() {
   const [listCount, setListCount] = useState(0);
   const { lines, addScannedLine, addManualLine } = useShoppingSession();
 
-  const lastSeenAt = useRef(new Map<string, number>());
+  /** Un produit compte une fois par présentation devant la caméra — voir `scanGate`. */
+  const scanGate = useRef(createScanGate());
   const pendingLookups = useRef(new Set<string>());
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -75,13 +69,7 @@ export default function ScanScreen() {
     // Une lecture qui n'est pas un code alimentaire valide n'a rien scanné :
     // elle ne doit ni ajouter de ligne, ni retarder la lecture suivante.
     const data = readRetailBarcode(scan);
-    if (null === data) return;
-
-    const now = Date.now();
-    const last = lastSeenAt.current.get(data);
-    lastSeenAt.current.set(data, now);
-
-    if (last && now - last < REAPPEAR_GAP_MS) return;
+    if (null === data || !scanGate.current(data, Date.now())) return;
 
     const existing = lines.find((line) => line.barcode === data);
     if (existing) {

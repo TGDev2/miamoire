@@ -7,6 +7,7 @@ import { ApiError, api } from '../src/api/client';
 import type { CurrentStockSummary, Product } from '../src/api/types';
 import { Button, Card } from '../src/components/ui';
 import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../src/scan/retailBarcode';
+import { createScanGate } from '../src/scan/scanGate';
 import { colors, spacing, text, thermal } from '../src/theme';
 
 type Result =
@@ -28,6 +29,7 @@ export default function ShoppingCheckScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const lookedUp = useRef(false);
+  const scanGate = useRef(createScanGate());
 
   useFocusEffect(
     useCallback(() => {
@@ -40,7 +42,7 @@ export default function ShoppingCheckScreen() {
     // Écartée avant d'arrêter la caméra : une lecture fantôme ne doit pas
     // interrompre le cadrage du vrai code.
     const data = readRetailBarcode(scan);
-    if (null === data || lookedUp.current) return;
+    if (null === data || lookedUp.current || !scanGate.current(data, Date.now())) return;
     lookedUp.current = true;
     setActive(false);
     setLoading(true);
