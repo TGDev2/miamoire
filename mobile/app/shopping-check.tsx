@@ -3,7 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { api } from '../src/api/client';
+import { ApiError, api } from '../src/api/client';
 import type { CurrentStockSummary, Product } from '../src/api/types';
 import { Button, Card } from '../src/components/ui';
 import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../src/scan/retailBarcode';
@@ -54,6 +54,11 @@ export default function ShoppingCheckScreen() {
           : { found: false, barcode: data },
       );
     } catch (exception) {
+      // `request()` lève sur tout statut non 2xx : le produit inconnu arrive donc ici.
+      if (exception instanceof ApiError && 404 === exception.status) {
+        setResult({ found: false, barcode: data });
+        return;
+      }
       setError(exception instanceof Error ? exception.message : 'Vérification impossible.');
       lookedUp.current = false;
       setActive(true);

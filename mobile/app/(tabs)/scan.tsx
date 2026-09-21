@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { api } from '../../src/api/client';
+import { ApiError, api } from '../../src/api/client';
 import { Button, Icon } from '../../src/components/ui';
 import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../../src/scan/retailBarcode';
 import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
@@ -18,18 +18,24 @@ import { colors, font, radius, spacing, text, thermal } from '../../src/theme';
  */
 const REAPPEAR_GAP_MS = 1200;
 
+/**
+ * Pendant les courses, on regarde les produits, pas l'écran : un échec doit
+ * rester lisible bien plus longtemps qu'une confirmation, sans quoi le
+ * produit manquerait au panier sans que rien ne l'ait signalé.
+ */
+const FEEDBACK_MS = 1200;
+const FAILURE_FEEDBACK_MS = 4000;
+
+type Feedback = { message: string; failed: boolean };
+
 export default function ScanScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [active, setActive] = useState(true);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  /** `null` : la requête a échoué. Distinct de zéro, qui veut dire « liste vide ». */
-  const [listCount, setListCount] = useState<number | null>(null);
-  const [torch, setTorch] = useState(false);
-  /** Le dernier code lu, pour pouvoir le défaire sans quitter la caméra. */
-  const [lastScan, setLastScan] = useState<{ barcode: string; label: string } | null>(null);
-  const { lines, addScannedLine, addManualLine, undoScan } = useShoppingSession();
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [listCount, setListCount] = useState(0);
+  const { lines, addScannedLine, addManualLine } = useShoppingSession();
 
   const lastSeenAt = useRef(new Map<string, number>());
   const pendingLookups = useRef(new Set<string>());
@@ -59,30 +65,18 @@ export default function ScanScreen() {
     };
   }, []);
 
-  function showFeedback(message: string) {
-    setFeedback(message);
+  function showFeedback(message: string, failed = false) {
+    setFeedback({ message, failed });
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
-    feedbackTimer.current = setTimeout(() => setFeedback(null), 1200);
+    feedbackTimer.current = setTimeout(() => setFeedback(null), failed ? FAILURE_FEEDBACK_MS : FEEDBACK_MS);
   }
 
-<<<<<<< HEAD
-  /**
-   * Le geste réel : bras tendu, produit devant l'objectif, écran non regardé.
-   *
-   * Le seul accusé de réception était une pastille de 1 200 ms — soit exactement
-   * la fenêtre anti-doublon, si bien qu'un produit laissé dans le cadre
-   * incrémentait son compte au moment précis où le retour précédent
-   * disparaissait. La vibration, elle, se sent sans regarder.
-   */
-  async function onScanned({ data }: { data: string }) {
-=======
   async function onScanned(scan: { type: string; data: string }) {
     // Une lecture qui n'est pas un code alimentaire valide n'a rien scanné :
     // elle ne doit ni ajouter de ligne, ni retarder la lecture suivante.
     const data = readRetailBarcode(scan);
     if (null === data) return;
 
->>>>>>> 1990b9c (fix(mobile): accept only retail barcodes with a valid check digit)
     const now = Date.now();
     const last = lastSeenAt.current.get(data);
     lastSeenAt.current.set(data, now);
@@ -118,16 +112,19 @@ export default function ScanScreen() {
           ? `Sur votre liste : ${result.shoppingListItem.label}`
           : label,
       );
-      setLastScan({ barcode: data, label });
-    } catch {
-      // Inconnu du catalogue (404) ou réseau indisponible : la ligne est
-      // ajoutée quand même, à compléter manuellement à la validation.
-      // La lecture a bien eu lieu — c'est le catalogue qui ne connaît pas ce
-      // code. Le retour reste celui d'un scan pris en compte, pas d'un échec.
-      addScannedLine(data, { product: null, householdVariant: null });
-      haptics.tap();
-      showFeedback('Produit à compléter');
-      setLastScan({ barcode: data, label: 'Produit à compléter' });
+    } catch (error) {
+      if (error instanceof ApiError && 404 === error.status) {
+        // Un code valide qu'Open Food Facts ne connaît pas : la ligne est
+        // ajoutée, à nommer à la validation.
+        addScannedLine(data, { product: null, householdVariant: null });
+        showFeedback('Produit à compléter');
+      } else if (!(error instanceof ApiError && 401 === error.status)) {
+        // Réseau, serveur ou Open Food Facts muets : on ignore ce qu'est ce
+        // produit. Une ligne vide ferait ressaisir ce que le catalogue connaît
+        // sans doute ; le représenter la retrouvera préremplie. (Un 401 est
+        // déjà pris en charge par la session.)
+        showFeedback('Recherche impossible, rescannez', true);
+      }
     } finally {
       pendingLookups.current.delete(data);
     }
@@ -193,12 +190,7 @@ export default function ScanScreen() {
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
-<<<<<<< HEAD
-          enableTorch={torch}
-          barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
-=======
           barcodeScannerSettings={{ barcodeTypes: [...RETAIL_BARCODE_TYPES] }}
->>>>>>> 1990b9c (fix(mobile): accept only retail barcodes with a valid check digit)
           onBarcodeScanned={(event) => void onScanned(event)}
         />
       ) : (
@@ -269,9 +261,9 @@ export default function ScanScreen() {
 
         {feedback ? (
           <View style={styles.feedback} accessibilityLiveRegion="polite">
-            <Icon name="check" size={16} color={colors.ink} />
+            <Icon name={feedback.failed ? 'alert-outline' : 'check'} size={16} color={colors.ink} />
             <Text style={styles.feedbackText} numberOfLines={1}>
-              {feedback}
+              {feedback.message}
             </Text>
           </View>
         ) : null}
