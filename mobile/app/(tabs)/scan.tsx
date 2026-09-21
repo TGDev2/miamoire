@@ -5,13 +5,10 @@ import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../../src/api/client';
-import { Button, Icon, Loader } from '../../src/components/ui';
-import * as haptics from '../../src/haptics';
+import { Button, Icon } from '../../src/components/ui';
+import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../../src/scan/retailBarcode';
 import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
 import { colors, font, radius, spacing, text, thermal } from '../../src/theme';
-
-/** Codes-barres réellement utilisés sur les emballages alimentaires. */
-const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39'] as const;
 
 /**
  * En-deçà de cette durée, une relecture du même code est le MÊME produit
@@ -68,6 +65,7 @@ export default function ScanScreen() {
     feedbackTimer.current = setTimeout(() => setFeedback(null), 1200);
   }
 
+<<<<<<< HEAD
   /**
    * Le geste réel : bras tendu, produit devant l'objectif, écran non regardé.
    *
@@ -77,6 +75,14 @@ export default function ScanScreen() {
    * disparaissait. La vibration, elle, se sent sans regarder.
    */
   async function onScanned({ data }: { data: string }) {
+=======
+  async function onScanned(scan: { type: string; data: string }) {
+    // Une lecture qui n'est pas un code alimentaire valide n'a rien scanné :
+    // elle ne doit ni ajouter de ligne, ni retarder la lecture suivante.
+    const data = readRetailBarcode(scan);
+    if (null === data) return;
+
+>>>>>>> 1990b9c (fix(mobile): accept only retail barcodes with a valid check digit)
     const now = Date.now();
     const last = lastSeenAt.current.get(data);
     lastSeenAt.current.set(data, now);
@@ -187,8 +193,12 @@ export default function ScanScreen() {
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
+<<<<<<< HEAD
           enableTorch={torch}
           barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
+=======
+          barcodeScannerSettings={{ barcodeTypes: [...RETAIL_BARCODE_TYPES] }}
+>>>>>>> 1990b9c (fix(mobile): accept only retail barcodes with a valid check digit)
           onBarcodeScanned={(event) => void onScanned(event)}
         />
       ) : (

@@ -6,10 +6,8 @@ import { StyleSheet, Text, View } from 'react-native';
 import { api } from '../src/api/client';
 import type { CurrentStockSummary, Product } from '../src/api/types';
 import { Button, Card } from '../src/components/ui';
+import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../src/scan/retailBarcode';
 import { colors, spacing, text, thermal } from '../src/theme';
-
-/** Codes-barres réellement utilisés sur les emballages alimentaires. */
-const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39'] as const;
 
 type Result =
   | { found: true; product: Product; currentStock: CurrentStockSummary | null }
@@ -38,8 +36,11 @@ export default function ShoppingCheckScreen() {
     }, []),
   );
 
-  async function onScanned({ data }: { data: string }) {
-    if (lookedUp.current) return;
+  async function onScanned(scan: { type: string; data: string }) {
+    // Écartée avant d'arrêter la caméra : une lecture fantôme ne doit pas
+    // interrompre le cadrage du vrai code.
+    const data = readRetailBarcode(scan);
+    if (null === data || lookedUp.current) return;
     lookedUp.current = true;
     setActive(false);
     setLoading(true);
@@ -90,7 +91,7 @@ export default function ShoppingCheckScreen() {
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
-          barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
+          barcodeScannerSettings={{ barcodeTypes: [...RETAIL_BARCODE_TYPES] }}
           onBarcodeScanned={(event) => void onScanned(event)}
         />
       ) : (
