@@ -81,3 +81,6 @@ jobs:
 
       - name: Vérifier les types
         run: npm run typecheck
+
+      - name: Tests unitaires
+        run: npm test
