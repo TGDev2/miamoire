@@ -25,6 +25,7 @@ services:
             # Objets valeur : construits à la main avec leurs données, jamais
             # injectés. Les laisser au conteneur ferait échouer l'autowiring sur
             # un `array` ou un constructeur privé, à la première référence.
+            - '../src/Service/Ai/Generator/FallbackRecipeGenerator.php'
             - '../src/Service/Ai/Safety/DietaryGuard.php'
             - '../src/Service/Ai/Safety/DietaryViolation.php'
             - '../src/Service/Ai/RecipeRequest.php'

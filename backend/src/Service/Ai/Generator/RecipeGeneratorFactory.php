@@ -5,8 +5,20 @@ declare(strict_types=1);
 namespace App\Service\Ai\Generator;
 
 use App\Exception\StockException;
+use Psr\Log\LoggerInterface;
 
-/** Choisit le fournisseur de modèle déclaré dans RECIPE_PROVIDER. */
+/**
+ * Assemble la suite de tentatives déclarée par RECIPE_PROVIDER et GEMINI_MODEL.
+ *
+ * Les deux variables sont des listes ordonnées, séparées par des virgules ; une
+ * valeur unique se comporte exactement comme avant. `RECIPE_PROVIDER` enchaîne
+ * les fournisseurs, `GEMINI_MODEL` les modèles d'un même fournisseur — et comme
+ * le palier gratuit de Gemini compte ses quotas par modèle, un second modèle
+ * suffit à donner un secours qui ne coûte rien.
+ *
+ * Un fournisseur sans clé est retiré de la liste plutôt que de la faire échouer :
+ * nommer Claude en dernier recours ne doit rien casser tant que sa clé est absente.
+ */
 class RecipeGeneratorFactory
 {
     public const PROVIDER_GEMINI = 'gemini';
@@ -15,15 +27,21 @@ class RecipeGeneratorFactory
     public function __construct(
         private readonly GeminiRecipeGenerator $gemini,
         private readonly ClaudeRecipeGenerator $claude,
+        private readonly LoggerInterface $logger,
         private readonly string $provider,
     ) {
     }
 
     public function create(): RecipeGeneratorInterface
     {
-        $generator = $this->selected();
+        $attempts = array_values(array_filter(
+            $this->attempts(),
+            static fn (RecipeGeneratorInterface $generator): bool => $generator->isConfigured(),
+        ));
 
-        if (!$generator->isConfigured()) {
+        if ([] === $attempts) {
+            $generator = $this->selected();
+
             // Le message nomme la variable sans présumer d'où elle vient : en
             // développement c'est backend/.env.local, en production une variable
             // d'environnement de l'hébergeur.
@@ -34,27 +52,77 @@ class RecipeGeneratorFactory
             ));
         }
 
-        return $generator;
+        // Une seule tentative n'a rien à enchaîner : inutile de l'emballer.
+        return 1 === \count($attempts)
+            ? $attempts[0]
+            : new FallbackRecipeGenerator($attempts, $this->logger);
     }
 
     /**
-     * Le générateur désigné par RECIPE_PROVIDER, configuré ou non.
+     * La première tentative, configurée ou non.
      *
      * Séparé de `create()` pour la sonde de santé : elle a besoin de savoir si
-     * la clé du fournisseur actif est présente, jamais de lever l'exception que
-     * `create()` réserve à un usage réel (génération de recettes).
+     * la clé du fournisseur principal est présente, jamais de lever l'exception
+     * que `create()` réserve à un usage réel (génération de recettes).
      */
     public function selected(): RecipeGeneratorInterface
     {
-        return match (strtolower(trim($this->provider))) {
-            self::PROVIDER_CLAUDE => $this->claude,
-            self::PROVIDER_GEMINI, '' => $this->gemini,
+        return $this->expand($this->providers()[0])[0];
+    }
+
+    /**
+     * Toutes les tentatives, dans l'ordre, clé présente ou non.
+     *
+     * @return non-empty-list<RecipeGeneratorInterface>
+     */
+    private function attempts(): array
+    {
+        $attempts = [];
+
+        foreach ($this->providers() as $provider) {
+            foreach ($this->expand($provider) as $generator) {
+                $attempts[] = $generator;
+            }
+        }
+
+        return $attempts;
+    }
+
+    /**
+     * Les tentatives que porte un fournisseur : une par modèle chez Gemini.
+     *
+     * @return non-empty-list<RecipeGeneratorInterface>
+     */
+    private function expand(string $provider): array
+    {
+        return match ($provider) {
+            self::PROVIDER_CLAUDE => [$this->claude],
+            self::PROVIDER_GEMINI => array_map($this->gemini->withModel(...), $this->gemini->models()),
             default => throw new StockException(sprintf(
                 'Fournisseur de recettes « %s » inconnu. Valeurs acceptées : %s, %s.',
-                $this->provider,
+                $provider,
                 self::PROVIDER_GEMINI,
                 self::PROVIDER_CLAUDE,
             )),
         };
+    }
+
+    /**
+     * Les fournisseurs déclarés, dédoublonnés, dans l'ordre.
+     *
+     * @return non-empty-list<string>
+     */
+    private function providers(): array
+    {
+        $providers = array_values(array_unique(array_filter(
+            array_map(
+                static fn (string $provider): string => strtolower(trim($provider)),
+                explode(',', $this->provider),
+            ),
+            static fn (string $provider): bool => '' !== $provider,
+        )));
+
+        // Une valeur vide ne doit pas casser l'application : on retombe sur le gratuit.
+        return [] !== $providers ? $providers : [self::PROVIDER_GEMINI];
     }
 }

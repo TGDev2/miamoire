@@ -7,6 +7,7 @@ namespace App\EventListener;
 use App\Exception\IncompatibleUnitException;
 use App\Exception\StockConflictException;
 use App\Exception\StockException;
+use App\Service\Ai\Generator\RecipeGeneratorUnavailableException;
 use App\Service\OpenFoodFacts\OpenFoodFactsUnavailableException;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
@@ -37,6 +38,13 @@ class ApiExceptionListener
             // Un conflit n'est pas une erreur de saisie : le stock a bougé entre
             // la proposition et la confirmation. 409 le dit, 422 le cacherait.
             $exception instanceof StockConflictException => [Response::HTTP_CONFLICT, $exception->getMessage()],
+            // Avant le bras générique, sous-classe oblige : un quota épuisé n'est
+            // pas une erreur de saisie, et un 422 le noierait parmi la quarantaine
+            // d'autres StockException métier. 503 dit qu'il faut revenir plus tard.
+            $exception instanceof RecipeGeneratorUnavailableException => [
+                Response::HTTP_SERVICE_UNAVAILABLE,
+                $exception->getMessage(),
+            ],
             $exception instanceof IncompatibleUnitException,
             $exception instanceof StockException => [Response::HTTP_UNPROCESSABLE_ENTITY, $exception->getMessage()],
             // Pas un 404 : « produit inconnu » ouvrirait la saisie manuelle d'un
@@ -49,8 +57,11 @@ class ApiExceptionListener
             default => [Response::HTTP_INTERNAL_SERVER_ERROR, 'Une erreur interne est survenue.'],
         };
 
-        // Une panne d'Open Food Facts est prévue, et déjà journalisée par son client.
-        if ($status >= 500 && !$exception instanceof OpenFoodFactsUnavailableException) {
+        // Une panne d'Open Food Facts ou une saturation du générateur sont prévues,
+        // et déjà journalisées par leurs clients respectifs.
+        if ($status >= 500
+            && !$exception instanceof OpenFoodFactsUnavailableException
+            && !$exception instanceof RecipeGeneratorUnavailableException) {
             $this->logger->error('Erreur API non gérée', ['exception' => $exception]);
         }
 

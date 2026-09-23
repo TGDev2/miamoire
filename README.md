@@ -496,6 +496,42 @@ ANTHROPIC_API_KEY=sk-ant-...
 Sans clé, tout fonctionne sauf l'onglet « Cuisiner », qui affiche un message
 nommant précisément la variable à renseigner.
 
+#### Le secours, quand le quota gratuit tombe
+
+`RECIPE_PROVIDER` et `GEMINI_MODEL` sont des **listes ordonnées** : la tentative
+suivante n'est jouée que si la précédente est saturée ou en panne. Une valeur
+unique se comporte exactement comme avant.
+
+```dotenv
+# Deux modèles gratuits : le second prend le relais quand le premier répond 429.
+GEMINI_MODEL=gemini-3.6-flash,gemini-3.5-flash-lite
+```
+
+C'est ce qui rend le secours gratuit possible : le palier gratuit de Gemini
+compte ses quotas **par projet et par modèle** — le corps du 429 le dit lui-même
+(`GenerateRequestsPerDayPerProjectPerModel`). Épuiser un modèle n'épuise donc pas
+le suivant. Autres valeurs gratuites : `gemini-3.8-flash`, `gemini-3.7-flash`,
+`gemini-3.5-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite`.
+
+Pour ajouter Claude en dernier recours, une fois les modèles gratuits épuisés :
+
+```dotenv
+RECIPE_PROVIDER=gemini,claude
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Un fournisseur sans clé est simplement retiré de la liste : nommer Claude sans
+renseigner sa clé ne déclenche donc aucun appel payant, et ne casse rien.
+
+Ce qui **n'est pas** rejoué ailleurs : une clé invalide (401, 403) et un modèle
+inexistant (400). Les rejouer sur chaque tentative ne ferait que retarder le seul
+message qui aide à corriger. Une faute de frappe dans un modèle de secours se
+voit donc, au lieu d'être absorbée en silence.
+
+Quand tout est épuisé, l'API répond **503** (et non le 422 des erreurs de saisie)
+avec un message qui distingue le quota du jour — il repart à minuit, heure du
+Pacifique — de la limite par minute, puis renvoie vers les recettes enregistrées.
+
 L'appel au modèle est isolé derrière `RecipeGeneratorInterface` : la logique
 métier — inventaire structuré, consignes, validation de la proposition de
 consommation — est identique quel que soit le fournisseur. En ajouter un
