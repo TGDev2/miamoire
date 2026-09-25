@@ -5,7 +5,8 @@ import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError, api } from '../../src/api/client';
-import { Button, Icon } from '../../src/components/ui';
+import { Button, Icon, Loader } from '../../src/components/ui';
+import * as haptics from '../../src/haptics';
 import { RETAIL_BARCODE_TYPES, readRetailBarcode } from '../../src/scan/retailBarcode';
 import { createScanGate } from '../../src/scan/scanGate';
 import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
@@ -27,8 +28,12 @@ export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [active, setActive] = useState(true);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [listCount, setListCount] = useState(0);
-  const { lines, addScannedLine, addManualLine } = useShoppingSession();
+  /** `null` : la requête a échoué. Distinct de zéro, qui veut dire « liste vide ». */
+  const [listCount, setListCount] = useState<number | null>(null);
+  const [torch, setTorch] = useState(false);
+  /** Le dernier code lu, pour pouvoir le défaire sans quitter la caméra. */
+  const [lastScan, setLastScan] = useState<{ barcode: string; label: string } | null>(null);
+  const { lines, addScannedLine, addManualLine, undoScan } = useShoppingSession();
 
   /** Un produit compte une fois par présentation devant la caméra — voir `scanGate`. */
   const scanGate = useRef(createScanGate());
@@ -69,7 +74,7 @@ export default function ScanScreen() {
     // Une lecture qui n'est pas un code alimentaire valide n'a rien scanné :
     // elle ne doit ni ajouter de ligne, ni retarder la lecture suivante.
     const data = readRetailBarcode(scan);
-    if (null === data || !scanGate.current(data, Date.now())) return;
+    if (null === data || !scanGate.current.counts(data, Date.now())) return;
 
     const existing = lines.find((line) => line.barcode === data);
     if (existing) {
@@ -95,6 +100,7 @@ export default function ScanScreen() {
 
       const label = result.householdVariant?.name ?? result.product.name;
       haptics.success();
+      setLastScan({ barcode: data, label });
       showFeedback(
         result.shoppingListItem
           ? `Sur votre liste : ${result.shoppingListItem.label}`
@@ -106,6 +112,7 @@ export default function ScanScreen() {
         // ajoutée, à nommer à la validation.
         addScannedLine(data, { product: null, householdVariant: null });
         showFeedback('Produit à compléter');
+        setLastScan({ barcode: data, label: 'Produit à compléter' });
       } else if (!(error instanceof ApiError && 401 === error.status)) {
         // Réseau, serveur ou Open Food Facts muets : on ignore ce qu'est ce
         // produit. Une ligne vide ferait ressaisir ce que le catalogue connaît
@@ -125,7 +132,7 @@ export default function ScanScreen() {
     undoScan(lastScan.barcode);
     // La fenêtre anti-doublon garde une trace du code : sans cet oubli, le
     // représenter aussitôt pour se corriger ne ferait rien.
-    lastSeenAt.current.delete(lastScan.barcode);
+    scanGate.current.forget(lastScan.barcode);
     showFeedback(`${lastScan.label} — retiré du panier`);
     setLastScan(null);
   }
@@ -178,6 +185,7 @@ export default function ScanScreen() {
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
+          enableTorch={torch}
           barcodeScannerSettings={{ barcodeTypes: [...RETAIL_BARCODE_TYPES] }}
           onBarcodeScanned={(event) => void onScanned(event)}
         />

@@ -11,7 +11,7 @@ function gate() {
 }
 
 /** `count` lectures du même code à la cadence de la caméra ; rend les indices qui ont compté. */
-function readInFrame(counts, code, from, count) {
+function readInFrame({ counts }, code, from, count) {
   const counted = [];
   for (let index = 0; index < count; index++) {
     if (counts(code, from + index * FRAME_MS)) counted.push(index);
@@ -20,7 +20,7 @@ function readInFrame(counts, code, from, count) {
 }
 
 test('une lecture isolée ne compte jamais', () => {
-  const counts = gate();
+  const { counts } = gate();
 
   assert.equal(counts('6027670422028', 0), false);
 });
@@ -31,15 +31,15 @@ test('un code compte à sa troisième lecture, une seule fois tant qu\'il reste 
 });
 
 test('un produit retiré puis représenté compte de nouveau', () => {
-  const counts = gate();
+  const scanGate = gate();
 
-  assert.deepEqual(readInFrame(counts, '3017620422003', 0, 10), [2]);
+  assert.deepEqual(readInFrame(scanGate, '3017620422003', 0, 10), [2]);
   // Hors du cadre plus longtemps que l'intervalle : c'est un second exemplaire.
-  assert.deepEqual(readInFrame(counts, '3017620422003', 9 * FRAME_MS + 1300, 10), [2]);
+  assert.deepEqual(readInFrame(scanGate, '3017620422003', 9 * FRAME_MS + 1300, 10), [2]);
 });
 
 test('une fausse lecture au milieu du vrai code ne compte pas', () => {
-  const counts = gate();
+  const { counts } = gate();
   const counted = [];
 
   for (let index = 0; index < 30; index++) {
@@ -53,9 +53,22 @@ test('une fausse lecture au milieu du vrai code ne compte pas', () => {
 });
 
 test('des lectures isolées, séparées de plus que l\'intervalle, ne s\'additionnent pas', () => {
-  const counts = gate();
+  const { counts } = gate();
 
   assert.equal(counts('011970422006', 0), false);
   assert.equal(counts('011970422006', 1200), false);
   assert.equal(counts('011970422006', 2400), false);
+});
+
+test('un code oublié compte de nouveau sans quitter le cadre', () => {
+  const scanGate = gate();
+
+  assert.deepEqual(readInFrame(scanGate, '3017620422003', 0, 10), [2]);
+
+  // Le geste « Annuler » : la ligne part du panier alors que le produit est
+  // toujours devant la caméra. Sans l'oubli, les lectures suivantes ne comptent
+  // plus et le représenter aussitôt pour se corriger serait sans effet.
+  scanGate.forget('3017620422003');
+
+  assert.deepEqual(readInFrame(scanGate, '3017620422003', 10 * FRAME_MS, 10), [2]);
 });

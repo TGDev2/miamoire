@@ -23,25 +23,44 @@ export const CONFIRM_READS = 3;
  */
 export const REAPPEAR_GAP_MS = 1200;
 
-/**
- * `counts(code, now)` est vrai une fois par présentation d'un code : à sa
- * `confirmReads`-ième lecture sans interruption d'au moins `reappearGapMs`.
- */
+export type ScanGate = {
+  /**
+   * Vrai une fois par présentation d'un code : à sa `confirmReads`-ième lecture
+   * sans interruption d'au moins `reappearGapMs`.
+   */
+  counts: (code: string, now: number) => boolean;
+  /**
+   * Oublie la présentation en cours d'un code, qui compte donc de nouveau dès
+   * ses prochaines lectures. C'est ce que demande une annulation : le produit
+   * qu'on vient de retirer du panier est encore dans le cadre, et sa
+   * présentation a déjà atteint son compte. Sans cet oubli, le représenter pour
+   * se corriger ne ferait rien — il faudrait l'écarter le temps de
+   * `reappearGapMs`, précisément le geste que l'annulation évite.
+   */
+  forget: (code: string) => void;
+};
+
 export function createScanGate({
   confirmReads = CONFIRM_READS,
   reappearGapMs = REAPPEAR_GAP_MS,
-}: { confirmReads?: number; reappearGapMs?: number } = {}): (code: string, now: number) => boolean {
+}: { confirmReads?: number; reappearGapMs?: number } = {}): ScanGate {
   const presentations = new Map<string, { lastReadAt: number; reads: number }>();
 
-  return function counts(code, now) {
-    const current = presentations.get(code);
-    const presentation =
-      current && now - current.lastReadAt < reappearGapMs ? current : { lastReadAt: now, reads: 0 };
+  return {
+    counts(code, now) {
+      const current = presentations.get(code);
+      const presentation =
+        current && now - current.lastReadAt < reappearGapMs ? current : { lastReadAt: now, reads: 0 };
 
-    presentation.lastReadAt = now;
-    presentation.reads += 1;
-    presentations.set(code, presentation);
+      presentation.lastReadAt = now;
+      presentation.reads += 1;
+      presentations.set(code, presentation);
 
-    return presentation.reads === confirmReads;
+      return presentation.reads === confirmReads;
+    },
+
+    forget(code) {
+      presentations.delete(code);
+    },
   };
 }

@@ -42,7 +42,7 @@ export default function ShoppingCheckScreen() {
     // Écartée avant d'arrêter la caméra : une lecture fantôme ne doit pas
     // interrompre le cadrage du vrai code.
     const data = readRetailBarcode(scan);
-    if (null === data || lookedUp.current || !scanGate.current(data, Date.now())) return;
+    if (null === data || lookedUp.current || !scanGate.current.counts(data, Date.now())) return;
     lookedUp.current = true;
     setActive(false);
     setLoading(true);
