@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Ai;
 
 use App\Enum\Equipment;
+use App\Enum\FoodGroup;
 use App\Enum\MealTemperature;
 
 /** Les contraintes saisies dans l'écran « Que cuisiner ? ». */
@@ -40,6 +41,15 @@ final readonly class RecipeRequest
          * @var list<PriorityChoice>
          */
         public array $priorities = [],
+        /**
+         * Les composantes que chaque recette doit contenir — féculent, légume,
+         * protéine. Facultatif : vide, la composition reste libre. Renseigné,
+         * c'est une contrainte vérifiée sur chaque recette renvoyée
+         * ({@see FoodGroupFilter}).
+         *
+         * @var list<FoodGroup>
+         */
+        public array $foodGroups = [],
     ) {
     }
 }

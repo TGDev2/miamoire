@@ -7,6 +7,7 @@ namespace App\Service\Ai;
 use App\Entity\Household;
 use App\Enum\Equipment;
 use App\Enum\FoodCut;
+use App\Enum\FoodGroup;
 use App\Enum\ProductTrait;
 use App\Enum\Season;
 use App\Exception\StockException;
@@ -45,6 +46,7 @@ class RecipeSuggestionService
         private readonly DietaryGuardFactory $guards,
         private readonly RecipeSafetyFilter $safetyFilter,
         private readonly RequiredIngredientFilter $requiredFilter,
+        private readonly FoodGroupFilter $foodGroupFilter,
         private readonly RecipePlanService $planner,
         private readonly SeasonalContextFactory $seasons,
         private readonly EntityManagerInterface $entityManager,
@@ -92,6 +94,10 @@ class RecipeSuggestionService
             'allowExtraIngredients' => $request->allowExtraIngredients,
             'mustUseIngredient' => null !== $required ? self::priorityPayload($required) : null,
             'desiredIngredients' => array_map(self::priorityPayload(...), $desired),
+            'requiredFoodGroups' => array_map(
+                static fn (FoodGroup $group): string => $group->value,
+                $request->foodGroups,
+            ),
             'inventory' => $inventoryPayload,
         ];
 
@@ -103,6 +109,7 @@ class RecipeSuggestionService
                 $household->getRecentRecipeSuggestions(),
                 $season,
                 $request->equipment,
+                $request->foodGroups,
             ),
             json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
             RecipeSchema::definition(),
@@ -124,17 +131,21 @@ class RecipeSuggestionService
         // Second contrôle, de nature différente : l'aliment imposé. Il s'applique
         // à ce qui a survécu au premier — une recette écartée pour un allergène
         // n'a pas à être écartée une seconde fois pour un autre motif.
-        $constrained = $this->requiredFilter->apply($checked['recipes'], $required);
+        $imposed = $this->requiredFilter->apply($checked['recipes'], $required);
 
-        $rejected = array_merge($checked['rejected'], $constrained['rejected']);
+        // Troisième contrôle, sur le même principe : la composition demandée.
+        $constrained = $this->foodGroupFilter->apply($imposed['recipes'], $request->foodGroups);
+
+        $rejected = array_merge($checked['rejected'], $imposed['rejected'], $constrained['rejected']);
 
         // Une liste vide sans explication laisserait croire à une panne. C'est au
         // contraire le contrôle qui a fonctionné : il faut le dire.
         if ([] === $constrained['recipes'] && [] !== $rejected) {
             throw new StockException(sprintf(
-                'Les %d propositions reçues ont toutes été écartées (%s) : aucune ne vous est montrée. Relancez une génération.',
+                'Les %d propositions reçues ont toutes été écartées (%s) : aucune ne vous est montrée. %s',
                 count($rejected),
                 implode(', ', array_unique(array_column($rejected, 'reason'))),
+                $this->retryAdvice($constrained['rejected'], $request),
             ));
         }
 
@@ -394,6 +405,26 @@ class RecipeSuggestionService
         );
     }
 
+    /**
+     * Que faire quand toutes les propositions ont été écartées.
+     *
+     * Relancer suffit d'ordinaire. Pas quand c'est la composition qui manque :
+     * un inventaire sans aucune protéine en donnera aussi peu à la génération
+     * suivante, et le conseil enverrait l'utilisateur tourner en rond.
+     *
+     * @param list<array{recipeName: string, reason: string}> $compositionRejections
+     */
+    private function retryAdvice(array $compositionRejections, RecipeRequest $request): string
+    {
+        if ([] === $compositionRejections) {
+            return 'Relancez une génération.';
+        }
+
+        return $request->allowExtraIngredients
+            ? 'Votre inventaire n\'en contient peut-être pas : décochez ce groupe dans « À inclure dans le plat ».'
+            : 'Votre inventaire n\'en contient peut-être pas : décochez ce groupe dans « À inclure dans le plat », ou autorisez quelques ingrédients manquants.';
+    }
+
     /** Certains modèles encadrent le JSON par ```json malgré la consigne. */
     private function stripCodeFence(string $raw): string
     {
@@ -411,6 +442,7 @@ class RecipeSuggestionService
      * @param list<ResolvedPriority> $desired
      * @param list<string>           $recentNames
      * @param list<Equipment>        $equipment
+     * @param list<FoodGroup>        $foodGroups
      */
     private function systemPrompt(
         array $exclusions,
@@ -419,6 +451,7 @@ class RecipeSuggestionService
         array $recentNames,
         SeasonalContext $season,
         array $equipment,
+        array $foodGroups,
     ): string {
         $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
         $traits = $this->traitGlossary();
@@ -463,6 +496,23 @@ class RecipeSuggestionService
                 )),
             );
 
+        $composition = [] === $foodGroups
+            ? ''
+            : sprintf(
+                "\n            COMPOSITION DEMANDÉE : chacune des TROIS recettes doit contenir %s.\n"
+                ."            Prends-les dans l'inventaire ; un ingrédient manquant ne peut fournir un\n"
+                ."            groupe que si `allowExtraIngredients` est true (règle 3). Ils font partie\n"
+                ."            du plat lui-même, avec leurs quantités et leurs étapes, et l'ingrédient\n"
+                ."            qui fournit chaque groupe est `essential: true` — un légume facultatif\n"
+                ."            n'est pas un légume garanti. Un programme relit `foodGroups` sur chaque recette\n"
+                ."            et supprime celles où l'un de ces groupes manque. Il connaît les aliments\n"
+                ."            courants : une déclaration fausse — du riz rangé parmi les protéines —\n"
+                ."            est détectée et traitée comme un oubli. Si l'inventaire ne fournit pas\n"
+                ."            un groupe, ne maquille rien : déclare honnêtement ce que le plat contient,\n"
+                ."            l'utilisateur sera prévenu et pourra changer sa demande.\n",
+                implode(', ', array_map(static fn (FoodGroup $group): string => $group->definition(), $foodGroups)),
+            );
+
         $safety = [] === $exclusions
             ? ''
             : sprintf(
@@ -496,8 +546,9 @@ class RecipeSuggestionService
             Données reçues : la date du jour et la saison qu'elle désigne, le nombre de
             personnes, le type de repas, une préférence chaude ou froide, le temps
             disponible, les équipements utilisables, les exclusions alimentaires,
-            l'autorisation ou non d'ajouter des ingrédients manquants, et l'inventaire
-            du foyer.
+            l'autorisation ou non d'ajouter des ingrédients manquants, les composantes
+            exigées dans chaque plat (`requiredFoodGroups`, souvent vide), et
+            l'inventaire du foyer.
 
             Nous sommes le {$today}, donc en {$seasonLabel}. C'est la référence de toutes
             les dates que tu liras : une échéance `useBy` ne veut rien dire sans elle.
@@ -621,7 +672,16 @@ class RecipeSuggestionService
                 plusieurs possibilités et ce qu'on ajoute à la liste de courses ; elle ne
                 justifie jamais de laisser périmer un aliment déjà là. La règle 1
                 l'emporte sur la 17 chaque fois que les deux se contredisent.
-            {$gear}{$imposed}{$wished}{$safety}{$recentAvoidance}
+            19. `foodGroups` déclare les composantes que le plat contient réellement,
+                chacune avec l'ingrédient de la recette qui la fournit (son `label`,
+                recopié à l'identique) :
+                "starch" pour un féculent, "vegetable" pour un légume, "protein" pour une
+                protéine. La pomme de terre est un féculent, pas un légume ; les
+                légumineuses (lentilles, pois chiches, haricots secs) comptent comme
+                féculent et comme protéine. Les céréales — riz, pâtes, pain, semoule — ne
+                sont JAMAIS des protéines, même si elles en contiennent un peu. N'y mets
+                que ce qui est vraiment dans l'assiette, une liste vide si rien ne s'y prête.
+            {$gear}{$imposed}{$wished}{$composition}{$safety}{$recentAvoidance}
             À propos de `stockConsumptionProposal` :
 
             - C'est une PROPOSITION de retrait de stock, soumise ensuite à validation humaine.

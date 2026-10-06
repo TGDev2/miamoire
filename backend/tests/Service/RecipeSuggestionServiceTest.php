@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Service;
 
+use App\Enum\FoodGroup;
 use App\Enum\Unit;
 use App\Exception\StockException;
 use App\Service\Ai\PriorityChoice;
+use App\Service\Ai\RecipeRequest;
 use App\Service\Ai\RecipeSuggestionService;
 use App\Service\Ai\ResolvedPriority;
 use App\Service\Inventory\InventoryLine;
@@ -229,6 +231,41 @@ class RecipeSuggestionServiceTest extends TestCase
 
         self::assertFalse($result['required']->hasTarget());
         self::assertSame(200.0, $result['desired'][0]->quantity);
+    }
+
+    /** Rien n'indique que relancer échouera : c'est le bon conseil. */
+    public function testRetryIsAdvisedWhenNoRecipeLackedARequestedGroup(): void
+    {
+        self::assertSame('Relancez une génération.', $this->retryAdvice([], new RecipeRequest()));
+    }
+
+    /**
+     * Un inventaire sans protéine n'en aura pas davantage au prochain essai :
+     * le conseil désigne ce qui débloque vraiment la situation.
+     */
+    public function testAMissingGroupPointsToTheSettingsInsteadOfARetry(): void
+    {
+        $rejected = [['recipeName' => 'Tian', 'reason' => 'sans protéine']];
+
+        $strict = $this->retryAdvice($rejected, new RecipeRequest(foodGroups: [FoodGroup::Protein]));
+        self::assertStringNotContainsString('Relancez', $strict);
+        self::assertStringContainsString('décochez ce groupe', $strict);
+        self::assertStringContainsString('autorisez quelques ingrédients manquants', $strict);
+
+        // Les ajouts déjà autorisés, il ne reste qu'à décocher.
+        $lenient = $this->retryAdvice($rejected, new RecipeRequest(allowExtraIngredients: true, foodGroups: [FoodGroup::Protein]));
+        self::assertStringContainsString('décochez ce groupe', $lenient);
+        self::assertStringNotContainsString('autorisez', $lenient);
+    }
+
+    /** @param list<array{recipeName: string, reason: string}> $compositionRejections */
+    private function retryAdvice(array $compositionRejections, RecipeRequest $request): string
+    {
+        $service = (new \ReflectionClass(RecipeSuggestionService::class))->newInstanceWithoutConstructor();
+
+        /** @var string */
+        return (new \ReflectionMethod(RecipeSuggestionService::class, 'retryAdvice'))
+            ->invoke($service, $compositionRejections, $request);
     }
 
     private function line(

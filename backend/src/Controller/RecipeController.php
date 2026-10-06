@@ -7,6 +7,7 @@ namespace App\Controller;
 use App\Entity\Household;
 use App\Entity\SavedRecipe;
 use App\Enum\Equipment;
+use App\Enum\FoodGroup;
 use App\Enum\MealTemperature;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
@@ -64,6 +65,9 @@ class RecipeController extends AbstractApiController
             // courant. Au plus 3 — le premier est une contrainte, les autres
             // de simples préférences (voir RecipeRequest).
             priorities: array_slice(PriorityChoice::listFrom($payload), 0, 3),
+            // Absent dans les applications antérieures : aucune contrainte de
+            // composition, comme avant.
+            foodGroups: FoodGroup::fromValues($payload->stringList('foodGroups')),
         ));
 
         // Le plan de chaque recette est un objet de service, pas encore une forme

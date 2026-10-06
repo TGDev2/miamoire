@@ -8,6 +8,7 @@ use App\Enum\Allergen;
 use App\Enum\Equipment;
 use App\Enum\FillLevel;
 use App\Enum\FoodCut;
+use App\Enum\FoodGroup;
 use App\Enum\MealTemperature;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
@@ -90,6 +91,13 @@ class ReferenceController extends AbstractApiController
                     'label' => $temperature->label(),
                 ],
                 MealTemperature::cases(),
+            ),
+            'foodGroups' => array_map(
+                static fn (FoodGroup $group): array => [
+                    'value' => $group->value,
+                    'label' => $group->label(),
+                ],
+                FoodGroup::cases(),
             ),
             'equipment' => array_map(
                 static fn (Equipment $equipment): array => [

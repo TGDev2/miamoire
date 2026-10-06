@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Ai;
 
 use App\Enum\FoodCut;
+use App\Enum\FoodGroup;
 
 /**
  * Schéma JSON imposé à la réponse du modèle.
@@ -48,6 +49,7 @@ final class RecipeSchema
                 'recipeName', 'feasibility', 'servings', 'preparationTime', 'summary',
                 'ingredientsFromInventory', 'missingIngredients', 'substitutions',
                 'steps', 'stockConsumptionProposal', 'includesSideDish', 'utensils',
+                'foodGroups',
             ],
             'properties' => [
                 'recipeName' => ['type' => 'string'],
@@ -62,6 +64,28 @@ final class RecipeSchema
                 // plat principal ne se suffisait pas à lui seul — voir la règle
                 // correspondante du prompt système.
                 'includesSideDish' => ['type' => 'boolean'],
+                // Les groupes que le plat contient réellement, chacun avec
+                // l'ingrédient qui le fournit. Requis même sans demande : c'est
+                // sur cette déclaration que `FoodGroupFilter` vérifie une
+                // composition imposée.
+                'foodGroups' => [
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'object',
+                        'additionalProperties' => false,
+                        'required' => ['group', 'ingredient'],
+                        'properties' => [
+                            'group' => [
+                                'type' => 'string',
+                                'enum' => array_map(
+                                    static fn (FoodGroup $group): string => $group->value,
+                                    FoodGroup::cases(),
+                                ),
+                            ],
+                            'ingredient' => ['type' => 'string'],
+                        ],
+                    ],
+                ],
                 'feasibility' => [
                     'type' => 'string',
                     'enum' => [
