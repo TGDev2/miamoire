@@ -404,6 +404,8 @@ export interface Reference {
   categories: string[];
   mealTypes: ReferenceOption[];
   mealTemperatures: ReferenceOption[];
+  /** Féculent, légume, protéine : les composantes qu'on peut exiger d'un plat. */
+  foodGroups: ReferenceOption[];
   equipment: ReferenceOption[];
 }
 

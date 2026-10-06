@@ -60,7 +60,7 @@ export default function CookScreen() {
 
   const [reference, setReference] = useState<Reference | null>(null);
   const [inventory, setInventory] = useState<InventorySummary | null>(null);
-  /** Les six réglages retenus d'une génération à l'autre. Voir `preferences.ts`. */
+  /** Les réglages retenus d'une génération à l'autre. Voir `preferences.ts`. */
   const [settings, setSettings] = useState<CookPreferences>(() =>
     defaultPreferences(household?.members.length ?? 0),
   );
@@ -76,7 +76,7 @@ export default function CookScreen() {
 
   const { generation, elapsed, generate, cancelGeneration, acknowledgeGeneration } = useRecipes();
 
-  const { people, mealType, mealTemperature, maxMinutes, equipment, allowExtra } = settings;
+  const { people, mealType, mealTemperature, maxMinutes, equipment, foodGroups, allowExtra } = settings;
 
   /** Un réglage change : il s'applique et il est retenu, dans le même geste. */
   const update = useCallback((patch: Partial<CookPreferences>) => {
@@ -110,6 +110,7 @@ export default function CookScreen() {
             mealTypes: ref.mealTypes.map((option) => option.value),
             mealTemperatures: ref.mealTemperatures.map((option) => option.value),
             equipment: ref.equipment.map((option) => option.value),
+            foodGroups: ref.foodGroups.map((option) => option.value),
           }),
         );
       }
@@ -155,6 +156,15 @@ export default function CookScreen() {
     });
   }
 
+  function toggleFoodGroup(value: string) {
+    haptics.select();
+    update({
+      foodGroups: foodGroups.includes(value)
+        ? foodGroups.filter((entry) => entry !== value)
+        : [...foodGroups, value],
+    });
+  }
+
   const request: GenerationRequest = {
     people,
     mealType,
@@ -164,6 +174,7 @@ export default function CookScreen() {
     exclusions: [],
     allowExtraIngredients: allowExtra,
     priorities,
+    foodGroups,
   };
 
   /**
@@ -309,6 +320,18 @@ export default function CookScreen() {
                 mealTemperature: mealTemperature === option.value ? null : option.value,
               });
             }}
+          />
+        ))}
+      </View>
+
+      <SectionTitle>À inclure dans le plat</SectionTitle>
+      <View style={styles.chips}>
+        {reference?.foodGroups.map((option) => (
+          <Chip
+            key={option.value}
+            label={option.label}
+            selected={foodGroups.includes(option.value)}
+            onPress={() => toggleFoodGroup(option.value)}
           />
         ))}
       </View>

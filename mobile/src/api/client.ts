@@ -581,6 +581,8 @@ export const api = {
       exclusions: string[];
       allowExtraIngredients: boolean;
       priorities?: Priority[];
+      /** Chaque recette doit contenir un aliment de chacun de ces groupes. */
+      foodGroups?: string[];
     },
     signal?: AbortSignal,
   ) =>

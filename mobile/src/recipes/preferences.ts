@@ -22,6 +22,8 @@ export interface CookPreferences {
   mealTemperature: string | null;
   maxMinutes: number | null;
   equipment: string[];
+  /** Féculent, légume, protéine : ce que chaque recette doit contenir. */
+  foodGroups: string[];
   allowExtra: boolean;
 }
 
@@ -34,6 +36,7 @@ export function defaultPreferences(householdMembers: number): CookPreferences {
     mealTemperature: null,
     maxMinutes: null,
     equipment: [],
+    foodGroups: [],
     allowExtra: false,
   };
 }
@@ -48,7 +51,7 @@ export function defaultPreferences(householdMembers: number): CookPreferences {
  */
 export async function readPreferences(
   householdMembers: number,
-  known: { mealTypes: string[]; mealTemperatures: string[]; equipment: string[] },
+  known: { mealTypes: string[]; mealTemperatures: string[]; equipment: string[]; foodGroups: string[] },
 ): Promise<CookPreferences> {
   const fallback = defaultPreferences(householdMembers);
 
@@ -60,6 +63,10 @@ export async function readPreferences(
 
     const keep = (value: unknown, among: string[]): string | null =>
       'string' === typeof value && among.includes(value) ? value : null;
+    const keepAll = (values: unknown, among: string[]): string[] =>
+      Array.isArray(values)
+        ? values.filter((value): value is string => among.includes(value as string))
+        : [];
 
     return {
       people:
@@ -69,9 +76,9 @@ export async function readPreferences(
       mealType: keep(stored.mealType, known.mealTypes),
       mealTemperature: keep(stored.mealTemperature, known.mealTemperatures),
       maxMinutes: 'number' === typeof stored.maxMinutes ? stored.maxMinutes : null,
-      equipment: Array.isArray(stored.equipment)
-        ? stored.equipment.filter((value): value is string => known.equipment.includes(value as string))
-        : [],
+      equipment: keepAll(stored.equipment, known.equipment),
+      // Absent des réglages écrits avant son arrivée : aucune contrainte.
+      foodGroups: keepAll(stored.foodGroups, known.foodGroups),
       allowExtra: true === stored.allowExtra,
     };
   } catch {
