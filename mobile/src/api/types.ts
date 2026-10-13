@@ -475,6 +475,20 @@ export interface Priority {
   packages?: number;
 }
 
+/** Une demande de recettes : la même pour une génération et pour son export. */
+export interface RecipeRequestBody {
+  people: number;
+  mealType?: string | null;
+  mealTemperature?: string | null;
+  maxMinutes?: number | null;
+  equipment: string[];
+  exclusions: string[];
+  allowExtraIngredients: boolean;
+  priorities?: Priority[];
+  /** Chaque recette doit contenir un aliment de chacun de ces groupes. */
+  foodGroups?: string[];
+}
+
 export interface InventoryDeadlineBucket {
   quantity: number;
   useBy: string | null;

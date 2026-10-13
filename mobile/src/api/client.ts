@@ -12,7 +12,6 @@ import type {
   MealPlanOverview,
   MealSlot,
   Member,
-  Priority,
   Product,
   ProductCutValue,
   ProductTraitValue,
@@ -20,6 +19,7 @@ import type {
   QuickConsumeCandidate,
   Recipe,
   RecipePlan,
+  RecipeRequestBody,
   Reference,
   ResetScope,
   CurrentStockSummary,
@@ -571,21 +571,7 @@ export const api = {
    * Cent vingt secondes : le serveur rend sa main à quatre-vingt-dix, le client
    * lui laisse de quoi le faire plutôt que de couper avant lui.
    */
-  suggestRecipes: (
-    body: {
-      people: number;
-      mealType?: string | null;
-      mealTemperature?: string | null;
-      maxMinutes?: number | null;
-      equipment: string[];
-      exclusions: string[];
-      allowExtraIngredients: boolean;
-      priorities?: Priority[];
-      /** Chaque recette doit contenir un aliment de chacun de ces groupes. */
-      foodGroups?: string[];
-    },
-    signal?: AbortSignal,
-  ) =>
+  suggestRecipes: (body: RecipeRequestBody, signal?: AbortSignal) =>
     request<SuggestionResponse>('/recipes/suggest', {
       method: 'POST',
       body,
@@ -596,6 +582,14 @@ export const api = {
           'La génération a dépassé deux minutes et a été interrompue. Réessayez, ou réduisez le nombre d\'aliments imposés.',
       },
     }),
+
+  /**
+   * La même demande, rédigée pour être collée dans un autre assistant quand le
+   * modèle de l'application ne répond pas. Aucun modèle n'est sollicité : la
+   * réponse est rapide, le délai par défaut suffit.
+   */
+  recipePrompt: (body: RecipeRequestBody) =>
+    request<{ prompt: string }>('/recipes/prompt', { method: 'POST', body }),
 
   savedRecipes: () => request<{ recipes: SavedRecipe[] }>('/recipes/saved'),
 

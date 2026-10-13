@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../src/api/client';
 import { useSession } from '../../src/session/SessionContext';
@@ -19,6 +19,7 @@ import {
   ToggleRow,
   useTopInset,
 } from '../../src/components/ui';
+import { useFeedback } from '../../src/components/Feedback';
 import { IngredientPicker } from '../../src/components/IngredientPicker';
 import * as haptics from '../../src/haptics';
 import { useRecipes, type GenerationRequest } from '../../src/recipes/RecipeContext';
@@ -75,6 +76,8 @@ export default function CookScreen() {
   const [focused, setFocused] = useState(false);
 
   const { generation, elapsed, generate, cancelGeneration, acknowledgeGeneration } = useRecipes();
+  const { notify } = useFeedback();
+  const [exporting, setExporting] = useState(false);
 
   const { people, mealType, mealTemperature, maxMinutes, equipment, foodGroups, allowExtra } = settings;
 
@@ -176,6 +179,28 @@ export default function CookScreen() {
     priorities,
     foodGroups,
   };
+
+  /**
+   * La même demande, à coller soi-même dans un autre assistant quand le modèle
+   * de l'application ne répond pas — quota, panne. Le serveur la rédige : c'est
+   * la consigne exacte de la génération, aucun modèle n'est sollicité.
+   *
+   * Reste possible pendant une génération : c'est quand elle traîne qu'on en a
+   * besoin. Fermer la feuille de partage n'est pas une erreur.
+   */
+  async function exportPrompt(body: GenerationRequest) {
+    haptics.tap();
+    setExporting(true);
+
+    try {
+      const { prompt } = await api.recipePrompt(body);
+      await Share.share({ message: prompt });
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : "L'export a échoué. Réessayez.", 'critical');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   /**
    * Le résultat s'ouvre tout seul si l'on a attendu devant l'écran, et attend
@@ -434,6 +459,15 @@ export default function CookScreen() {
             />
             <Button label="Fermer" variant="ghost" onPress={acknowledgeGeneration} />
           </View>
+          <Button
+            label="Exporter vers un autre assistant"
+            variant="secondary"
+            icon="share-variant-outline"
+            onPress={() => exportPrompt(generation.request)}
+            loading={exporting}
+            disabled={exporting}
+            style={styles.stateAction}
+          />
         </Card>
       ) : null}
 
@@ -455,6 +489,25 @@ export default function CookScreen() {
       ) : null}
       <Text style={[text.small, styles.disclaimer]}>
         Rien ne quitte votre stock sans votre confirmation. Comptez environ une minute.
+      </Text>
+
+      {/* Toujours là, pas seulement après un échec : sans clé d'API ou quota
+          épuisé, aucune génération n'aboutit, et l'échec n'arrive qu'au bout
+          de l'attente. */}
+      <Button
+        label="Exporter vers un autre assistant"
+        variant="secondary"
+        icon="share-variant-outline"
+        onPress={() => exportPrompt(request)}
+        loading={exporting}
+        disabled={exporting}
+        hint="Partage la demande et votre inventaire, à coller dans un autre assistant"
+        style={styles.export}
+      />
+      <Text style={[text.small, styles.disclaimer]}>
+        L'export contient votre inventaire, vos notes et vos exclusions. Les aliments exclus en
+        sont retirés, mais la réponse de l'autre assistant n'est pas revérifiée, et le stock se
+        déduit à la main.
       </Text>
     </ScrollView>
   );
@@ -523,6 +576,7 @@ const styles = StyleSheet.create({
   submit: { marginTop: spacing.xl },
   submitNote: { textAlign: 'center', marginTop: spacing.md },
   disclaimer: { textAlign: 'center', marginTop: spacing.sm },
+  export: { marginTop: spacing.xl },
 
   stateCard: { marginBottom: spacing.lg },
   stateTitle: { marginTop: spacing.sm },
