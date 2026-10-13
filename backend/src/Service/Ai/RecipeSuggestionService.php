@@ -60,57 +60,18 @@ class RecipeSuggestionService
         // Lève une erreur explicite si aucune clé n'est configurée.
         $generator = $this->generators->create();
 
-        $guard = $this->guards->for($household, $request->exclusions);
-        $inventory = $this->aggregator->aggregate($household, guard: $guard);
-
-        if ([] === $inventory) {
-            throw new StockException($guard->isEmpty()
-                ? 'Votre inventaire est vide : ajoutez au moins un aliment avant de demander une recette.'
-                : 'Aucun aliment de votre inventaire ne respecte les exclusions du foyer.');
-        }
-
-        ['required' => $required, 'desired' => $desired] = $this->resolvePriorities($inventory, $request->priorities);
-        $inventoryPayload = array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory);
-
-        // Le seul endroit où l'heure est lue : le reste du service la reçoit, ce
-        // qui rend la saison — et donc le registre des plats — testable.
-        $season = $this->seasons->for(new \DateTimeImmutable('today'));
-
-        $payload = [
-            ...$season->toAiPayload(),
-            'people' => $request->people,
-            'mealType' => $request->mealType,
-            'mealTemperature' => $request->mealTemperature?->value,
-            'maxPreparationMinutes' => $request->maxMinutes,
-            // Les libellés, pas les valeurs techniques : la règle 12 impose que
-            // chaque `utensils` appartienne à cette liste, et le modèle la recopie
-            // telle quelle. « stovetop » s'affichait alors en anglais sur la fiche
-            // d'une recette française.
-            'availableEquipment' => array_map(
-                static fn (Equipment $case): string => $case->label(),
-                $request->equipment,
-            ),
-            'dietaryExclusions' => $guard->exclusions(),
-            'allowExtraIngredients' => $request->allowExtraIngredients,
-            'mustUseIngredient' => null !== $required ? self::priorityPayload($required) : null,
-            'desiredIngredients' => array_map(self::priorityPayload(...), $desired),
-            'requiredFoodGroups' => array_map(
-                static fn (FoodGroup $group): string => $group->value,
-                $request->foodGroups,
-            ),
-            'inventory' => $inventoryPayload,
-        ];
+        [
+            'guard' => $guard,
+            'inventory' => $inventory,
+            'required' => $required,
+            'desired' => $desired,
+            'payload' => $payload,
+            'systemPrompt' => $systemPrompt,
+        ] = $this->prepare($household, $request);
+        $inventoryPayload = $payload['inventory'];
 
         $raw = $generator->generate(
-            $this->systemPrompt(
-                $guard->exclusions(),
-                $required,
-                $desired,
-                $household->getRecentRecipeSuggestions(),
-                $season,
-                $request->equipment,
-                $request->foodGroups,
-            ),
+            $systemPrompt."\nRéponds uniquement par le JSON demandé, sans texte d'introduction ni bloc de code.",
             json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE),
             RecipeSchema::definition(),
         );
@@ -186,6 +147,149 @@ class RecipeSuggestionService
             'requiredIngredient' => null !== $required ? self::priorityResponse($required) : null,
             'desiredIngredients' => array_map(self::priorityResponse(...), $desired),
             'provider' => $generator->label(),
+        ];
+    }
+
+    /**
+     * La même demande, rédigée pour être confiée à la main à un autre assistant.
+     *
+     * Elle sert quand le générateur ne répond pas — quota, panne, aucune clé —
+     * et n'en sollicite donc aucun. Consigne et données sont celles que
+     * `suggest()` enverrait, à deux différences près, dites au modèle avant tout
+     * le reste :
+     *
+     * - aucun programme ne relira sa réponse : les contrôles que la consigne
+     *   annonce, c'est à lui de les faire. Le lui laisser croire serait lui
+     *   apprendre qu'une contrainte non tenue passera (leçon 41) ;
+     * - un humain lit la réponse : du texte, pas du JSON. Le format vient en
+     *   dernier, après les données, pour être la dernière chose lue.
+     *
+     * Rien n'est écrit : une recette que l'application ne verra jamais n'a pas à
+     * nourrir l'historique anti-répétition.
+     */
+    public function manualPrompt(Household $household, RecipeRequest $request): string
+    {
+        ['payload' => $payload, 'systemPrompt' => $systemPrompt] = $this->prepare($household, $request);
+        $data = json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
+
+        return <<<PROMPT
+            L'assistant culinaire de mon application de gestion de stock alimentaire ne répond
+            pas. Je te transmets sa consigne et mes données pour que tu le remplaces.
+
+            Deux différences avec l'application, qui priment sur tout ce qui suit :
+            - Aucun programme ne relira ta réponse, contrairement à ce qu'annonce la consigne.
+              Les contrôles qu'elle décrit — exclusions alimentaires, aliment imposé et sa
+              quantité, composition demandée — c'est toi qui les fais, sur chaque recette,
+              avant de répondre. Plutôt qu'une recette qui en enfreint un, dis-moi ce qui manque.
+            - Je lirai ta réponse moi-même : du texte, pas de JSON. La section « FORMAT DE
+              RÉPONSE », à la fin, dit comment la présenter.
+
+            ===== CONSIGNE DE L'APPLICATION =====
+
+            {$systemPrompt}
+
+            ===== DONNÉES =====
+
+            {$data}
+
+            ===== FORMAT DE RÉPONSE =====
+
+            Ignore toute demande de JSON. Rédige les trois recettes en français, en texte
+            lisible (Markdown accepté), l'une après l'autre. Les noms de champs cités dans la
+            consigne désignent ces rubriques :
+
+            - Titre (`recipeName`), puis le résumé (`summary`) en une ou deux phrases.
+            - Faisabilité (`feasibility`) : « réalisable maintenant », « adaptée » ou
+              « quelques courses ».
+            - Portions (`servings`) et temps de préparation (`preparationTime`, en minutes).
+            - Composantes (`foodGroups`) : féculent, légume, protéine, chacune avec
+              l'ingrédient qui la fournit. Accompagnement ajouté (`includesSideDish`) : oui ou non.
+            - Ingrédients de mon stock (`ingredientsFromInventory`), avec leur quantité ;
+              « facultatif » pour ceux qui ne sont pas essentiels (`essential`) ; la forme
+              supposée (`assumedCut`) entre parenthèses quand tu en as supposé une.
+            - À acheter (`missingIngredients`), seulement s'il y en a.
+            - Remplacements (`substitutions`), seulement s'il y en a.
+            - Ustensiles (`utensils`).
+            - Étapes (`steps`), numérotées.
+            - À retirer du stock (`stockConsumptionProposal`) : chaque aliment de mon stock
+              réellement consommé, nommé par son libellé `ingredient` — pas par sa clé — avec la
+              quantité dans l'unité de l'inventaire. Je le déduirai moi-même.
+            PROMPT;
+    }
+
+    /**
+     * Ce que le modèle reçoit, quel qu'il soit : la consigne et ses données.
+     *
+     * Partagé par `suggest()` et `manualPrompt()` pour qu'un export ne puisse pas
+     * dériver de ce que reçoit le générateur. Ne sollicite aucun générateur et
+     * n'écrit rien.
+     *
+     * @return array{
+     *     guard: Safety\DietaryGuard,
+     *     inventory: list<InventoryLine>,
+     *     required: ?ResolvedPriority,
+     *     desired: list<ResolvedPriority>,
+     *     payload: array<string, mixed>,
+     *     systemPrompt: string,
+     * }
+     */
+    private function prepare(Household $household, RecipeRequest $request): array
+    {
+        $guard = $this->guards->for($household, $request->exclusions);
+        $inventory = $this->aggregator->aggregate($household, guard: $guard);
+
+        if ([] === $inventory) {
+            throw new StockException($guard->isEmpty()
+                ? 'Votre inventaire est vide : ajoutez au moins un aliment avant de demander une recette.'
+                : 'Aucun aliment de votre inventaire ne respecte les exclusions du foyer.');
+        }
+
+        ['required' => $required, 'desired' => $desired] = $this->resolvePriorities($inventory, $request->priorities);
+
+        // Le seul endroit où l'heure est lue : le reste du service la reçoit, ce
+        // qui rend la saison — et donc le registre des plats — testable.
+        $season = $this->seasons->for(new \DateTimeImmutable('today'));
+
+        $payload = [
+            ...$season->toAiPayload(),
+            'people' => $request->people,
+            'mealType' => $request->mealType,
+            'mealTemperature' => $request->mealTemperature?->value,
+            'maxPreparationMinutes' => $request->maxMinutes,
+            // Les libellés, pas les valeurs techniques : la règle 12 impose que
+            // chaque `utensils` appartienne à cette liste, et le modèle la recopie
+            // telle quelle. « stovetop » s'affichait alors en anglais sur la fiche
+            // d'une recette française.
+            'availableEquipment' => array_map(
+                static fn (Equipment $case): string => $case->label(),
+                $request->equipment,
+            ),
+            'dietaryExclusions' => $guard->exclusions(),
+            'allowExtraIngredients' => $request->allowExtraIngredients,
+            'mustUseIngredient' => null !== $required ? self::priorityPayload($required) : null,
+            'desiredIngredients' => array_map(self::priorityPayload(...), $desired),
+            'requiredFoodGroups' => array_map(
+                static fn (FoodGroup $group): string => $group->value,
+                $request->foodGroups,
+            ),
+            'inventory' => array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory),
+        ];
+
+        return [
+            'guard' => $guard,
+            'inventory' => $inventory,
+            'required' => $required,
+            'desired' => $desired,
+            'payload' => $payload,
+            'systemPrompt' => $this->systemPrompt(
+                $guard->exclusions(),
+                $required,
+                $desired,
+                $household->getRecentRecipeSuggestions(),
+                $season,
+                $request->equipment,
+                $request->foodGroups,
+            ),
         ];
     }
 
@@ -438,6 +542,9 @@ class RecipeSuggestionService
     }
 
     /**
+     * La consigne commune, sans format de réponse : c'est l'appelant qui le
+     * fixe — JSON pour le générateur, texte lisible pour un export.
+     *
      * @param list<string>           $exclusions
      * @param list<ResolvedPriority> $desired
      * @param list<string>           $recentNames
@@ -696,8 +803,7 @@ class RecipeSuggestionService
               recette : deux lignes pour le même ingrédient seraient fusionnées de toute façon.
             - N'y fais figurer que ce qui est réellement consommé par la recette.
 
-            Rédige des étapes concises mais concrètes (voir règle 14). Réponds uniquement par
-            le JSON demandé, sans texte d'introduction ni bloc de code.
+            Rédige des étapes concises mais concrètes (voir règle 14).
             PROMPT;
     }
 }

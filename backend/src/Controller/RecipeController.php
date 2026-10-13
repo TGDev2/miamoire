@@ -41,16 +41,47 @@ class RecipeController extends AbstractApiController
         RecipeSuggestionService $service,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $payload = JsonPayload::fromRequest($request);
+        $household = $context->household();
+        $result = $service->suggest($household, $this->recipeRequest(JsonPayload::fromRequest($request), $household));
+
+        // Le plan de chaque recette est un objet de service, pas encore une forme
+        // JSON : `ApiPresenter` reste la seule source de vérité du contrat API.
+        $result['recipes'] = array_map(
+            static fn (array $recipe): array => [...$recipe, 'plan' => $presenter->recipePlan($recipe['plan'])],
+            $result['recipes'],
+        );
+
+        return $this->json($result);
+    }
+
+    /**
+     * La même demande que `suggest`, rédigée pour un autre assistant : à copier
+     * à la main quand le générateur ne répond pas. Ne sollicite aucun
+     * générateur, n'écrit rien.
+     */
+    #[Route('/prompt', methods: ['POST'])]
+    public function prompt(
+        Request $request,
+        RequestContext $context,
+        RecipeSuggestionService $service,
+    ): JsonResponse {
         $household = $context->household();
 
+        return $this->json([
+            'prompt' => $service->manualPrompt($household, $this->recipeRequest(JsonPayload::fromRequest($request), $household)),
+        ]);
+    }
+
+    /** Le corps commun à `suggest` et `prompt` : une seule lecture, pour que l'export ne dérive pas. */
+    private function recipeRequest(JsonPayload $payload, Household $household): RecipeRequest
+    {
         // Les exclusions du foyer s'appliquent par défaut, la requête peut les compléter.
         $exclusions = array_values(array_unique(array_merge(
             $household->getDietaryExclusionLabels(),
             $payload->stringList('exclusions'),
         )));
 
-        $result = $service->suggest($household, new RecipeRequest(
+        return new RecipeRequest(
             people: max(1, min(20, $payload->int('people', 2) ?? 2)),
             mealType: $payload->string('mealType'),
             mealTemperature: $payload->enum('mealTemperature', MealTemperature::class),
@@ -68,16 +99,7 @@ class RecipeController extends AbstractApiController
             // Absent dans les applications antérieures : aucune contrainte de
             // composition, comme avant.
             foodGroups: FoodGroup::fromValues($payload->stringList('foodGroups')),
-        ));
-
-        // Le plan de chaque recette est un objet de service, pas encore une forme
-        // JSON : `ApiPresenter` reste la seule source de vérité du contrat API.
-        $result['recipes'] = array_map(
-            static fn (array $recipe): array => [...$recipe, 'plan' => $presenter->recipePlan($recipe['plan'])],
-            $result['recipes'],
         );
-
-        return $this->json($result);
     }
 
     /**
