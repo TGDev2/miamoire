@@ -918,6 +918,7 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `GET` | `/stock-items/{id}/movements` | Journal du lot |
 | `GET` | `/inventory/summary` | Inventaire agrégé par ingrédient |
 | `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) ; `priorities` impose jusqu'à 3 aliments et, facultativement, la quantité à écouler de chacun |
+| `POST` | `/recipes/prompt` | Même corps que `/recipes/suggest` : la consigne et l'inventaire en un texte à coller dans un autre assistant, réponse lisible attendue. Aucun modèle sollicité, aucune écriture |
 | `POST` | `/recipes/confirm` | Applique la déduction après confirmation |
 | `GET` `POST` | `/recipes/saved` | Recettes conservées par le foyer ; enregistrement idempotent |
 | `GET` `DELETE` | `/recipes/saved/{id}` | Une recette enregistrée, et son retrait |
