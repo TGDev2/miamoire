@@ -170,19 +170,30 @@ class RecipeSuggestionService
     public function manualPrompt(Household $household, RecipeRequest $request): string
     {
         ['payload' => $payload, 'systemPrompt' => $systemPrompt] = $this->prepare($household, $request);
-        $data = json_encode($payload, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
+        $data = json_encode(self::markExpired($payload), \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
 
         return <<<PROMPT
             L'assistant culinaire de mon application de gestion de stock alimentaire ne répond
             pas. Je te transmets sa consigne et mes données pour que tu le remplaces.
 
-            Deux différences avec l'application, qui priment sur tout ce qui suit :
+            Trois consignes qui priment sur tout ce qui suit :
             - Aucun programme ne relira ta réponse, contrairement à ce qu'annonce la consigne.
               Les contrôles qu'elle décrit — exclusions alimentaires, aliment imposé et sa
               quantité, composition demandée — c'est toi qui les fais, sur chaque recette,
               avant de répondre. Plutôt qu'une recette qui en enfreint un, dis-moi ce qui manque.
             - Je lirai ta réponse moi-même : du texte, pas de JSON. La section « FORMAT DE
               RÉPONSE », à la fin, dit comment la présenter.
+            - Tous les aliments de l'inventaire comptent, y compris ceux dont une part de
+              `deadlines` porte `expired` à true : sa date `useBy` est passée. Seules ces
+              parts-là sont périmées, ne compare pas les dates toi-même. Ils sont encore chez moi,
+              au placard, au frigo ou au congélateur, et je veux les cuisiner. Une date
+              dépassée n'écarte jamais un aliment : elle le rend prioritaire, avant même
+              ceux qui périment bientôt. Passe en revue tout l'inventaire avant de choisir,
+              aucune ligne n'est à ignorer. Chaque ingrédient que tu prends dans une part
+              `expired`, même secondaire, et lui seulement, porte « date dépassée le … ». Si c'est une viande, un poisson ou
+              un produit laitier frais qui n'est pas surgelé, ajoute de vérifier son aspect
+              et son odeur avant de l'utiliser, et de le cuire à cœur. Pour un surgelé, une
+              conserve ou un produit sec, n'ajoute rien d'autre que la date.
 
             ===== CONSIGNE DE L'APPLICATION =====
 
@@ -214,7 +225,45 @@ class RecipeSuggestionService
             - À retirer du stock (`stockConsumptionProposal`) : chaque aliment de mon stock
               réellement consommé, nommé par son libellé `ingredient` — pas par sa clé — avec la
               quantité dans l'unité de l'inventaire. Je le déduirai moi-même.
+
+            Après les trois recettes, termine par « Aliments à date dépassée non utilisés » :
+            chaque aliment dont une part porte `expired` à true — ceux-là seulement — et
+            qu'aucune des trois recettes n'emploie, avec pour chacun une idée rapide pour
+            l'écouler. Écris
+            « aucun » s'ils sont tous employés.
             PROMPT;
+    }
+
+    /**
+     * Les parts d'inventaire dont la date est passée, marquées `expired`.
+     *
+     * L'export demande d'employer en priorité les aliments périmés. Laissé à la
+     * comparaison de `useBy` avec `today`, le modèle annonçait « date dépassée »
+     * sur une échéance de l'année suivante : c'est au serveur de le dire.
+     *
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    private static function markExpired(array $payload): array
+    {
+        $today = $payload['today'];
+
+        $payload['inventory'] = array_map(
+            static function (array $line) use ($today): array {
+                $line['deadlines'] = array_map(
+                    static fn (array $part): array => isset($part['useBy']) && $part['useBy'] < $today
+                        ? $part + ['expired' => true]
+                        : $part,
+                    $line['deadlines'],
+                );
+
+                return $line;
+            },
+            $payload['inventory'],
+        );
+
+        return $payload;
     }
 
     /**

@@ -94,6 +94,32 @@ class RecipePromptExportTest extends WebTestCase
         self::assertStringNotContainsString('Réponds uniquement par le JSON', $prompt);
     }
 
+    /**
+     * Un aliment dont la date est passée reste dans le placard : l'export le
+     * transmet, et demande qu'il soit employé plutôt qu'écarté.
+     */
+    public function testTheExportKeepsExpiredFoodAndInsistsOnUsingIt(): void
+    {
+        $this->stock('Saucisses de Toulouse', 500.0, '-10 days');
+        $this->stock('Oignons émincés', 300.0, '+300 days');
+        // À consommer jusqu'à aujourd'hui : pas encore périmé.
+        $this->stock('Yaourts nature', 500.0, 'today');
+
+        // Les retours à la ligne de la consigne ne font pas partie de ce qu'elle dit.
+        $prompt = (string) preg_replace('/\s+/u', ' ', $this->exportedPrompt([]));
+
+        self::assertStringContainsString('Saucisses de Toulouse', $prompt);
+        // Le serveur dit lui-même ce qui est périmé : comparé par le modèle, un
+        // 2027 lointain s'est déjà vu annoncé « date dépassée ».
+        self::assertSame(1, substr_count($prompt, '"expired":true'));
+        self::assertMatchesRegularExpression(
+            '/"useBy":"'.(new \DateTimeImmutable('-10 days'))->format('Y-m-d').'"[^}]*"expired":true/',
+            $prompt,
+        );
+        self::assertStringContainsString('Une date dépassée n\'écarte jamais un aliment', $prompt);
+        self::assertStringContainsString('Aliments à date dépassée non utilisés', $prompt);
+    }
+
     public function testTheExportLeavesTheAntiRepetitionHistoryUntouched(): void
     {
         $this->stock('Courgettes', 600.0);
@@ -154,7 +180,7 @@ class RecipePromptExportTest extends WebTestCase
         return $decoded['prompt'];
     }
 
-    private function stock(string $name, float $grams): void
+    private function stock(string $name, float $grams, ?string $expiresIn = null): void
     {
         $identity = VariantIdentity::of(
             preg_replace('/[^a-z0-9]+/', '-', mb_strtolower($name)) ?? $name,
@@ -165,7 +191,13 @@ class RecipePromptExportTest extends WebTestCase
 
         $variant = new HouseholdProductVariant($this->household, $name, $identity, $identity->slugBase());
         $this->entityManager->persist($variant);
-        $this->entityManager->persist(new StockItem($this->household, $variant, $grams, Unit::Gram, StorageLocation::Pantry));
+        $item = new StockItem($this->household, $variant, $grams, Unit::Gram, StorageLocation::Pantry);
+
+        if (null !== $expiresIn) {
+            $item->setExpirationDate(new \DateTimeImmutable($expiresIn));
+        }
+
+        $this->entityManager->persist($item);
         $this->entityManager->flush();
     }
 }
