@@ -190,6 +190,8 @@ class FoodCutApiTest extends WebTestCase
         $profile = $this->get('/api/products/profile?name=Carottes');
         self::assertSame('whole', $profile['suggestedCut']);
         self::assertSame('produce', $profile['suggestedCutSource']);
+        self::assertFalse($profile['cutMatters'], 'Known, shown quietly, never asked.');
+        self::assertTrue($this->get('/api/products/profile?name=Blanc+de+poulet')['cutMatters']);
 
         self::assertSame('whole', $this->addStockItem('Carottes')['variant']['cut']);
     }
@@ -204,6 +206,9 @@ class FoodCutApiTest extends WebTestCase
         $this->addStockItem('Escalopes de poulet');
         $this->addStockItem('Farine de blé');
         $this->addStockItem('Carottes');
+        // Found in the real stock: a frozen potato product, read as an apple.
+        $this->addStockItem('Pommes noisettes');
+        $this->addStockItem('Jambon blanc');
 
         $queue = $this->get('/api/inventory/cut-queue')['items'];
 

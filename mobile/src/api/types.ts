@@ -366,6 +366,8 @@ export interface FoodProfile {
    */
   suggestedCut: ProductCutValue | null;
   suggestedCutSource: CutSuggestionSource | null;
+  /** The cut decides the cooking (meat, fish): only then is an unknown cut asked. */
+  cutMatters: boolean;
   shelfLife: ShelfLifeEstimate;
 }
 

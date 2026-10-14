@@ -133,6 +133,27 @@ class CutSuggesterTest extends TestCase
         self::assertSame([], $soup->plausible);
     }
 
+    /**
+     * The question is asked only where the cut changes the cooking technique:
+     * meat and fish. Elsewhere a wrong cut costs one extra "cut it" step, and
+     * on the real stock asking everywhere meant asking about "Pommes
+     * noisettes" (an apple?) and "Macaroni - Tomate Mozza" (a tomato?).
+     */
+    public function testTheCutMattersForMeatAndFishOnly(): void
+    {
+        self::assertTrue($this->suggest('Blanc de poulet')->matters);
+        self::assertTrue($this->suggest('Filet de cabillaud')->matters);
+        self::assertTrue($this->suggest('Escalopes de poulet')->matters, 'Known or not, it is the kind of food that matters.');
+
+        self::assertFalse($this->suggest('Pommes noisettes')->matters);
+        self::assertFalse($this->suggest('Macaroni - Tomate Mozza')->matters);
+        self::assertFalse($this->suggest('Jambon blanc')->matters);
+        self::assertFalse($this->suggest('Fromage pour tartiflette')->matters);
+        self::assertFalse($this->suggest('Carottes', FoodNature::Fresh)->matters);
+        self::assertFalse($this->suggest('Farine de blé')->matters);
+        self::assertFalse($this->suggest('Soupe de poulet')->matters, 'A dish, even with chicken in it.');
+    }
+
     public function testThePlausibleCutsComeWithTheSuggestion(): void
     {
         $suggestion = $this->suggest('Blanc de poulet');

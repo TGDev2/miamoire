@@ -54,21 +54,24 @@ class CutSuggester
             return new CutSuggestion(null, null, []);
         }
 
+        $plausible ??= [];
+        $matters = $this->lexicon->decidesCooking($label);
+
         $detected = $this->detector->detect($label, $category);
         if (null !== $detected) {
-            return new CutSuggestion($detected, CutSuggestion::SOURCE_LABEL, $plausible ?? []);
+            return new CutSuggestion($detected, CutSuggestion::SOURCE_LABEL, $plausible, $matters);
         }
 
         $remembered = $this->remembered($household, $label, $traits);
         if (null !== $remembered) {
-            return new CutSuggestion($remembered, CutSuggestion::SOURCE_HOUSEHOLD, $plausible ?? []);
+            return new CutSuggestion($remembered, CutSuggestion::SOURCE_HOUSEHOLD, $plausible, $matters);
         }
 
         if ($nature->isFresh() && $this->lexicon->isProduce($label)) {
-            return new CutSuggestion(FoodCut::Whole, CutSuggestion::SOURCE_PRODUCE, $plausible ?? []);
+            return new CutSuggestion(FoodCut::Whole, CutSuggestion::SOURCE_PRODUCE, $plausible, $matters);
         }
 
-        return new CutSuggestion(null, null, $plausible ?? []);
+        return new CutSuggestion(null, null, $plausible, $matters);
     }
 
     /** @param list<ProductTrait> $traits */

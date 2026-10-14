@@ -488,6 +488,8 @@ class ApiPresenter
             'detectedCut' => $detectedCut?->value,
             'suggestedCut' => $cut->cut?->value,
             'suggestedCutSource' => $cut->source,
+            // Ask only when the cut decides the cooking; a known cut is still shown.
+            'cutMatters' => $cut->matters,
             'shelfLife' => $this->shelfLife($shelfLife),
         ];
     }

@@ -17,12 +17,16 @@ final readonly class CutSuggestion
     public const SOURCE_PRODUCE = 'produce';
 
     /**
-     * @param list<FoodCut> $plausible empty when the cut does not matter for this food
+     * @param list<FoodCut> $plausible the cuts this food can take; empty for a dish
+     *                                 or a food the lexicon does not know
+     * @param bool          $matters   the cut decides the cooking (meat, fish): the
+     *                                 only foods the app asks about
      */
     public function __construct(
         public ?FoodCut $cut,
         public ?string $source,
         public array $plausible,
+        public bool $matters = false,
     ) {
     }
 }

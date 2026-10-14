@@ -296,12 +296,13 @@ function ShoppingLineCard({
 
       {/* Right under the name: the cut is part of what the food is, and the
           product is in hand right now — the one moment it costs a single tap. */}
-      <View style={cutOptions.length > 0 ? styles.cut : null}>
+      <View style={cutOptions.length > 0 && (null !== line.cut || profile?.cutMatters) ? styles.cut : null}>
         <CutPicker
           options={cutOptions}
           value={line.cut}
           onChange={(cut) => onChange({ cut, cutTouched: true })}
           collapsible
+          ask={profile?.cutMatters ?? false}
         />
       </View>
 

@@ -208,9 +208,27 @@ final class FoodCutLexicon
      */
     public function isProduce(string $label): bool
     {
+        return $this->isFamily($label, [self::VEGETABLE, self::FRUIT]);
+    }
+
+    /**
+     * Meat and fish: the foods whose cut decides the cooking technique — an
+     * escalope, strips and a whole breast are three different recipes. The
+     * only foods the app asks about. Elsewhere a wrong cut costs one extra
+     * "cut it" step, and a term found anywhere in a product name ("Pommes
+     * noisettes", "Macaroni - Tomate Mozza") makes the question absurd.
+     */
+    public function decidesCooking(string $label): bool
+    {
+        return $this->isFamily($label, [self::MEAT, self::FISH]);
+    }
+
+    /** @param list<list<FoodCut>> $families */
+    private function isFamily(string $label, array $families): bool
+    {
         $match = $this->matcher->match($label, self::FOODS, [], PreparedDish::TERMS);
 
-        return null !== $match && in_array($match['value'], [self::VEGETABLE, self::FRUIT], true);
+        return null !== $match && in_array($match['value'], $families, true);
     }
 
     /** @return list<string> les termes reconnus, lus par les tests de dérive */

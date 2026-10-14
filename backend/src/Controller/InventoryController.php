@@ -131,8 +131,8 @@ class InventoryController extends AbstractApiController
     }
 
     /**
-     * The foods in stock whose cut is unknown although it would change a
-     * recipe — the catch-up list for stock put away before the cut could be
+     * The foods in stock whose cut is unknown although it decides the cooking
+     * (meat, fish) — the catch-up list for stock put away before the cut could be
      * given. One lot per food: its cut is the food's, so correcting that lot
      * (`PATCH /api/stock-items/{id}` with `cut`) answers for all of them.
      */
@@ -167,7 +167,9 @@ class InventoryController extends AbstractApiController
                 $variant->getNature(),
             );
 
-            if ([] === $suggestion->plausible) {
+            // Meat and fish only: elsewhere the question was mostly noise —
+            // "Pommes noisettes" asked whether it was a whole apple.
+            if (!$suggestion->matters) {
                 continue;
             }
 

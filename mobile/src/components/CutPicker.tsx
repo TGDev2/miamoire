@@ -22,6 +22,7 @@ export function CutPicker({
   onChange,
   collapsible = false,
   help = true,
+  ask = true,
 }: {
   /** The cuts this food can take, already filtered: empty means "do not ask". */
   options: CutOption[];
@@ -30,6 +31,11 @@ export function CutPicker({
   collapsible?: boolean;
   /** Off where the screen already explains why the cut matters. */
   help?: boolean;
+  /**
+   * Whether an unknown cut is worth a question. Off, a known cut is still
+   * shown and can be changed, but an unknown one stays silent.
+   */
+  ask?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -38,6 +44,8 @@ export function CutPicker({
   const selected = options.find((option) => option.value === value) ?? null;
 
   if (null === selected) {
+    if (!ask) return null;
+
     return (
       <View>
         <Text style={[text.label, styles.unknown]}>Sous quelle forme ?</Text>

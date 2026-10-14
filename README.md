@@ -142,6 +142,25 @@ que soit le légume. `GET /products/shelf-life` prévisualise l'estimation **ave
 justification** — une estimation qu'on ne peut pas discuter finirait par n'être crue
 par personne.
 
+### The freezer stops the clock
+
+A lot in the freezer keeps its printed date, and that date stops being a
+deadline. `EffectiveUseByCalculator` judges it on a **quality limit**: the later
+of the printed date and the freezer duration of the food (minced meat 90 days,
+poultry 270, 180 by default), counted from `frozenAt`, else from the purchase.
+Past that limit the status is `frozen_past_best` ("À consommer de préférence",
+amber), never `expired`: no red, no Today card, no expiry alert, no recipe
+priority. The after-opening clock is suspended too.
+
+- **Frozen too late**: a lot whose printed (not estimated) date had already
+  passed on the day it was frozen stays `expired`. Freezing does not undo it.
+- **Thawed**: out of the freezer, a lot is due within 24 hours (`thawedAt`).
+- Every move goes through `StockService::moveTo()` — the location chips and the
+  "Congelé" button alike — so none of them can forget `frozenAt`/`thawedAt`.
+- Frozen lots come last in FEFO order: they do not expire, they wait.
+- The recipe payload marks frozen parts (`frozen`, `pastBest`): the model plans
+  the thawing, and the export never calls a frozen date "dépassée".
+
 ## Pas de comptes : un code de foyer et des prénoms
 
 Il n'y a ni e-mail, ni mot de passe, ni session. Le foyer est **une porte dont
@@ -226,6 +245,26 @@ Trois mécanismes la renseignent, du plus automatique au plus humain :
 3. **la fiche recette** : quand la découpe est inconnue, le modèle déclare celle
    qu'il a supposée (`assumedCut`), l'écran l'affiche — « Forme supposée : pavé /
    côte — corriger » — et un appui l'enregistre sur la variante, définitivement.
+
+When nobody chose a cut, `CutSuggester` fills it in this order: the label's own
+words, then the cut the household confirmed for the same food (only if there is
+exactly one), then `whole` for fresh fruit and vegetables. `/products/profile`
+returns that suggestion (`suggestedCut`), so the chip shown is the cut saved.
+
+An unknown cut is **asked** only for meat and fish (`cutMatters`), where the
+cut decides the cooking technique. Elsewhere a known cut is shown and can be
+changed, but an unknown one stays silent: on the real stock, asking everywhere
+meant asking whether "Pommes noisettes" were whole apples.
+
+- **Putting groceries away**: each line shows its cut, and asks for it on meat
+  and fish — the product is in hand, it costs one tap.
+- **Catch-up list**: `GET /inventory/cut-queue` lists the in-stock meat and
+  fish whose cut is unknown; Today links to "Préciser les formes".
+- **Guesses**: `AssumedCutFilter` drops an `assumedCut` on a line whose cut is
+  known, or one the food cannot take.
+- **Collisions**: a cut that makes a food identical to an existing one is
+  refused with `code: variant_collision`; resent with `mergeIfExists`, the lots
+  join the existing food. Two stocks are never merged silently.
 
 `php bin/console app:variants:detect-cut --dry-run` reprend le parc existant et
 absorbe l'ancien trait `sliced`, qui disait qu'on avait coupé sans jamais dire en
@@ -915,8 +954,10 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `POST` | `/stock-items/{id}/unit` | Répare une unité mal saisie |
 | `POST` | `/stock-items/{id}/open` | Entamé / fermé |
 | `POST` | `/stock-items/{id}/discard` | Produit jeté |
+| `POST` | `/stock-items/{id}/freeze` | Moves a lot to the freezer; the printed date is kept |
 | `GET` | `/stock-items/{id}/movements` | Journal du lot |
 | `GET` | `/inventory/summary` | Inventaire agrégé par ingrédient |
+| `GET` | `/inventory/cut-queue` | In-stock meat and fish whose cut is unknown |
 | `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) ; `priorities` impose jusqu'à 3 aliments et, facultativement, la quantité à écouler de chacun |
 | `POST` | `/recipes/prompt` | Même corps que `/recipes/suggest` : la consigne et l'inventaire en un texte à coller dans un autre assistant, réponse lisible attendue. Aucun modèle sollicité, aucune écriture |
 | `POST` | `/recipes/confirm` | Applique la déduction après confirmation |
