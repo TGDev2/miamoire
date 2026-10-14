@@ -206,7 +206,7 @@ export default function StockItemScreen() {
 
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
   const deadline = deadlineOf(item);
-  const level = thermalFor(deadline.days);
+  const level = thermalFor(deadline.days, deadline.basis);
   const visibleMovements = fullHistory ? movements : movements.slice(0, HISTORY_PREVIEW);
 
   /**
@@ -273,7 +273,7 @@ export default function StockItemScreen() {
           </View>
           <View style={styles.gaugeRule} />
           <View style={styles.gauge}>
-            <StampHero days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+            <StampHero days={deadline.days} date={deadline.date} estimated={deadline.estimated} basis={deadline.basis} />
           </View>
         </View>
 
@@ -1005,6 +1005,16 @@ function effectiveUseByText(item: StockItem): string {
   const date = formatDisplayDate(item.effectiveUseBy);
 
   switch (item.effectiveUseByBasis) {
+    case 'frozen':
+      return [
+        null !== item.frozenAt ? `Congelé le ${formatDisplayDate(item.frozenAt.slice(0, 10))}` : 'Au congélateur',
+        `qualité optimale jusqu'au ${date}`,
+        printedDateInTheFreezer(item),
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    case 'thawed':
+      return `Décongelé : à consommer avant le ${date}`;
     case 'after_opening':
       return `Entamé : à utiliser avant le ${date}`;
     case 'estimated':
@@ -1012,6 +1022,20 @@ function effectiveUseByText(item: StockItem): string {
     default:
       return `À consommer avant le ${date}`;
   }
+}
+
+/**
+ * The printed date is kept in the freezer, and still shown: it just stops
+ * being a deadline there. Said plainly when it has passed.
+ */
+function printedDateInTheFreezer(item: StockItem): string | null {
+  if (null === item.expirationDate) return null;
+
+  const printed = formatDisplayDate(item.expirationDate);
+
+  return null !== item.daysUntilExpiration && item.daysUntilExpiration < 0
+    ? `date imprimée ${printed}, dépassée — sans risque au congélateur`
+    : `date imprimée ${printed}`;
 }
 
 function formatDateTime(value: string): string {

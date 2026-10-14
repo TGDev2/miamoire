@@ -70,12 +70,15 @@ export default function RecipeListScreen() {
     const map = new Map<string, Urgency>();
 
     for (const ingredient of inventory?.ingredients ?? []) {
-      if (null === ingredient.earliestExpiration) continue;
+      // The earliest deadline that is one: a frozen part's date is a quality
+      // limit, and a recipe does not "save" a lot from the freezer.
+      const deadline = ingredient.deadlines.find((part) => !part.frozen && null !== part.useBy);
+      if (undefined === deadline || null === deadline.useBy) continue;
 
       map.set(ingredient.key, {
-        days: daysUntil(ingredient.earliestExpiration),
-        date: ingredient.earliestExpiration,
-        estimated: ingredient.expirationIsEstimated,
+        days: daysUntil(deadline.useBy),
+        date: deadline.useBy,
+        estimated: deadline.useByIsEstimated,
       });
     }
 

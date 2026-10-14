@@ -176,7 +176,7 @@ export default function StockScreen() {
 
     commitWithUndo({
       message: `${item.variant.culinaryLabel} — 1 ${unitTaken(item)} en moins`,
-      tone: thermalFor(deadlineOf(item).days),
+      tone: thermalFor(deadlineOf(item).days, deadlineOf(item).basis),
       commit: async () => {
         await api.consume(item.id, { mode: 'package' }, operationKey);
         setPending((current) => current.filter((id) => id !== item.id));
@@ -437,7 +437,7 @@ const StockRow = React.memo(function StockRow({
 }) {
   const presentation = statusPresentation[item.status] ?? statusPresentation.sealed;
   const deadline = deadlineOf(item);
-  const level = thermalFor(deadline.days);
+  const level = thermalFor(deadline.days, deadline.basis);
 
   // Le cachet dit déjà l'échéance : la pastille d'état ne se répète que pour ce
   // qu'il ne dit pas — l'emballage. Le reste passe en note discrète.
@@ -458,7 +458,7 @@ const StockRow = React.memo(function StockRow({
         accessibilityRole="button"
         // Sans cela, le lecteur d'écran énumère cinq textes séparés puis un badge,
         // sans dire qu'ils forment une ligne ni qu'elle s'ouvre.
-        accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${deadlineSentence(deadline.days, deadline.estimated)}`}
+        accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}, ${presentation.label}. ${deadlineSentence(deadline.days, deadline.estimated, deadline.basis)}`}
         accessibilityHint="Ouvre la fiche de l'aliment"
       >
         <View style={styles.rowTop}>
@@ -467,7 +467,7 @@ const StockRow = React.memo(function StockRow({
           <Text style={[text.heading, styles.rowTitle]} numberOfLines={2}>
             {item.variant.culinaryLabel}
           </Text>
-          <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} decorative />
+          <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} basis={deadline.basis} decorative />
         </View>
 
         {/* Le tilde dit « la machine suppose » — le même signe que sur le cachet. */}

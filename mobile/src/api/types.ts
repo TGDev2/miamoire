@@ -52,6 +52,8 @@ export type StockStatus =
   | 'running_low'
   | 'expiring_soon'
   | 'expired'
+  /** Frozen for longer than advised: still safe, best eaten soon — never "expired". */
+  | 'frozen_past_best'
   | 'empty'
   | 'archived';
 export type Feasibility = 'ready' | 'adapted' | 'needs_shopping';
@@ -180,7 +182,12 @@ export interface StockPackage {
 }
 
 /** D'où vient `effectiveUseBy` : ce qui a gagné entre la date et la durée après ouverture. */
-export type EffectiveUseByBasis = 'printed' | 'estimated' | 'after_opening' | 'unknown';
+/**
+ * `frozen`: in the freezer, the date is a quality limit (the printed date is
+ * kept, but no longer drives the urgency). `thawed`: out of the freezer, due
+ * within 24 hours.
+ */
+export type EffectiveUseByBasis = 'printed' | 'estimated' | 'after_opening' | 'unknown' | 'frozen' | 'thawed';
 
 /** Un autre lot du même aliment : même variante, autre date. */
 export interface SiblingLot {
@@ -239,6 +246,10 @@ export interface StockItem {
   /** `null` : lot non entamé, la question ne se pose pas. `false` : entamé mais durée inconnue. */
   afterOpeningDurationKnown: boolean | null;
   daysUntilEffectiveUseBy: number | null;
+  /** When the lot first went into the freezer; `null` if unknown or never. */
+  frozenAt: string | null;
+  /** When the lot last came out of the freezer. */
+  thawedAt: string | null;
   note: string | null;
   /** Prénom de la personne qui a enregistré ce produit. */
   addedBy: string | null;
@@ -346,9 +357,28 @@ export interface FoodProfile {
   approxPieceWeight: number | null;
   /** Vide quand la forme de cet aliment ne change rien : l'écran n'affiche alors aucune puce. */
   plausibleCuts: ProductCutValue[];
-  /** Celle que le libellé nomme déjà, s'il en nomme une : la puce arrive pré-cochée. */
+  /** Celle que le libellé nomme déjà, s'il en nomme une. */
   detectedCut: ProductCutValue | null;
+  /**
+   * The cut that will be saved if nobody picks one: named by the label,
+   * remembered from this household, or "whole" for fresh produce. The chip
+   * arrives selected.
+   */
+  suggestedCut: ProductCutValue | null;
+  suggestedCutSource: CutSuggestionSource | null;
   shelfLife: ShelfLifeEstimate;
+}
+
+export type CutSuggestionSource = 'label' | 'household' | 'produce';
+
+/** A food in stock whose cut is unknown although it would change a recipe. */
+export interface CutQueueItem {
+  variant: ProductVariant;
+  /** One lot of the food: correcting its cut answers for the whole food. */
+  stockItemId: string;
+  lotCount: number;
+  suggestedCut: ProductCutValue | null;
+  suggestedCutSource: CutSuggestionSource | null;
 }
 
 export interface Member {
@@ -495,6 +525,9 @@ export interface InventoryDeadlineBucket {
   useByIsEstimated: boolean;
   opened: boolean;
   expiresSoon: boolean;
+  /** In the freezer: `useBy` is a quality limit, never urgent. */
+  frozen: boolean;
+  pastBest: boolean;
 }
 
 export interface InventorySummary {
@@ -581,7 +614,7 @@ export interface SuggestionResponse {
     ingredient: string;
     quantity: number;
     unit: Unit;
-    deadlines: Array<{ quantity: number; useBy: string | null; opened?: true; expiresSoon?: true }>;
+    deadlines: Array<{ quantity: number; useBy: string | null; opened?: true; expiresSoon?: true; frozen?: true; pastBest?: true }>;
   }>;
 }
 

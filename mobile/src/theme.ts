@@ -11,6 +11,8 @@
 
 import type { TextStyle } from 'react-native';
 
+import type { EffectiveUseByBasis } from './api/types';
+
 export const colors = {
   /** Le givre : le fond de tous les écrans. Froid, parce qu'on conserve au froid. */
   ground: '#E7ECEF',
@@ -52,9 +54,15 @@ export type ThermalLevel = keyof typeof thermal;
 /** Au-delà, la date exacte compte plus que le décompte : le cachet l'imprime. */
 const DISTANT_DAYS = 60;
 
-/** Le palier thermique d'une échéance, en jours. `null` = aucune date connue. */
-export function thermalFor(days: number | null): ThermalLevel {
+/**
+ * Le palier thermique d'une échéance, en jours. `null` = aucune date connue.
+ *
+ * In the freezer the date is a quality limit: never red, amber once passed
+ * ("best eaten soon"), quiet before.
+ */
+export function thermalFor(days: number | null, basis: EffectiveUseByBasis | null = null): ThermalLevel {
   if (null === days) return 'calm';
+  if ('frozen' === basis) return days < 0 ? 'soon' : 'calm';
   if (days <= 0) return 'critical';
   if (days <= 3) return 'soon';
   if (days <= DISTANT_DAYS) return 'safe';
@@ -74,10 +82,17 @@ export function thermalFor(days: number | null): ThermalLevel {
  * Au-delà de soixante jours, un décompte ne veut plus rien dire pour personne :
  * on imprime le mois, comme une DDM de conserve.
  */
-export function stampLabel(days: number | null, date: string | null, estimated = false): string {
+export function stampLabel(
+  days: number | null,
+  date: string | null,
+  estimated = false,
+  basis: EffectiveUseByBasis | null = null,
+): string {
   if (null === days) return '—';
 
-  const tilde = estimated ? '~' : '';
+  // A snowflake instead of the tilde: the freezer date is neither printed nor
+  // a deadline, and the stamp must not read like either.
+  const tilde = 'frozen' === basis ? '❄ ' : estimated ? '~' : '';
 
   if (0 === days) return `${tilde}JOUR J`;
   if (days < 0) return `${tilde}J+${Math.abs(days)}`;
@@ -92,8 +107,23 @@ export function stampLabel(days: number | null, date: string | null, estimated =
 }
 
 /** La phrase complète du cachet, pour les lecteurs d'écran et les fiches. */
-export function deadlineSentence(days: number | null, estimated = false): string {
+export function deadlineSentence(
+  days: number | null,
+  estimated = false,
+  basis: EffectiveUseByBasis | null = null,
+): string {
   if (null === days) return 'Aucune date limite renseignée';
+
+  if ('frozen' === basis) {
+    if (days < 0) return 'Au congélateur depuis longtemps — encore sain, à consommer de préférence';
+    if (days > DISTANT_DAYS) return `Au congélateur — qualité optimale encore ${Math.round(days / 30)} mois`;
+    return `Au congélateur — qualité optimale encore ${days} jour${days > 1 ? 's' : ''}`;
+  }
+
+  if ('thawed' === basis) {
+    if (days < 0) return 'Décongelé depuis plus de 24 heures — à vérifier';
+    return 'Décongelé — à consommer sous 24 heures';
+  }
 
   if (estimated) {
     if (days < 0) return `À vérifier — estimé dépassé depuis ${Math.abs(days)} jours`;
@@ -201,6 +231,8 @@ export const statusPresentation: Record<string, { label: string; level: ThermalL
   archived: { label: 'Archivé', level: 'calm' },
   expired: { label: 'Périmé', level: 'critical' },
   expiring_soon: { label: 'À consommer vite', level: 'soon' },
+  // Never "Périmé": frozen food stays safe, it only loses quality.
+  frozen_past_best: { label: 'À consommer de préférence', level: 'soon' },
   running_low: { label: 'Bientôt terminé', level: 'soon' },
   opened: { label: 'Entamé', level: 'soon' },
   resealed: { label: 'Entamé et refermé', level: 'soon' },

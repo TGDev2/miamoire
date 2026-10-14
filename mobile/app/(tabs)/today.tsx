@@ -347,7 +347,7 @@ function TodayCard({
 }) {
   const item = candidate.stockItem;
   const deadline = deadlineOf(item);
-  const level = thermalFor(deadline.days);
+  const level = thermalFor(deadline.days, deadline.basis);
   const entering = useEnterAnimation(index * 60, animate);
 
   const reasons = candidate.reasons.map((reason) => reason.label).join(' · ');
@@ -358,13 +358,13 @@ function TodayCard({
         <Pressable
           onPress={onOpen}
           accessibilityRole="button"
-          accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}. ${deadlineSentence(deadline.days, deadline.estimated)}. ${reasons}`}
+          accessibilityLabel={`${item.variant.culinaryLabel}, ${item.displayQuantity} ${item.displayUnit}, ${item.storageLocationLabel}. ${deadlineSentence(deadline.days, deadline.estimated, deadline.basis)}. ${reasons}`}
           accessibilityHint="Ouvre la fiche de l'aliment"
           style={({ pressed }) => [styles.cardHead, pressed && styles.cardHeadPressed]}
         >
           {hero ? (
             <>
-              <StampHero days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+              <StampHero days={deadline.days} date={deadline.date} estimated={deadline.estimated} basis={deadline.basis} />
               <View style={styles.heroName}>
                 <Text style={[text.title, styles.heroNameText]}>{item.variant.culinaryLabel}</Text>
                 <Icon name="chevron-right" size={20} color={colors.border} />
@@ -373,7 +373,7 @@ function TodayCard({
           ) : (
             <View style={styles.compactHead}>
               <Text style={[text.heading, styles.compactHeadName]}>{item.variant.culinaryLabel}</Text>
-              <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} decorative />
+              <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} basis={deadline.basis} decorative />
             </View>
           )}
 
@@ -393,7 +393,9 @@ function TodayCard({
         </View>
         <View style={styles.minorActions}>
           <Button label="Rappeler plus tard" variant="ghost" onPress={onSnoozed} />
-          {'freezer' !== item.storageLocation ? (
+          {/* Freezing stops the clock, it does not turn it back: on a lot whose
+              date has already passed, the button would promise what it cannot do. */}
+          {'freezer' !== item.storageLocation && 'expired' !== item.status ? (
             <Button label="Congelé" variant="ghost" onPress={onFrozen} />
           ) : null}
         </View>

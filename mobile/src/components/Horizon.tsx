@@ -46,8 +46,10 @@ export type HorizonSelection = number | 'overdue' | null;
 export function matchesHorizon(item: StockItem, selection: HorizonSelection): boolean {
   if (null === selection) return true;
 
-  const { days } = deadlineOf(item);
-  if (null === days) return false;
+  // In the freezer the date is a quality limit, not a deadline: frozen lots
+  // are never "due" on a given day, nor "already expired".
+  const { days, basis } = deadlineOf(item);
+  if (null === days || 'frozen' === basis) return false;
 
   return 'overdue' === selection ? days < 0 : days === selection;
 }
@@ -88,8 +90,8 @@ export function Horizon({
     let overdue = 0;
 
     for (const item of items) {
-      const { days } = deadlineOf(item);
-      if (null === days) continue;
+      const { days, basis } = deadlineOf(item);
+      if (null === days || 'frozen' === basis) continue;
 
       if (days < 0) overdue += 1;
       else if (days < HORIZON_DAYS) counts.set(days, (counts.get(days) ?? 0) + 1);

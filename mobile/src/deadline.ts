@@ -1,4 +1,4 @@
-import type { SiblingLot, StockItem } from './api/types';
+import type { EffectiveUseByBasis, SiblingLot, StockItem } from './api/types';
 
 /**
  * L'échéance d'un lot telle que l'interface l'imprime — les trois seules
@@ -12,6 +12,8 @@ export interface Deadline {
   days: number | null;
   date: string | null;
   estimated: boolean;
+  /** What the date is: in the freezer (`frozen`) it is a quality limit, not a deadline. */
+  basis: EffectiveUseByBasis | null;
 }
 
 export function deadlineOf(item: StockItem): Deadline {
@@ -19,6 +21,7 @@ export function deadlineOf(item: StockItem): Deadline {
     days: item.daysUntilEffectiveUseBy ?? item.daysUntilExpiration,
     date: item.effectiveUseBy ?? item.expirationDate,
     estimated: item.expirationIsEstimated,
+    basis: item.effectiveUseByBasis ?? null,
   };
 }
 
@@ -28,5 +31,6 @@ export function deadlineOfSibling(lot: SiblingLot): Deadline {
     days: lot.daysUntilExpiration,
     date: lot.expirationDate,
     estimated: lot.expirationIsEstimated,
+    basis: null,
   };
 }

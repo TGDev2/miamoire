@@ -124,6 +124,11 @@ function alertDateFor(item: StockItem): Date | null {
 
 function titleFor(item: StockItem): string {
   switch (item.effectiveUseByBasis) {
+    // A quality limit, not an expiry: no "périme" for frozen food.
+    case 'frozen':
+      return `${item.variant.name} attend au congélateur depuis longtemps`;
+    case 'thawed':
+      return `${item.variant.name}, décongelé, est à consommer`;
     case 'estimated':
       return `${item.variant.name} est à vérifier`;
     case 'after_opening':
@@ -146,6 +151,10 @@ function bodyFor(item: StockItem): string {
     : '';
 
   switch (item.effectiveUseByBasis) {
+    case 'frozen':
+      return `Il reste ${quantity}. Qualité optimale jusqu'au ${date} : encore sain, à cuisiner sans tarder.`;
+    case 'thawed':
+      return `Il reste ${quantity}, décongelé : à consommer avant le ${date}.`;
     case 'after_opening':
       return `Il reste ${quantity}, entamé : à utiliser avant le ${date}.`;
     case 'estimated':

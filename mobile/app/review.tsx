@@ -204,7 +204,7 @@ export default function ReviewScreen() {
 
       <ErrorBanner message={actionError} />
 
-      <Card level={thermalFor(deadline.days)}>
+      <Card level={thermalFor(deadline.days, deadline.basis)}>
         <View style={styles.headerRow}>
           <View style={styles.flex}>
             <Text style={text.title}>{item.variant.culinaryLabel}</Text>
@@ -212,7 +212,7 @@ export default function ReviewScreen() {
               <Text style={[text.small, styles.brand]}>{item.variant.brand}</Text>
             ) : null}
           </View>
-          <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+          <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} basis={deadline.basis} />
         </View>
 
         <View style={styles.reasons}>
@@ -225,7 +225,7 @@ export default function ReviewScreen() {
         {/* Une phrase, donc la voix humaine — le cachet, juste au-dessus, dit
             déjà la même échéance dans la voix machine. */}
         <Text style={[text.small, styles.meta]}>
-          {item.storageLocationLabel} · {deadlineSentence(deadline.days, deadline.estimated).toLowerCase()}
+          {item.storageLocationLabel} · {deadlineSentence(deadline.days, deadline.estimated, deadline.basis).toLowerCase()}
         </Text>
       </Card>
 

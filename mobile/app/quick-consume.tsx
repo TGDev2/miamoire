@@ -219,13 +219,13 @@ function QuickConsumeCard({
   const deadline = deadlineOf(item);
 
   return (
-    <Card level={thermalFor(deadline.days)} style={styles.card}>
+    <Card level={thermalFor(deadline.days, deadline.basis)} style={styles.card}>
       <View style={styles.headerRow}>
         <View style={styles.flex}>
           <Text style={text.heading}>{item.variant.culinaryLabel}</Text>
           {item.variant.brand ? <Text style={[text.small, styles.brand]}>{item.variant.brand}</Text> : null}
         </View>
-        <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} />
+        <Stamp days={deadline.days} date={deadline.date} estimated={deadline.estimated} basis={deadline.basis} />
       </View>
 
       <Text style={[text.data, styles.meta]}>

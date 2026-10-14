@@ -15,6 +15,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
+import type { EffectiveUseByBasis } from '../api/types';
 import {
   colors,
   deadlineSentence,
@@ -94,24 +95,26 @@ export function Stamp({
   days,
   date = null,
   estimated = false,
+  basis = null,
   decorative = false,
 }: {
   days: number | null;
   date?: string | null;
   estimated?: boolean;
+  basis?: EffectiveUseByBasis | null;
   decorative?: boolean;
 }) {
-  const palette = thermal[thermalFor(days)];
+  const palette = thermal[thermalFor(days, basis)];
 
   return (
     <View
       style={[styles.stamp, { backgroundColor: palette.wash }]}
       importantForAccessibility={decorative ? 'no-hide-descendants' : 'yes'}
       accessible={!decorative}
-      accessibilityLabel={decorative ? undefined : deadlineSentence(days, estimated)}
+      accessibilityLabel={decorative ? undefined : deadlineSentence(days, estimated, basis)}
     >
       <Text style={[text.stamp, { color: palette.line }]} numberOfLines={1}>
-        {stampLabel(days, date, estimated)}
+        {stampLabel(days, date, estimated, basis)}
       </Text>
     </View>
   );
@@ -122,17 +125,19 @@ export function StampHero({
   days,
   date = null,
   estimated = false,
+  basis = null,
 }: {
   days: number | null;
   date?: string | null;
   estimated?: boolean;
+  basis?: EffectiveUseByBasis | null;
 }) {
-  const palette = thermal[thermalFor(days)];
+  const palette = thermal[thermalFor(days, basis)];
 
   return (
-    <View accessible accessibilityLabel={deadlineSentence(days, estimated)}>
-      <Text style={[text.stampLarge, { color: palette.line }]}>{stampLabel(days, date, estimated)}</Text>
-      <Text style={[text.small, styles.stampHeroCaption]}>{deadlineSentence(days, estimated)}</Text>
+    <View accessible accessibilityLabel={deadlineSentence(days, estimated, basis)}>
+      <Text style={[text.stampLarge, { color: palette.line }]}>{stampLabel(days, date, estimated, basis)}</Text>
+      <Text style={[text.small, styles.stampHeroCaption]}>{deadlineSentence(days, estimated, basis)}</Text>
     </View>
   );
 }
