@@ -422,8 +422,9 @@ function TodayCard({
         <View style={styles.minorActions}>
           <Button label="Rappeler plus tard" variant="ghost" onPress={onSnoozed} />
           {/* Freezing stops the clock, it does not turn it back: on a lot whose
-              date has already passed, the button would promise what it cannot do. */}
-          {'freezer' !== item.storageLocation && 'expired' !== item.status ? (
+              date has already passed, the button would promise what it cannot do.
+              And thawed food is never refrozen. */}
+          {'freezer' !== item.storageLocation && 'expired' !== item.status && null === item.thawedAt ? (
             <Button label="Congelé" variant="ghost" onPress={onFrozen} />
           ) : null}
         </View>
