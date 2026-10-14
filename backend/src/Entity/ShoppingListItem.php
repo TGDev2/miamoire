@@ -102,6 +102,12 @@ class ShoppingListItem
         return $this->variant;
     }
 
+    /** After two variants of the same food are merged, see VariantResolver::changeCut(). */
+    public function setVariant(HouseholdProductVariant $variant): void
+    {
+        $this->variant = $variant;
+    }
+
     public function getLabel(): string
     {
         return $this->label;

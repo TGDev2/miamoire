@@ -217,6 +217,34 @@ class FoodCutApiTest extends WebTestCase
         self::assertSame([], $this->get('/api/inventory/cut-queue')['items']);
     }
 
+    /**
+     * The dead end found on the emulator: the same food bought again with its
+     * cut, then the old lot corrected to that cut. Refused with a code the app
+     * can recognise, then merged once the user confirms.
+     */
+    public function testACollidingCutIsRefusedThenMergedOnConfirmation(): void
+    {
+        $old = $this->addStockItem('Filet de cabillaud');
+        $new = $this->addStockItem('Filet de cabillaud', 'steak');
+        self::assertNotSame($old['variant']['id'], $new['variant']['id']);
+
+        $this->client->request(
+            'PATCH',
+            sprintf('/api/stock-items/%s', $old['id']),
+            server: $this->authenticated + ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode(['cut' => 'steak', 'operationKey' => bin2hex(random_bytes(8))], \JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $this->client->getResponse()->getStatusCode());
+        $refusal = json_decode((string) $this->client->getResponse()->getContent(), true);
+        self::assertSame('variant_collision', $refusal['code']);
+        self::assertSame('Filet de cabillaud (pavé / côte)', $refusal['existing']);
+
+        $merged = $this->patch($old['id'], ['cut' => 'steak', 'mergeIfExists' => true]);
+
+        self::assertSame($new['variant']['id'], $merged['variant']['id']);
+        self::assertSame([], $this->get('/api/inventory/cut-queue')['items']);
+    }
+
     /** @return array<string, mixed> */
     private function get(string $uri): array
     {
@@ -245,7 +273,7 @@ class FoodCutApiTest extends WebTestCase
     }
 
     /** @return array<string, mixed> */
-    private function addStockItem(string $name): array
+    private function addStockItem(string $name, ?string $cut = null): array
     {
         static $operation = 0;
 
@@ -258,7 +286,7 @@ class FoodCutApiTest extends WebTestCase
                 'unit' => 'piece',
                 'quantityPerPackage' => 2,
                 'operationKey' => sprintf('test-ajout-%08d', ++$operation),
-            ], \JSON_THROW_ON_ERROR),
+            ] + (null !== $cut ? ['cut' => $cut] : []), \JSON_THROW_ON_ERROR),
         );
 
         self::assertSame(

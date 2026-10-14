@@ -7,6 +7,7 @@ namespace App\EventListener;
 use App\Exception\IncompatibleUnitException;
 use App\Exception\StockConflictException;
 use App\Exception\StockException;
+use App\Exception\VariantCollisionException;
 use App\Service\Ai\Generator\RecipeGeneratorUnavailableException;
 use App\Service\OpenFoodFacts\OpenFoodFactsUnavailableException;
 use Psr\Log\LoggerInterface;
@@ -71,6 +72,11 @@ class ApiExceptionListener
         // peut proposer ce qui reste possible plutôt qu'un simple échec.
         if ($exception instanceof StockConflictException) {
             $payload += $exception->getContext();
+        }
+
+        // The app asks whether to merge instead of showing a dead end.
+        if ($exception instanceof VariantCollisionException) {
+            $payload += ['code' => 'variant_collision', 'existing' => $exception->existing->getCulinaryLabel()];
         }
 
         if ($this->debug && $status >= 500) {

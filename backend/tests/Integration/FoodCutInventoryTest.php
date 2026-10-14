@@ -132,7 +132,37 @@ class FoodCutInventoryTest extends DatabaseTestCase
         /** @var VariantResolver $resolver */
         $resolver = static::getContainer()->get(VariantResolver::class);
 
-        $this->expectException(\App\Exception\StockException::class);
+        $this->expectException(\App\Exception\VariantCollisionException::class);
         $resolver->changeCut($strips, FoodCut::Escalope);
+    }
+
+    /**
+     * The same decision, taken: asked to merge, the lots of the corrected
+     * variant join the existing food — archived ones included, the journal
+     * must not lose them — and the empty duplicate disappears.
+     */
+    public function testCorrectingIntoAnExistingCutMergesWhenAsked(): void
+    {
+        $household = $this->makeHousehold();
+        $escalopes = $this->makeVariant($household, 'Blanc de poulet', Unit::Piece, [], FoodCut::Escalope);
+        $unknown = $this->makeVariant($household, 'Blanc de poulet', Unit::Piece);
+        $kept = $this->makeLot($household, $escalopes, 4, Unit::Piece);
+        $moved = $this->makeLot($household, $unknown, 2, Unit::Piece);
+        $archived = $this->makeLot($household, $unknown, 1, Unit::Piece);
+        $archived->archive();
+        $this->entityManager->flush();
+        $unknownId = $unknown->getId();
+
+        /** @var VariantResolver $resolver */
+        $resolver = static::getContainer()->get(VariantResolver::class);
+        $result = $resolver->changeCut($unknown, FoodCut::Escalope, merge: true);
+        $this->entityManager->clear();
+
+        self::assertTrue($result->getId()->equals($escalopes->getId()));
+        $repository = $this->entityManager->getRepository(\App\Entity\StockItem::class);
+        foreach ([$kept, $moved, $archived] as $lot) {
+            self::assertTrue($repository->find($lot->getId())?->getVariant()->getId()->equals($escalopes->getId()));
+        }
+        self::assertNull($this->entityManager->find(\App\Entity\HouseholdProductVariant::class, $unknownId));
     }
 }

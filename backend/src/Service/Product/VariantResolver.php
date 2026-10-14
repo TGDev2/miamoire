@@ -7,6 +7,8 @@ namespace App\Service\Product;
 use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\Product;
+use App\Entity\ShoppingListItem;
+use App\Entity\StockItem;
 use App\Enum\DataOrigin;
 use App\Enum\FoodCut;
 use App\Enum\FoodNature;
@@ -14,6 +16,7 @@ use App\Enum\ProductTrait;
 use App\Enum\Unit;
 use App\Enum\UnitFamily;
 use App\Exception\StockException;
+use App\Exception\VariantCollisionException;
 use App\Repository\HouseholdProductVariantRepository;
 use App\Service\Food\CutSuggester;
 use App\Service\Food\FoodCutDetector;
@@ -135,7 +138,12 @@ class VariantResolver
      * heurter une variante existante. {@see reidentify()} refuse alors, plutôt que
      * de fusionner deux stocks que personne n'a demandé de réunir.
      */
-    public function changeCut(HouseholdProductVariant $variant, ?FoodCut $cut): HouseholdProductVariant
+    /**
+     * `$merge` is the user's answer to a collision: the corrected food IS the
+     * one the household already has, so its lots join it and the empty
+     * duplicate goes. Without it, a collision is refused as before.
+     */
+    public function changeCut(HouseholdProductVariant $variant, ?FoodCut $cut, bool $merge = false): HouseholdProductVariant
     {
         $identity = $variant->identity()->withCut($cut);
         $variant->setCutOrigin(DataOrigin::User);
@@ -148,7 +156,41 @@ class VariantResolver
             return $variant;
         }
 
+        if ($merge) {
+            $existing = $this->variants->findOneByIdentity($variant->getHousehold(), $identity->hash());
+
+            if (null !== $existing && !$existing->getId()->equals($variant->getId())) {
+                return $this->mergeInto($variant, $existing);
+            }
+        }
+
         return $this->reidentify($variant, $identity);
+    }
+
+    /**
+     * Every lot of `$from` — archived ones too, their journal must not lose
+     * its food — and every shopping-list line move to `$into`, which keeps
+     * the product link if it had none. `$from`, now empty, is deleted.
+     */
+    private function mergeInto(HouseholdProductVariant $from, HouseholdProductVariant $into): HouseholdProductVariant
+    {
+        foreach ($this->entityManager->getRepository(StockItem::class)->findBy(['variant' => $from]) as $item) {
+            $item->setVariant($into);
+        }
+
+        foreach ($this->entityManager->getRepository(ShoppingListItem::class)->findBy(['variant' => $from]) as $line) {
+            $line->setVariant($into);
+        }
+
+        if (null === $into->getProduct() && null !== $from->getProduct()) {
+            $into->setProduct($from->getProduct());
+        }
+
+        $into->setCutOrigin(DataOrigin::User);
+        $this->entityManager->remove($from);
+        $this->entityManager->flush();
+
+        return $into;
     }
 
     /**
@@ -326,11 +368,7 @@ class VariantResolver
         $collision = $this->variants->findOneByIdentity($variant->getHousehold(), $identity->hash());
 
         if (null !== $collision && !$collision->getId()->equals($variant->getId())) {
-            throw new StockException(sprintf(
-                'Vous avez déjà « %s » dans votre inventaire. Consommez ou archivez ce lot, '
-                .'ou déplacez-le explicitement plutôt que de fusionner deux stocks distincts.',
-                $collision->getCulinaryLabel(),
-            ));
+            throw new VariantCollisionException($collision);
         }
 
         $variant->applyIdentity($identity);

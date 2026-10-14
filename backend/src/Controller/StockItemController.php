@@ -321,6 +321,8 @@ class StockItemController extends AbstractApiController
                     $item->setVariant($variants->changeCut(
                         $item->getVariant(),
                         $payload->enum('cut', FoodCut::class),
+                        // The user's answer to a `variant_collision` refusal.
+                        merge: $payload->bool('mergeIfExists'),
                     ));
                 }
 
