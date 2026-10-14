@@ -460,26 +460,54 @@ class StockService
     }
 
     /**
-     * Passe un lot au congélateur : ce n'est pas qu'un changement de rangement.
+     * Moves a lot. Into or out of the freezer, it is more than a move, and
+     * every path that changes a location goes through here so that none of
+     * them can forget it:
      *
-     * La congélation suspend le mûrissement — la date imprimée sur l'emballage
-     * ne veut plus rien dire une fois le produit gelé, elle est donc toujours
-     * remplacée par une nouvelle estimation (calculée par l'appelant, qui seul
-     * connaît l'estimateur de conservation). L'exemplaire entamé, lui, n'est
-     * pas refermé : congeler ne rescelle pas un paquet ouvert.
+     * - the printed date is never touched: the freezer changes how it is
+     *   judged ({@see \App\Service\Freshness\EffectiveUseByCalculator}), not
+     *   what the package says;
+     * - entering the freezer for the first time records `frozenAt`; coming
+     *   back after a thaw keeps the first one, so "frozen too late" is decided
+     *   once and never re-decided by a round trip;
+     * - leaving the freezer records `thawedAt`.
+     *
+     * An opened package stays opened: freezing does not reseal it. Returns
+     * the journal entry, or `null` for a move that does not involve the
+     * freezer.
      */
-    public function freeze(
+    public function moveTo(
         StockItem $item,
+        StorageLocation $location,
         Member $author,
-        \DateTimeImmutable $frozenAt,
-        \DateTimeImmutable $newExpirationDate,
+        ?\DateTimeImmutable $now = null,
         ?StockOperation $operation = null,
-    ): StockMovement {
-        $item->setFrozenAt($frozenAt);
-        $item->setStorageLocation(StorageLocation::Freezer);
-        $item->setEstimatedExpirationDate($newExpirationDate);
+    ): ?StockMovement {
+        $from = $item->getStorageLocation();
 
-        $movement = $this->record($item, MovementType::Correction, 0.0, $author, 'Passé au congélateur : péremption réestimée', $operation);
+        if ($from === $location) {
+            return null;
+        }
+
+        $now ??= new \DateTimeImmutable();
+        $item->setStorageLocation($location);
+
+        if (StorageLocation::Freezer === $location) {
+            if (null === $item->getThawedAt()) {
+                $item->setFrozenAt($now);
+            }
+            $item->setThawedAt(null);
+            $reason = 'Passé au congélateur';
+        } elseif (StorageLocation::Freezer === $from) {
+            $item->setThawedAt($now);
+            $reason = 'Sorti du congélateur';
+        } else {
+            $this->flush();
+
+            return null;
+        }
+
+        $movement = $this->record($item, MovementType::Correction, 0.0, $author, $reason, $operation);
         $this->flush();
 
         return $movement;

@@ -65,6 +65,7 @@ class InventoryAggregator
          *     base: float,
          *     expiresSoon: bool,
          *     opened: bool,
+         *     unfrozen: bool,
          *     estimatedQuantity: bool,
          *     locations: array<string, true>,
          *     lots: int,
@@ -72,7 +73,7 @@ class InventoryAggregator
          *     packages: int,
          *     packageBase: ?float,
          *     packagingIsUniform: bool,
-         *     buckets: array<string, array{base: float, useBy: ?\DateTimeImmutable, useByIsEstimated: bool, opened: bool, expiresSoon: bool}>,
+         *     buckets: array<string, array{base: float, useBy: ?\DateTimeImmutable, useByIsEstimated: bool, opened: bool, expiresSoon: bool, frozen: bool, pastBest: bool}>,
          * }> $grouped
          */
         $grouped = [];
@@ -91,6 +92,7 @@ class InventoryAggregator
                     'base' => 0.0,
                     'expiresSoon' => false,
                     'opened' => false,
+                    'unfrozen' => false,
                     'estimatedQuantity' => false,
                     'locations' => [],
                     'lots' => 0,
@@ -132,6 +134,11 @@ class InventoryAggregator
             $effective = $this->effectiveUseBy->compute($item);
             $expiresSoon = $effective->isExpiringSoon($expiringWithinDays);
             $opened = $item->isOpened();
+            $frozen = $effective->isFrozen();
+
+            if (!$frozen) {
+                $grouped[$key]['unfrozen'] = true;
+            }
 
             if ($expiresSoon) {
                 $grouped[$key]['expiresSoon'] = true;
@@ -141,7 +148,7 @@ class InventoryAggregator
                 $grouped[$key]['opened'] = true;
             }
 
-            $bucketKey = ($effective->date?->format('Y-m-d') ?? 'none').'|'.($opened ? '1' : '0');
+            $bucketKey = ($effective->date?->format('Y-m-d') ?? 'none').'|'.($opened ? '1' : '0').'|'.($frozen ? '1' : '0');
 
             if (!isset($grouped[$key]['buckets'][$bucketKey])) {
                 $grouped[$key]['buckets'][$bucketKey] = [
@@ -150,6 +157,8 @@ class InventoryAggregator
                     'useByIsEstimated' => EffectiveUseBy::BASIS_PRINTED !== $effective->basis,
                     'opened' => $opened,
                     'expiresSoon' => false,
+                    'frozen' => $frozen,
+                    'pastBest' => $effective->isPastBest(),
                 ];
             }
 
@@ -173,6 +182,8 @@ class InventoryAggregator
                     useByIsEstimated: $bucket['useByIsEstimated'],
                     opened: $bucket['opened'],
                     expiresSoon: $bucket['expiresSoon'],
+                    frozen: $bucket['frozen'],
+                    pastBest: $bucket['pastBest'],
                 ),
                 array_values($data['buckets']),
             );
@@ -205,7 +216,9 @@ class InventoryAggregator
                 traits: $variant->getTraits(),
                 notes: array_keys($data['notes']),
                 buckets: $buckets,
-                perishable: $variant->isFresh(),
+                // Frozen, a fresh food no longer spoils: only a lot outside the
+                // freezer keeps the line perishable.
+                perishable: $variant->isFresh() && $data['unfrozen'],
                 // Quand un stock se compte en pièces, la pièce comptée EST la
                 // découpe : une escalope, une tranche. Le poids de la découpe
                 // prime donc sur celui du lexique, qui décrit l'aliment entier —

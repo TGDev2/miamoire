@@ -7,6 +7,7 @@ namespace App\Service\Inventory;
 use App\Entity\Household;
 use App\Entity\StockItem;
 use App\Enum\ReviewReason;
+use App\Enum\StorageLocation;
 use App\Repository\StockItemRepository;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimator;
@@ -140,12 +141,17 @@ class StockReviewSelector
         $lastTouch = max($item->getUpdatedAt(), $item->getCreatedAt());
         $daysSinceTouch = $lastTouch->diff($now)->days;
 
-        $expectedShelfLifeDays = $this->shelfLife->estimate(
-            $variant->getName(),
-            $variant->getCategory(),
-            $variant->getTraits(),
-            $item->getStorageLocation(),
-        )->days;
+        // In the freezer, a food's own duration is a quality limit, not how
+        // long it usually waits: every frozen food waits for months, so the
+        // freezer default applies to all of them.
+        $expectedShelfLifeDays = StorageLocation::Freezer === $item->getStorageLocation()
+            ? $this->shelfLife->defaultDays(StorageLocation::Freezer)
+            : $this->shelfLife->estimate(
+                $variant->getName(),
+                $variant->getCategory(),
+                $variant->getTraits(),
+                $item->getStorageLocation(),
+            )->days;
 
         return $daysSinceTouch >= $expectedShelfLifeDays;
     }

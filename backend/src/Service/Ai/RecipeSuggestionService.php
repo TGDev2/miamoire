@@ -193,7 +193,9 @@ class RecipeSuggestionService
               `expired`, même secondaire, et lui seulement, porte « date dépassée le … ». Si c'est une viande, un poisson ou
               un produit laitier frais qui n'est pas surgelé, ajoute de vérifier son aspect
               et son odeur avant de l'utiliser, et de le cuire à cœur. Pour un surgelé, une
-              conserve ou un produit sec, n'ajoute rien d'autre que la date.
+              conserve ou un produit sec, n'ajoute rien d'autre que la date. Une part `frozen`
+              est au congélateur : sa date n'est qu'une date de qualité, elle n'est jamais
+              `expired` et ne porte aucune mention de date dépassée.
 
             ===== CONSIGNE DE L'APPLICATION =====
 
@@ -251,8 +253,9 @@ class RecipeSuggestionService
 
         $payload['inventory'] = array_map(
             static function (array $line) use ($today): array {
+                // A frozen part's date is a quality limit: it never expires.
                 $line['deadlines'] = array_map(
-                    static fn (array $part): array => isset($part['useBy']) && $part['useBy'] < $today
+                    static fn (array $part): array => isset($part['useBy']) && $part['useBy'] < $today && !isset($part['frozen'])
                         ? $part + ['expired' => true]
                         : $part,
                     $line['deadlines'],
@@ -712,7 +715,13 @@ class RecipeSuggestionService
             Chaque ligne d'inventaire porte une clé stable `key`, un libellé, une quantité,
             une unité et `deadlines` : la même quantité ventilée par échéance effective,
             chaque part portant sa propre quantité et, si présents, `useBy`, `opened`
-            (exemplaire entamé, ouvert ou refermé) et `expiresSoon`. Une ligne dont
+            (exemplaire entamé, ouvert ou refermé), `expiresSoon` et `frozen`. Une part
+            `frozen` est au congélateur : son `useBy` est une date de QUALITÉ, pas de
+            sécurité, car un aliment congelé reste sain ; `pastBest` y signale un aliment
+            congelé depuis plus longtemps que conseillé, encore sain, à écouler sans
+            urgence. Une recette qui emploie une part `frozen` prévoit sa décongélation,
+            la veille au réfrigérateur, ou une cuisson directe quand l'aliment s'y prête.
+            Une ligne dont
             `deadlines` compte plusieurs parts a des lots aux échéances différentes —
             250 g à utiliser demain, 1 kg scellé plus tard, par exemple : ne traite jamais
             la quantité totale comme uniformément urgente dans ce cas. Elle peut aussi
@@ -817,6 +826,7 @@ class RecipeSuggestionService
             16. `today` est la date du jour. Toutes les dates `useBy` s'y rapportent :
                 une échéance d'aujourd'hui ou de demain est urgente même sans
                 `expiresSoon`, une échéance dépassée doit être signalée plutôt qu'ignorée.
+                Sauf sur une part `frozen` : sa date n'est jamais urgente ni périmée.
             17. `season` donne la saison, et c'est le REGISTRE des plats qu'elle règle,
                 jamais leur contenu : en {$seasonLabel}, privilégie {$seasonGuidance}.
                 `seasonalProduce` liste les fruits et légumes réellement de saison ce

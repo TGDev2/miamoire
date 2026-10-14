@@ -120,6 +120,22 @@ class RecipePromptExportTest extends WebTestCase
         self::assertStringContainsString('Aliments à date dépassée non utilisés', $prompt);
     }
 
+    /**
+     * In the freezer, a passed date is not an expiry: the export must not
+     * flag it "date dépassée", only say that the food is frozen.
+     */
+    public function testAFrozenFoodWithAPassedDateIsNotFlaggedExpired(): void
+    {
+        $this->stock('Andouillettes', 500.0, '-120 days', StorageLocation::Freezer);
+        $this->stock('Saucisses de Toulouse', 500.0, '-10 days');
+
+        $prompt = (string) preg_replace('/\s+/u', ' ', $this->exportedPrompt([]));
+
+        self::assertSame(1, substr_count($prompt, '"expired":true'), 'Only the pantry sausages are expired.');
+        self::assertSame(1, substr_count($prompt, '"frozen":true'));
+        self::assertStringContainsString('Une part `frozen` est au congélateur', $prompt);
+    }
+
     public function testTheExportLeavesTheAntiRepetitionHistoryUntouched(): void
     {
         $this->stock('Courgettes', 600.0);
@@ -180,8 +196,12 @@ class RecipePromptExportTest extends WebTestCase
         return $decoded['prompt'];
     }
 
-    private function stock(string $name, float $grams, ?string $expiresIn = null): void
-    {
+    private function stock(
+        string $name,
+        float $grams,
+        ?string $expiresIn = null,
+        StorageLocation $location = StorageLocation::Pantry,
+    ): void {
         $identity = VariantIdentity::of(
             preg_replace('/[^a-z0-9]+/', '-', mb_strtolower($name)) ?? $name,
             Unit::Gram->family(),
@@ -191,7 +211,7 @@ class RecipePromptExportTest extends WebTestCase
 
         $variant = new HouseholdProductVariant($this->household, $name, $identity, $identity->slugBase());
         $this->entityManager->persist($variant);
-        $item = new StockItem($this->household, $variant, $grams, Unit::Gram, StorageLocation::Pantry);
+        $item = new StockItem($this->household, $variant, $grams, Unit::Gram, $location);
 
         if (null !== $expiresIn) {
             $item->setExpirationDate(new \DateTimeImmutable($expiresIn));

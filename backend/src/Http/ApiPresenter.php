@@ -209,6 +209,10 @@ class ApiPresenter
             'effectiveUseByBasis' => $effective->basis,
             'afterOpeningDurationKnown' => $effective->afterOpeningDurationKnown,
             'daysUntilEffectiveUseBy' => $effective->daysFromToday(),
+            // The printed date is kept in the freezer; these two say why it no
+            // longer drives the urgency (`effectiveUseByBasis` frozen / thawed).
+            'frozenAt' => $item->getFrozenAt()?->format(\DATE_ATOM),
+            'thawedAt' => $item->getThawedAt()?->format(\DATE_ATOM),
             'note' => $item->getNote(),
             'addedBy' => $item->getAddedBy()?->getFirstName(),
             'updatedAt' => $item->getUpdatedAt()->format(\DATE_ATOM),

@@ -111,6 +111,23 @@ class StockReviewQueueTest extends DatabaseTestCase
         self::assertNotContains(ReviewReason::Stale, $reasons);
     }
 
+    /**
+     * "Stale" measures how long a lot usually waits, not its quality. In the
+     * freezer every food waits for months: sausages frozen for 81 days are
+     * past their 60 days of best quality, but nothing suggests they are gone.
+     */
+    public function testAFrozenFoodIsNotStaleBeforeTheFreezerDefault(): void
+    {
+        $sausages = $this->makeVariant($this->household, 'Saucisses de Toulouse', Unit::Gram);
+        $item = $this->makeLot($this->household, $sausages, 500, Unit::Gram);
+        $item->setStorageLocation(\App\Enum\StorageLocation::Freezer);
+        $item->setQuantityIsEstimated(true);
+        $this->entityManager->flush();
+
+        self::assertNotContains(ReviewReason::Stale, $this->reasonsFor($item->getId(), new \DateTimeImmutable('+81 days')));
+        self::assertContains(ReviewReason::Stale, $this->reasonsFor($item->getId(), new \DateTimeImmutable('+181 days')));
+    }
+
     public function testItemWithNoReasonIsExcludedEntirely(): void
     {
         $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram);

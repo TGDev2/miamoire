@@ -162,11 +162,19 @@ class StockItem
     private ?\DateTimeImmutable $remindAfter = null;
 
     /**
-     * Date à laquelle le lot est passé au congélateur. `null` tant qu'il n'a
-     * jamais été congelé — voir {@see \App\Service\Stock\StockService::freeze()}.
+     * When the lot first went into the freezer. `null` when it never did, or
+     * when it was added straight into the freezer — then the real freezing
+     * date is unknown. See {@see \App\Service\Stock\StockService::moveTo()}.
      */
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $frozenAt = null;
+
+    /**
+     * When the lot last came out of the freezer; `null` while it is in it, or
+     * if it never was. A thawed lot is eaten within 24 hours.
+     */
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $thawedAt = null;
 
     /**
      * Dernière consultation de la fiche détaillée, pour repérer les produits
@@ -672,6 +680,16 @@ class StockItem
     public function setFrozenAt(?\DateTimeImmutable $frozenAt): void
     {
         $this->frozenAt = $frozenAt;
+    }
+
+    public function getThawedAt(): ?\DateTimeImmutable
+    {
+        return $this->thawedAt;
+    }
+
+    public function setThawedAt(?\DateTimeImmutable $thawedAt): void
+    {
+        $this->thawedAt = $thawedAt;
     }
 
     public function getLastViewedAt(): ?\DateTimeImmutable

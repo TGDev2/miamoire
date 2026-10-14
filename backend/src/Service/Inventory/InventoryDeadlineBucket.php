@@ -21,6 +21,10 @@ final readonly class InventoryDeadlineBucket
         /** Au moins un exemplaire de ce groupe est entamé (ouvert ou refermé). */
         public bool $opened,
         public bool $expiresSoon,
+        /** In the freezer: `useBy` is a quality limit, never a safety deadline. */
+        public bool $frozen = false,
+        /** Frozen for longer than advised: still safe, best eaten soon. */
+        public bool $pastBest = false,
     ) {
     }
 
@@ -39,6 +43,14 @@ final readonly class InventoryDeadlineBucket
 
         if ($this->expiresSoon) {
             $payload['expiresSoon'] = true;
+        }
+
+        if ($this->frozen) {
+            $payload['frozen'] = true;
+        }
+
+        if ($this->pastBest) {
+            $payload['pastBest'] = true;
         }
 
         return $payload;

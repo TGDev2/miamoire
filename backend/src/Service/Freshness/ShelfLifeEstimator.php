@@ -108,40 +108,43 @@ class ShelfLifeEstimator
         'avocat' => ['fridge' => 7, 'pantry' => 4],
         'figue' => ['fridge' => 3],
 
-        // Produits animaux
-        'viande hachee' => ['fridge' => 1],
-        'steak hache' => ['fridge' => 1],
-        'boeuf' => ['fridge' => 3],
-        'veau' => ['fridge' => 3],
-        'agneau' => ['fridge' => 3],
-        'porc' => ['fridge' => 3],
-        'poulet' => ['fridge' => 2],
-        'dinde' => ['fridge' => 2],
-        'volaille' => ['fridge' => 2],
-        'poisson' => ['fridge' => 2],
-        'saumon' => ['fridge' => 2],
-        'cabillaud' => ['fridge' => 2],
-        'crevette' => ['fridge' => 1],
-        'moule' => ['fridge' => 1],
-        'jambon' => ['fridge' => 4],
+        // Produits animaux. A `freezer` duration is a quality limit (frozen
+        // food stays safe): minced meat, fatty fish and cured pork turn first,
+        // poultry lasts. Without one, the freezer default below applies.
+        'viande hachee' => ['fridge' => 1, 'freezer' => 90],
+        'steak hache' => ['fridge' => 1, 'freezer' => 90],
+        'boeuf' => ['fridge' => 3, 'freezer' => 180],
+        'veau' => ['fridge' => 3, 'freezer' => 180],
+        'agneau' => ['fridge' => 3, 'freezer' => 180],
+        'porc' => ['fridge' => 3, 'freezer' => 180],
+        'poulet' => ['fridge' => 2, 'freezer' => 270],
+        'dinde' => ['fridge' => 2, 'freezer' => 270],
+        'volaille' => ['fridge' => 2, 'freezer' => 270],
+        'poisson' => ['fridge' => 2, 'freezer' => 180],
+        'saumon' => ['fridge' => 2, 'freezer' => 90],
+        'cabillaud' => ['fridge' => 2, 'freezer' => 180],
+        'crevette' => ['fridge' => 1, 'freezer' => 180],
+        'moule' => ['fridge' => 1, 'freezer' => 90],
+        'jambon' => ['fridge' => 4, 'freezer' => 60],
         'saucisson' => ['fridge' => 21, 'pantry' => 14],
-        'lardon' => ['fridge' => 5],
+        'saucisse' => ['fridge' => 2, 'freezer' => 60],
+        'lardon' => ['fridge' => 5, 'freezer' => 30],
         'oeuf' => ['fridge' => 28, 'pantry' => 21],
-        'lait' => ['fridge' => 5],
+        'lait' => ['fridge' => 5, 'freezer' => 90],
         'yaourt' => ['fridge' => 14],
-        'fromage' => ['fridge' => 14],
-        'beurre' => ['fridge' => 30],
+        'fromage' => ['fridge' => 14, 'freezer' => 120],
+        'beurre' => ['fridge' => 30, 'freezer' => 180],
         'creme' => ['fridge' => 5],
 
         // Restes et préparations maison
-        'reste' => ['fridge' => 3],
-        'gratin' => ['fridge' => 3],
-        'soupe' => ['fridge' => 3],
+        'reste' => ['fridge' => 3, 'freezer' => 90],
+        'gratin' => ['fridge' => 3, 'freezer' => 90],
+        'soupe' => ['fridge' => 3, 'freezer' => 90],
         'compote' => ['fridge' => 5],
         'salade composee' => ['fridge' => 2],
 
         // Épicerie
-        'pain' => ['pantry' => 3, 'fridge' => 5],
+        'pain' => ['pantry' => 3, 'fridge' => 5, 'freezer' => 90],
         'riz' => ['pantry' => 365],
         'farine' => ['pantry' => 365],
         'lentille' => ['pantry' => 365],
@@ -257,6 +260,12 @@ class ShelfLifeEstimator
     public static function knownTerms(): array
     {
         return array_map('strval', array_keys(self::FOODS + self::EXACT_FOODS));
+    }
+
+    /** How long anything keeps in this location when nothing more is known. */
+    public function defaultDays(StorageLocation $location): int
+    {
+        return self::LOCATION_DAYS[$location->value];
     }
 
     /** @param list<ProductTrait> $traits */

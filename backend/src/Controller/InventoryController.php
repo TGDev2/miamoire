@@ -84,6 +84,8 @@ class InventoryController extends AbstractApiController
                             'useByIsEstimated' => $bucket->useByIsEstimated,
                             'opened' => $bucket->opened,
                             'expiresSoon' => $bucket->expiresSoon,
+                            'frozen' => $bucket->frozen,
+                            'pastBest' => $bucket->pastBest,
                         ],
                         $line->buckets,
                     ),

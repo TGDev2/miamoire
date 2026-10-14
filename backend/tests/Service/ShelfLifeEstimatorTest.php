@@ -109,6 +109,35 @@ class ShelfLifeEstimatorTest extends TestCase
         self::assertSame('location', $estimate->source);
     }
 
+    /**
+     * Some foods do declare a freezer duration — a quality limit, since frozen
+     * food stays safe. Minced meat and fatty fish turn first, poultry lasts.
+     */
+    public function testFoodsThatDeclareAFreezerDurationKeepIt(): void
+    {
+        self::assertSame(90, $this->estimator->estimate('Steak haché 5%', null, [], StorageLocation::Freezer)->days);
+        self::assertSame(90, $this->estimator->estimate('Pavé de saumon', null, [], StorageLocation::Freezer)->days);
+        self::assertSame(60, $this->estimator->estimate('Saucisses de Toulouse', null, [], StorageLocation::Freezer)->days);
+        self::assertSame(270, $this->estimator->estimate('Cuisses de poulet', null, [], StorageLocation::Freezer)->days);
+        self::assertSame(90, $this->estimator->estimate('Pain de campagne', null, [], StorageLocation::Freezer)->days);
+        self::assertSame('food', $this->estimator->estimate('Steak haché 5%', null, [], StorageLocation::Freezer)->source);
+    }
+
+    /** A freezer duration never lengthens a fridge or pantry estimate. */
+    public function testAFreezerDurationDoesNotLeakIntoOtherLocations(): void
+    {
+        self::assertSame(1, $this->estimator->estimate('Steak haché', null, [], StorageLocation::Fridge)->days);
+        self::assertSame(3, $this->estimator->estimate('Pain', null, [], StorageLocation::Pantry)->days);
+        self::assertSame(2, $this->estimator->estimate('Saucisses de Toulouse', null, [], StorageLocation::Fridge)->days);
+        self::assertSame(2, $this->estimator->estimate('Saucisses de Toulouse', null, [], StorageLocation::Pantry)->days);
+    }
+
+    /** "Saucisse" must not swallow "saucisson", a dry sausage that keeps for weeks. */
+    public function testSausageDoesNotMatchDrySausage(): void
+    {
+        self::assertSame(21, $this->estimator->estimate('Saucisson sec', null, [], StorageLocation::Fridge)->days);
+    }
+
     public function testTraitsTakeOverWhenTheFoodIsUnknown(): void
     {
         $estimate = $this->estimator->estimate(

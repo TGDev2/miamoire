@@ -293,21 +293,95 @@ class StockServiceTest extends TestCase
         self::assertSame(0.0, $movement->getQuantity());
     }
 
-    public function testFreezeRecalculatesExpirationAndJournalsTheGesture(): void
+    /**
+     * Freezing used to replace the printed date with "now + 180 days". The
+     * date is now kept as printed: the freezer changes how it is judged
+     * (see EffectiveUseByCalculator), not what it says.
+     */
+    public function testFreezingKeepsThePrintedDateAndJournalsTheGesture(): void
     {
         $item = $this->item(500, Unit::Gram);
-        $item->setExpirationDate(new \DateTimeImmutable('+1 day'));
-        $frozenAt = new \DateTimeImmutable();
-        $newExpiration = new \DateTimeImmutable('+180 days');
+        $printed = new \DateTimeImmutable('2026-06-14');
+        $item->setExpirationDate($printed);
+        $now = new \DateTimeImmutable('2026-10-14 19:00');
 
-        $movement = $this->service->freeze($item, $this->member, $frozenAt, $newExpiration);
+        $movement = $this->service->moveTo($item, StorageLocation::Freezer, $this->member, $now);
 
         self::assertSame(StorageLocation::Freezer, $item->getStorageLocation());
-        self::assertSame($frozenAt, $item->getFrozenAt());
-        self::assertSame($newExpiration, $item->getExpirationDate());
-        self::assertTrue($item->isExpirationEstimated());
+        self::assertSame($now, $item->getFrozenAt());
+        self::assertNull($item->getThawedAt());
+        self::assertSame($printed, $item->getExpirationDate());
+        self::assertFalse($item->isExpirationEstimated());
+        self::assertNotNull($movement);
         self::assertSame(MovementType::Correction, $movement->getType());
         self::assertSame(0.0, $movement->getQuantity());
+    }
+
+    public function testLeavingTheFreezerRecordsTheThaw(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $item->setStorageLocation(StorageLocation::Freezer);
+        $now = new \DateTimeImmutable('2026-10-14 19:00');
+
+        $movement = $this->service->moveTo($item, StorageLocation::Fridge, $this->member, $now);
+
+        self::assertSame(StorageLocation::Fridge, $item->getStorageLocation());
+        self::assertSame($now, $item->getThawedAt());
+        self::assertNotNull($movement);
+        self::assertSame(0.0, $movement->getQuantity());
+    }
+
+    /**
+     * Back into the freezer, the lot is no longer thawed, but it keeps its
+     * first freezing date: "frozen too late" is decided once, on the first
+     * freezing, never on a later round trip.
+     */
+    public function testRefreezingKeepsTheFirstFreezingDate(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $firstFreezing = new \DateTimeImmutable('2026-09-01 10:00');
+        $this->service->moveTo($item, StorageLocation::Freezer, $this->member, $firstFreezing);
+        $this->service->moveTo($item, StorageLocation::Fridge, $this->member, new \DateTimeImmutable('2026-10-10 08:00'));
+
+        $this->service->moveTo($item, StorageLocation::Freezer, $this->member, new \DateTimeImmutable('2026-10-10 20:00'));
+
+        self::assertSame($firstFreezing, $item->getFrozenAt());
+        self::assertNull($item->getThawedAt());
+    }
+
+    /** A lot put straight into the freezer had an unknown freezing date: a round trip must not invent one. */
+    public function testRefreezingALotAddedStraightIntoTheFreezerInventsNoFreezingDate(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $item->setStorageLocation(StorageLocation::Freezer);
+        $this->service->moveTo($item, StorageLocation::Fridge, $this->member, new \DateTimeImmutable('2026-10-10 08:00'));
+
+        $this->service->moveTo($item, StorageLocation::Freezer, $this->member, new \DateTimeImmutable('2026-10-10 20:00'));
+
+        self::assertNull($item->getFrozenAt());
+        self::assertNull($item->getThawedAt());
+    }
+
+    /** Pantry to fridge is a plain move: nothing to journal, no date touched. */
+    public function testAMoveThatDoesNotInvolveTheFreezerJournalsNothing(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+
+        $movement = $this->service->moveTo($item, StorageLocation::Fridge, $this->member);
+
+        self::assertSame(StorageLocation::Fridge, $item->getStorageLocation());
+        self::assertNull($movement);
+        self::assertNull($item->getFrozenAt());
+        self::assertNull($item->getThawedAt());
+    }
+
+    public function testMovingToTheSamePlaceIsANoOp(): void
+    {
+        $item = $this->item(500, Unit::Gram);
+        $item->setStorageLocation(StorageLocation::Freezer);
+
+        self::assertNull($this->service->moveTo($item, StorageLocation::Freezer, $this->member));
+        self::assertNull($item->getFrozenAt());
     }
 
     /** Un lot est homogène : un réapprovisionnement à une autre date doit créer un nouveau lot. */

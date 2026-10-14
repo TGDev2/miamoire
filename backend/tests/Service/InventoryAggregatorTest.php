@@ -7,6 +7,8 @@ namespace App\Tests\Service;
 use App\Entity\Household;
 use App\Entity\HouseholdProductVariant;
 use App\Entity\StockItem;
+use App\Enum\DataOrigin;
+use App\Enum\FoodNature;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Repository\StockItemRepository;
@@ -160,6 +162,50 @@ class InventoryAggregatorTest extends TestCase
         self::assertNotNull($line->packaging);
         self::assertSame(2, $line->packaging->count);
         self::assertSame(500.0, $line->packaging->size);
+    }
+
+    /**
+     * The model must know a lot is frozen: it plans the thawing, and it reads
+     * the date as a quality limit. A frozen part and a fridge part with the
+     * same date are two different parts.
+     */
+    public function testFrozenPartsAreFlaggedAndKeptApart(): void
+    {
+        $variant = $this->variant('saucisse', Unit::Gram);
+        $frozen = $this->lot($variant, 500, Unit::Gram, packageSize: 500);
+        $frozen->setStorageLocation(StorageLocation::Freezer);
+        $frozen->setExpirationDate(new \DateTimeImmutable('today -30 days'));
+        $frozen->setPurchaseDate(new \DateTimeImmutable('today -200 days'));
+        $fridge = $this->lot($variant, 500, Unit::Gram, packageSize: 500);
+        $fridge->setStorageLocation(StorageLocation::Fridge);
+        $fridge->setExpirationDate(new \DateTimeImmutable('today +2 days'));
+
+        $line = $this->aggregate([$frozen, $fridge])[0];
+        $parts = array_map(static fn ($bucket): array => $bucket->toAiPayload(), $line->buckets);
+
+        self::assertCount(2, $parts);
+        $frozenPart = array_values(array_filter($parts, static fn (array $part): bool => $part['frozen'] ?? false))[0];
+        self::assertTrue($frozenPart['pastBest'], 'Frozen 200 days ago, sausages are past their 60 days of quality.');
+        self::assertArrayNotHasKey('expiresSoon', $frozenPart, 'A frozen part is never urgent.');
+        $fridgePart = array_values(array_filter($parts, static fn (array $part): bool => !($part['frozen'] ?? false)))[0];
+        self::assertTrue($fridgePart['expiresSoon']);
+        self::assertArrayNotHasKey('pastBest', $fridgePart);
+    }
+
+    /** A fresh food that is entirely frozen no longer spoils: it is not "perishable" any more. */
+    public function testAFreshFoodEntirelyFrozenIsNotPerishable(): void
+    {
+        $variant = $this->variant('courgette', Unit::Gram);
+        $variant->setNature(FoodNature::Fresh, DataOrigin::User);
+        $frozen = $this->lot($variant, 500, Unit::Gram, packageSize: 500);
+        $frozen->setStorageLocation(StorageLocation::Freezer);
+
+        self::assertFalse($this->aggregate([$frozen])[0]->perishable);
+
+        $fridge = $this->lot($variant, 500, Unit::Gram, packageSize: 500);
+        $fridge->setStorageLocation(StorageLocation::Fridge);
+
+        self::assertTrue($this->aggregate([$frozen, $fridge])[0]->perishable, 'One lot still in the fridge spoils.');
     }
 
     /** @param list<StockItem> $lots @return list<\App\Service\Inventory\InventoryLine> */

@@ -266,8 +266,14 @@ class StockItemController extends AbstractApiController
                     );
                 }
 
+                // Into or out of the freezer is more than a move: see StockService::moveTo().
                 if ($payload->has('storageLocation')) {
-                    $item->setStorageLocation($payload->requiredEnum('storageLocation', StorageLocation::class));
+                    $stockService->moveTo(
+                        $item,
+                        $payload->requiredEnum('storageLocation', StorageLocation::class),
+                        $context->requireMember(),
+                        operation: $operation,
+                    );
                 }
 
                 if ($payload->has('expirationDate')) {
@@ -797,9 +803,8 @@ class StockItemController extends AbstractApiController
     }
 
     /**
-     * Congèle un lot : ce n'est pas qu'un changement de rangement, voir
-     * {@see StockService::freeze()}. La nouvelle échéance est calculée ici,
-     * comme `/update` le fait déjà pour `estimateExpiration`.
+     * The "Congelé" button of the Today screen: the same move as the location
+     * chips, see {@see StockService::moveTo()}. The printed date is kept.
      */
     #[Route('/{id}/freeze', methods: ['POST'])]
     public function freeze(
@@ -809,7 +814,6 @@ class StockItemController extends AbstractApiController
         StockItemRepository $stockItems,
         StockService $stockService,
         StockOperationGuard $guard,
-        ShelfLifeEstimator $shelfLife,
         ApiPresenter $presenter,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
@@ -822,12 +826,10 @@ class StockItemController extends AbstractApiController
             $this->requestHash($payload),
             $member,
             $stockService,
-            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $shelfLife, $presenter, $member): array {
+            function (StockOperation $operation) use ($id, $context, $stockItems, $stockService, $presenter, $member): array {
                 $item = $this->ownedStockItemForUpdate($stockItems, $context, $id);
-                $frozenAt = new \DateTimeImmutable();
-                $newExpiration = $this->estimateFor($shelfLife, $item->getVariant(), StorageLocation::Freezer, $frozenAt);
 
-                $stockService->freeze($item, $member, $frozenAt, $newExpiration, $operation);
+                $stockService->moveTo($item, StorageLocation::Freezer, $member, operation: $operation);
 
                 return $presenter->stockItem($item);
             },

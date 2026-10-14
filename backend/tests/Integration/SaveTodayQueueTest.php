@@ -87,17 +87,39 @@ class SaveTodayQueueTest extends DatabaseTestCase
         );
     }
 
-    /** Le même geste, mais avec une échéance proche encore active : le lot reste visible, sans le motif « Entamé ». */
-    public function testOpenedItemInTheFreezerKeepsOtherReasons(): void
+    /**
+     * In the freezer, a printed date is no longer a deadline: a lot whose date
+     * has passed there is not something to save today.
+     */
+    public function testAFrozenLotWithAPassedDateIsNotUrgent(): void
     {
-        $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram, '+2 days');
+        $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram, '-20 days');
+        $item->setStorageLocation(\App\Enum\StorageLocation::Freezer);
+        $this->entityManager->flush();
+
+        $candidates = $this->selector->selectForToday($this->household);
+
+        self::assertNotContains(
+            (string) $item->getId(),
+            array_map(static fn (SaveTodayCandidate $candidate): string => (string) $candidate->item->getId(), $candidates),
+        );
+    }
+
+    /**
+     * Frozen after its date had passed: still expired, and still without the
+     * "opened" reason, which the freezer does suspend.
+     */
+    public function testAnOpenedLotFrozenTooLateKeepsOnlyTheExpiredReason(): void
+    {
+        $item = $this->makeLot($this->household, $this->riz, 500, Unit::Gram, '-10 days');
         $item->openNextPackage();
         $item->setStorageLocation(\App\Enum\StorageLocation::Freezer);
+        $item->setFrozenAt(new \DateTimeImmutable('-5 days'));
         $this->entityManager->flush();
 
         $reasons = $this->reasonsFor($item->getId());
 
-        self::assertContains(UrgencyReason::ExpiringSoon, $reasons);
+        self::assertContains(UrgencyReason::Expired, $reasons);
         self::assertNotContains(UrgencyReason::Opened, $reasons);
     }
 
