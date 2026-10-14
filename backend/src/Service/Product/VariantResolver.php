@@ -15,6 +15,7 @@ use App\Enum\Unit;
 use App\Enum\UnitFamily;
 use App\Exception\StockException;
 use App\Repository\HouseholdProductVariantRepository;
+use App\Service\Food\CutSuggester;
 use App\Service\Food\FoodCutDetector;
 use App\Service\Food\FoodNatureDetector;
 use App\Service\IngredientKeyGenerator;
@@ -43,6 +44,7 @@ class VariantResolver
         private readonly ProductTraitDetector $traitDetector,
         private readonly FoodNatureDetector $natureDetector,
         private readonly FoodCutDetector $cutDetector,
+        private readonly CutSuggester $cutSuggester,
         private readonly EntityManagerInterface $entityManager,
     ) {
     }
@@ -74,9 +76,17 @@ class VariantResolver
         [$traits, $traitsOrigin] = $this->resolveTraits($product, $label, $category, $explicitTraits);
         $effectiveCategory = $category ?? $product?->getCategory();
 
-        // Le catalogue partagé ne porte pas de découpe : elle ne se lit que sur le
-        // libellé du foyer, ou se choisit à la main. Deux niveaux, pas trois.
-        $cut = $explicitCut ?? $this->cutDetector->detect($label, $effectiveCategory);
+        $nature = $explicitNature ?? $this->natureDetector->detect(
+            $label,
+            $effectiveCategory,
+            $traits,
+            scanned: null !== $product?->getBarcode(),
+        );
+
+        // The shared catalogue carries no cut: it is chosen by hand, or else
+        // suggested from the label, the household's habits and the food's nature.
+        $cut = $explicitCut
+            ?? $this->cutSuggester->suggest($household, $label, $effectiveCategory, $traits, $nature)->cut;
 
         $identity = VariantIdentity::of(
             $this->keyGenerator->generate($label),
@@ -112,12 +122,7 @@ class VariantResolver
             null !== $explicitCut ? DataOrigin::User : DataOrigin::Detected,
             $brand ?? $product?->getBrand(),
             $effectiveCategory,
-            $explicitNature ?? $this->natureDetector->detect(
-                $label,
-                $effectiveCategory,
-                $traits,
-                scanned: null !== $product?->getBarcode(),
-            ),
+            $nature,
             null !== $explicitNature ? DataOrigin::User : DataOrigin::Detected,
         );
     }

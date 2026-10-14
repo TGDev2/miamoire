@@ -163,6 +163,87 @@ class FoodCutApiTest extends WebTestCase
         self::assertSame('Blanc de poulet (émincé)', $payload['variant']['culinaryLabel']);
     }
 
+    /**
+     * A cut corrected once is the household's habit: the next "Blanc de poulet"
+     * arrives as escalopes, on the same food, instead of a second food with
+     * no cut next to the corrected one.
+     */
+    public function testACorrectedCutIsRememberedForTheNextPurchase(): void
+    {
+        $first = $this->addStockItem('Blanc de poulet');
+        $corrected = $this->patch($first['id'], ['cut' => 'escalope']);
+
+        $profile = $this->get('/api/products/profile?name=Blanc+de+poulet');
+        self::assertSame('escalope', $profile['suggestedCut']);
+        self::assertSame('household', $profile['suggestedCutSource']);
+        self::assertNull($profile['detectedCut'], 'The label itself still names nothing.');
+        self::assertSame(150, $profile['approxPieceWeight'], 'The piece weight follows the cut that will be saved.');
+
+        $second = $this->addStockItem('Blanc de poulet');
+        self::assertSame($corrected['variant']['id'], $second['variant']['id']);
+        self::assertSame('escalope', $second['variant']['cut']);
+    }
+
+    /** Fresh carrots are whole: the recipe generator no longer has to guess. */
+    public function testFreshProduceArrivesWhole(): void
+    {
+        $profile = $this->get('/api/products/profile?name=Carottes');
+        self::assertSame('whole', $profile['suggestedCut']);
+        self::assertSame('produce', $profile['suggestedCutSource']);
+
+        self::assertSame('whole', $this->addStockItem('Carottes')['variant']['cut']);
+    }
+
+    /**
+     * The catch-up list: foods in stock whose cut is unknown and would change
+     * a recipe. One tap on a food removes it from the list.
+     */
+    public function testTheCutQueueListsFoodsWhoseUnknownCutMatters(): void
+    {
+        $breast = $this->addStockItem('Blanc de poulet');
+        $this->addStockItem('Escalopes de poulet');
+        $this->addStockItem('Farine de blé');
+        $this->addStockItem('Carottes');
+
+        $queue = $this->get('/api/inventory/cut-queue')['items'];
+
+        self::assertCount(1, $queue);
+        self::assertSame('Blanc de poulet', $queue[0]['variant']['name']);
+        self::assertSame($breast['id'], $queue[0]['stockItemId']);
+        self::assertContains('escalope', $queue[0]['variant']['plausibleCuts']);
+
+        $this->patch($breast['id'], ['cut' => 'strips']);
+
+        self::assertSame([], $this->get('/api/inventory/cut-queue')['items']);
+    }
+
+    /** @return array<string, mixed> */
+    private function get(string $uri): array
+    {
+        $this->client->request('GET', $uri, server: $this->authenticated);
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode(), (string) $this->client->getResponse()->getContent());
+
+        return json_decode((string) $this->client->getResponse()->getContent(), true);
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     *
+     * @return array<string, mixed>
+     */
+    private function patch(string $stockItemId, array $body): array
+    {
+        $this->client->request(
+            'PATCH',
+            sprintf('/api/stock-items/%s', $stockItemId),
+            server: $this->authenticated + ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode($body + ['operationKey' => bin2hex(random_bytes(8))], \JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode(), (string) $this->client->getResponse()->getContent());
+
+        return json_decode((string) $this->client->getResponse()->getContent(), true);
+    }
+
     /** @return array<string, mixed> */
     private function addStockItem(string $name): array
     {

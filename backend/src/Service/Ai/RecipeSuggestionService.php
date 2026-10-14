@@ -47,6 +47,7 @@ class RecipeSuggestionService
         private readonly RecipeSafetyFilter $safetyFilter,
         private readonly RequiredIngredientFilter $requiredFilter,
         private readonly FoodGroupFilter $foodGroupFilter,
+        private readonly AssumedCutFilter $assumedCutFilter,
         private readonly RecipePlanService $planner,
         private readonly SeasonalContextFactory $seasons,
         private readonly EntityManagerInterface $entityManager,
@@ -120,7 +121,8 @@ class RecipeSuggestionService
 
         $recipes = array_map(
             fn (array $recipe): array => $recipe + ['plan' => $this->planner->plan($guard, $strictLabels, $household, $recipe)],
-            $constrained['recipes'],
+            // Only real guesses are shown as "Forme supposée" — see AssumedCutFilter.
+            $this->assumedCutFilter->apply($constrained['recipes'], $inventory),
         );
 
         // Seules les recettes réellement montrées nourrissent l'historique anti-
@@ -821,6 +823,9 @@ class RecipeSuggestionService
                 - ou bâtir la recette sur une forme précise, et la DÉCLARER dans le champ
                   `assumedCut` de cet ingrédient. L'utilisateur la verra et pourra la
                   corriger en un geste ; l'application s'en souviendra pour toujours.
+                `assumedCut` désigne la forme sous laquelle l'aliment a été ACHETÉ et
+                rangé, jamais celle que ta recette lui donne : couper des carottes
+                entières en dés est une étape, pas une forme supposée « cubes ».
                 `assumedCut` vaut "none" dès que la ligne porte un `cut` : tu n'as alors
                 rien supposé.
             16. `today` est la date du jour. Toutes les dates `useBy` s'y rapportent :

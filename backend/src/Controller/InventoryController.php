@@ -8,6 +8,7 @@ use App\Enum\ProductTrait;
 use App\Http\ApiPresenter;
 use App\Http\RequestContext;
 use App\Repository\StockItemRepository;
+use App\Service\Food\CutSuggester;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Inventory\InventoryDeadlineBucket;
 use App\Service\Inventory\InventoryAggregator;
@@ -127,6 +128,62 @@ class InventoryController extends AbstractApiController
                 $candidates,
             ),
         ]);
+    }
+
+    /**
+     * The foods in stock whose cut is unknown although it would change a
+     * recipe — the catch-up list for stock put away before the cut could be
+     * given. One lot per food: its cut is the food's, so correcting that lot
+     * (`PATCH /api/stock-items/{id}` with `cut`) answers for all of them.
+     */
+    #[Route('/cut-queue', methods: ['GET'])]
+    public function cutQueue(
+        RequestContext $context,
+        StockItemRepository $stockItems,
+        CutSuggester $cutSuggester,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $household = $context->household();
+        $foods = [];
+
+        foreach ($stockItems->findAvailable($household) as $item) {
+            $variant = $item->getVariant();
+            $id = (string) $variant->getId();
+
+            if (null !== $variant->getCut()) {
+                continue;
+            }
+
+            if (isset($foods[$id])) {
+                ++$foods[$id]['lotCount'];
+                continue;
+            }
+
+            $suggestion = $cutSuggester->suggest(
+                $household,
+                $variant->getName(),
+                $variant->getCategory(),
+                $variant->getTraits(),
+                $variant->getNature(),
+            );
+
+            if ([] === $suggestion->plausible) {
+                continue;
+            }
+
+            $foods[$id] = [
+                'variant' => $presenter->variant($variant),
+                'stockItemId' => (string) $item->getId(),
+                'lotCount' => 1,
+                'suggestedCut' => $suggestion->cut?->value,
+                'suggestedCutSource' => $suggestion->source,
+            ];
+        }
+
+        $items = array_values($foods);
+        usort($items, static fn (array $a, array $b): int => strcmp($a['variant']['culinaryLabel'], $b['variant']['culinaryLabel']));
+
+        return $this->json(['items' => $items]);
     }
 
     /**

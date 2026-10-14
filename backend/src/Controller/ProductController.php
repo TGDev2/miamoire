@@ -13,8 +13,8 @@ use App\Http\RequestContext;
 use App\Repository\HouseholdProductVariantRepository;
 use App\Repository\ShoppingListItemRepository;
 use App\Repository\StockItemRepository;
+use App\Service\Food\CutSuggester;
 use App\Service\Food\FoodCutDetector;
-use App\Service\Food\FoodCutLexicon;
 use App\Service\Food\FoodNatureDetector;
 use App\Service\Food\FreshFoodLexicon;
 use App\Service\Freshness\ShelfLifeEstimator;
@@ -108,11 +108,11 @@ class ProductController extends AbstractApiController
         FoodNatureDetector $natureDetector,
         FreshFoodLexicon $lexicon,
         FoodCutDetector $cutDetector,
-        FoodCutLexicon $cutLexicon,
+        CutSuggester $cutSuggester,
         ShelfLifeEstimator $estimator,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $context->household();
+        $household = $context->household();
 
         $name = trim($request->query->getString('name'));
 
@@ -130,17 +130,19 @@ class ProductController extends AbstractApiController
             static fn (string $value) => '' !== $value,
         )));
 
+        // `scanned` dit que le libellé vient d'une fiche à code-barres, donc
+        // d'un emballage : c'est ce qui distingue une courgette du marché
+        // d'une barquette de courgettes déjà datée.
+        $nature = $natureDetector->detect($name, $category, $traits, $request->query->getBoolean('scanned'));
+
         return $this->json($presenter->foodProfile(
-            // `scanned` dit que le libellé vient d'une fiche à code-barres, donc
-            // d'un emballage : c'est ce qui distingue une courgette du marché
-            // d'une barquette de courgettes déjà datée.
-            $natureDetector->detect($name, $category, $traits, $request->query->getBoolean('scanned')),
+            $nature,
             $lexicon->find($name),
             $estimator->estimate($name, $category, $traits, $location),
             // La question n'est posée que lorsqu'elle change une recette : trois ou
-            // quatre puces pour un blanc de poulet, aucune pour une farine. Et
-            // quand le libellé nomme déjà la forme, elle arrive pré-cochée.
-            $cutLexicon->plausibleCuts($name) ?? [],
+            // quatre puces pour un blanc de poulet, aucune pour une farine. And the
+            // chip that arrives selected is exactly the cut that will be saved.
+            $cutSuggester->suggest($household, $name, $category, $traits, $nature),
             $cutDetector->detect($name, $category),
         ));
     }

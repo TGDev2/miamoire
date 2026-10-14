@@ -16,6 +16,7 @@ use App\Enum\FoodCut;
 use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Service\Ai\RecipePlan;
+use App\Service\Food\CutSuggestion;
 use App\Service\Food\FoodCutLexicon;
 use App\Service\Food\FreshFood;
 use App\Service\Freshness\EffectiveUseBy;
@@ -461,9 +462,11 @@ class ApiPresenter
      * ne change rien, l'écran n'affiche alors aucune puce plutôt qu'une liste de
      * onze réponses à une question qui ne se pose pas.
      *
-     * @param FreshFood|null $fresh         ce que le lexique sait de l'aliment, s'il le connaît
-     * @param list<FoodCut>  $plausibleCuts les découpes qu'on peut proposer pour cet aliment
-     * @param FoodCut|null   $detectedCut   celle que son libellé nomme déjà, s'il en nomme une
+     * `suggestedCut` is the cut that will be saved if nobody picks one — see
+     * {@see CutSuggester}; `detectedCut` keeps only what the label names.
+     *
+     * @param FreshFood|null $fresh       ce que le lexique sait de l'aliment, s'il le connaît
+     * @param FoodCut|null   $detectedCut celle que son libellé nomme déjà, s'il en nomme une
      *
      * @return array<string, mixed>
      */
@@ -471,7 +474,7 @@ class ApiPresenter
         FoodNature $nature,
         ?FreshFood $fresh,
         ShelfLifeEstimate $shelfLife,
-        array $plausibleCuts = [],
+        CutSuggestion $cut,
         ?FoodCut $detectedCut = null,
     ): array {
         return [
@@ -480,9 +483,11 @@ class ApiPresenter
             'naturalUnit' => $fresh?->naturalUnit->value,
             'naturalUnitLabel' => $fresh?->naturalUnit->label(),
             // Sert au générateur de recettes, jamais à convertir : voir FreshFood.
-            'approxPieceWeight' => $detectedCut?->approxPieceWeight() ?? $fresh?->approxPieceWeight,
-            'plausibleCuts' => FoodCut::toValues($plausibleCuts),
+            'approxPieceWeight' => $cut->cut?->approxPieceWeight() ?? $fresh?->approxPieceWeight,
+            'plausibleCuts' => FoodCut::toValues($cut->plausible),
             'detectedCut' => $detectedCut?->value,
+            'suggestedCut' => $cut->cut?->value,
+            'suggestedCutSource' => $cut->source,
             'shelfLife' => $this->shelfLife($shelfLife),
         ];
     }

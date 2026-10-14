@@ -202,6 +202,17 @@ final class FoodCutLexicon
         return null === $match ? null : $match['value'];
     }
 
+    /**
+     * A fruit or a vegetable — the foods sold whole unless the label says
+     * otherwise, see {@see CutSuggester}.
+     */
+    public function isProduce(string $label): bool
+    {
+        $match = $this->matcher->match($label, self::FOODS, [], PreparedDish::TERMS);
+
+        return null !== $match && in_array($match['value'], [self::VEGETABLE, self::FRUIT], true);
+    }
+
     /** @return list<string> les termes reconnus, lus par les tests de dérive */
     public function terms(): array
     {
