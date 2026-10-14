@@ -58,6 +58,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    /** A machine-readable reason, when the API gives one (`variant_collision`). */
+    public readonly code: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -206,7 +208,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     // Le code n'ouvre plus ce foyer : inutile de le réessayer sur chaque écran.
     if (response.status === 401 && !anonymous) onUnauthorized?.();
 
-    throw new ApiError(message, response.status);
+    const code =
+      payload && typeof payload === 'object' && 'code' in payload
+        ? String((payload as { code: unknown }).code)
+        : null;
+
+    throw new ApiError(message, response.status, code);
   }
 
   return payload as T;

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 
+import { ApiError } from '../api/client';
 import type { ProductCutValue, Reference } from '../api/types';
 import { spacing, text, thermal } from '../theme';
 import { Chip } from './ui';
@@ -20,12 +21,15 @@ export function CutPicker({
   value,
   onChange,
   collapsible = false,
+  help = true,
 }: {
   /** The cuts this food can take, already filtered: empty means "do not ask". */
   options: CutOption[];
   value: ProductCutValue | null;
   onChange: (cut: ProductCutValue | null) => void;
   collapsible?: boolean;
+  /** Off where the screen already explains why the cut matters. */
+  help?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -37,7 +41,9 @@ export function CutPicker({
     return (
       <View>
         <Text style={[text.label, styles.unknown]}>Sous quelle forme ?</Text>
-        <Text style={[text.small, styles.help]}>La cuisson en dépend : précisez-la, elle sera retenue.</Text>
+        {help ? (
+          <Text style={[text.small, styles.help]}>La cuisson en dépend : précisez-la, elle sera retenue.</Text>
+        ) : null}
         <View style={styles.chips}>
           {options.map((option) => (
             <Chip
@@ -88,9 +94,26 @@ export function CutPicker({
   );
 }
 
+/**
+ * A cut that makes this food identical to one already in stock is refused by
+ * the server (`variant_collision`): two stocks are never merged silently. The
+ * answer is the user's — merge, or keep both apart. Returns `false` when the
+ * failure is something else, for the caller to report.
+ */
+export function confirmCutMerge(exception: unknown, merge: () => void): boolean {
+  if (!(exception instanceof ApiError) || 'variant_collision' !== exception.code) return false;
+
+  Alert.alert('Même aliment', `${exception.message}\n\nRéunir les deux ? Ses lots rejoindront cet aliment.`, [
+    { text: 'Annuler', style: 'cancel' },
+    { text: 'Réunir les deux', onPress: merge },
+  ]);
+
+  return true;
+}
+
 const styles = StyleSheet.create({
   label: { marginBottom: spacing.sm },
-  unknown: { color: thermal.soon.line, marginBottom: spacing.xs },
-  help: { marginBottom: spacing.sm },
+  unknown: { color: thermal.soon.line, marginBottom: spacing.sm },
+  help: { marginTop: -spacing.xs, marginBottom: spacing.sm },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
 });

@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../src/api/client';
 import type { CutQueueItem, ProductCutValue, Reference } from '../src/api/types';
-import { CutPicker } from '../src/components/CutPicker';
+import { CutPicker, confirmCutMerge } from '../src/components/CutPicker';
 import { Card, EmptyState, ErrorBanner, Loader } from '../src/components/ui';
 import * as haptics from '../src/haptics';
 import { spacing, text } from '../src/theme';
@@ -43,10 +43,10 @@ export default function CutsScreen() {
     };
   }, []);
 
-  async function save(entry: CutQueueItem, cut: ProductCutValue | null) {
+  async function save(entry: CutQueueItem, cut: ProductCutValue | null, merge = false) {
     if (null === cut || null !== saving) return;
 
-    const mapKey = `${entry.stockItemId}:${cut}`;
+    const mapKey = `${entry.stockItemId}:${cut}:${merge ? 'merge' : 'set'}`;
     const operationKey = operationKeys.current.get(mapKey) ?? generateOperationKey();
     operationKeys.current.set(mapKey, operationKey);
 
@@ -54,12 +54,13 @@ export default function CutsScreen() {
     setErrors((current) => ({ ...current, [entry.variant.id]: '' }));
 
     try {
-      await api.updateStockItem(entry.stockItemId, { cut }, operationKey);
+      await api.updateStockItem(entry.stockItemId, merge ? { cut, mergeIfExists: true } : { cut }, operationKey);
       operationKeys.current.delete(mapKey);
       haptics.success();
       setQueue((current) => (current ?? []).filter((candidate) => candidate.variant.id !== entry.variant.id));
     } catch (exception) {
       if (!(exception instanceof ApiError) || 0 !== exception.status) operationKeys.current.delete(mapKey);
+      if (confirmCutMerge(exception, () => void save(entry, cut, true))) return;
       setErrors((current) => ({
         ...current,
         [entry.variant.id]: exception instanceof Error ? exception.message : 'Enregistrement impossible.',
@@ -114,7 +115,7 @@ export default function CutsScreen() {
             {saving === entry.variant.id ? (
               <Text style={text.small}>Enregistrement…</Text>
             ) : (
-              <CutPicker options={options} value={null} onChange={(cut) => void save(entry, cut)} />
+              <CutPicker options={options} value={null} onChange={(cut) => void save(entry, cut)} help={false} />
             )}
           </Card>
         );

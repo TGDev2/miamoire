@@ -4,7 +4,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ApiError, api, generateOperationKey } from '../../src/api/client';
-import type { Reference, StockItem, StockMovement } from '../../src/api/types';
+import type { ProductCutValue, Reference, StockItem, StockMovement } from '../../src/api/types';
+import { confirmCutMerge } from '../../src/components/CutPicker';
 import { useFeedback } from '../../src/components/Feedback';
 import * as haptics from '../../src/haptics';
 
@@ -143,6 +144,20 @@ export default function StockItemScreen() {
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * A cut that joins a food already in stock is refused until the user
+   * chooses to merge: the refusal is then not an error, but a question.
+   */
+  async function changeCut(cut: ProductCutValue | null, merge = false) {
+    await run(`cut-${cut ?? 'none'}${merge ? '-merge' : ''}`, async (operationKey) => {
+      try {
+        await api.updateStockItem(id, merge ? { cut, mergeIfExists: true } : { cut }, operationKey);
+      } catch (exception) {
+        if (!confirmCutMerge(exception, () => void changeCut(cut, true))) throw exception;
+      }
+    });
   }
 
   function parsedAmount(): number | null {
@@ -760,11 +775,7 @@ export default function StockItemScreen() {
                       key={option.value}
                       label={option.label}
                       selected={selected}
-                      onPress={() =>
-                        run(`cut-${option.value}`, (operationKey) =>
-                          api.updateStockItem(id, { cut: selected ? null : option.value }, operationKey),
-                        )
-                      }
+                      onPress={() => void changeCut(selected ? null : option.value)}
                     />
                   );
                 })}
@@ -1007,8 +1018,9 @@ function effectiveUseByText(item: StockItem): string {
   switch (item.effectiveUseByBasis) {
     case 'frozen':
       return [
-        null !== item.frozenAt ? `Congelé le ${formatDisplayDate(item.frozenAt.slice(0, 10))}` : 'Au congélateur',
-        `qualité optimale jusqu'au ${date}`,
+        // The location is already stated above: only a known freezing date adds something.
+        null !== item.frozenAt ? `Congelé le ${formatDisplayDate(item.frozenAt.slice(0, 10))}` : null,
+        `Qualité optimale jusqu'au ${date}`,
         printedDateInTheFreezer(item),
       ]
         .filter(Boolean)
