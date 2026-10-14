@@ -51,6 +51,7 @@ export default function TodayScreen() {
 
   const [urgent, setUrgent] = useState<LoadState<SaveTodayCandidate[]>>({ status: 'loading' });
   const [review, setReview] = useState<LoadState<number>>({ status: 'loading' });
+  const [cuts, setCuts] = useState<LoadState<number>>({ status: 'loading' });
   const [mealPlan, setMealPlan] = useState<LoadState<MealPlanOverview>>({ status: 'loading' });
   const [actionError, setActionError] = useState<string | null>(null);
   /**
@@ -81,6 +82,7 @@ export default function TodayScreen() {
     useCallback(() => {
       setUrgent({ status: 'loading' });
       setReview({ status: 'loading' });
+      setCuts({ status: 'loading' });
       setMealPlan({ status: 'loading' });
 
       void resyncExpiryAlerts();
@@ -94,6 +96,11 @@ export default function TodayScreen() {
         .reviewQueue(10)
         .then((response) => setReview({ status: 'ready', value: response.items.length }))
         .catch((exception) => setReview({ status: 'error', message: errorMessage(exception) }));
+
+      void api
+        .cutQueue()
+        .then((response) => setCuts({ status: 'ready', value: response.items.length }))
+        .catch((exception) => setCuts({ status: 'error', message: errorMessage(exception) }));
 
       void api
         .mealPlan()
@@ -147,12 +154,13 @@ export default function TodayScreen() {
       ? urgent.value.filter((candidate) => !settled.includes(candidate.stockItem.id))
       : [];
   const reviewCount = review.status === 'ready' ? review.value : 0;
+  const cutCount = cuts.status === 'ready' ? cuts.value : 0;
   const readyEntry =
     mealPlan.status === 'ready' ? mealPlan.value.entries.find((entry) => entry.plan?.status === 'ready') ?? null : null;
   const nextEntry = mealPlan.status === 'ready' ? mealPlan.value.entries[0] ?? null : null;
 
   const attentionLoading = urgent.status === 'loading' || review.status === 'loading' || mealPlan.status === 'loading';
-  const hasSomethingToShow = urgentItems.length > 0 || reviewCount > 0 || readyEntry !== null;
+  const hasSomethingToShow = urgentItems.length > 0 || reviewCount > 0 || cutCount > 0 || readyEntry !== null;
 
   /**
    * Ouvre Cuisiner avec les aliments à sauver déjà imposés, plutôt que de
@@ -231,8 +239,9 @@ export default function TodayScreen() {
 
           {mealPlan.status === 'error' ? <ErrorBanner message={mealPlan.message} /> : null}
           {review.status === 'error' ? <ErrorBanner message={review.message} /> : null}
+          {cuts.status === 'error' ? <ErrorBanner message={cuts.message} /> : null}
 
-          {readyEntry || reviewCount > 0 ? <SectionTitle>Déjà prêt</SectionTitle> : null}
+          {readyEntry || reviewCount > 0 || cutCount > 0 ? <SectionTitle>Déjà prêt</SectionTitle> : null}
 
           {readyEntry ? (
             <Card style={styles.compactCard}>
@@ -260,6 +269,25 @@ export default function TodayScreen() {
                 label="Vérifier mon stock"
                 variant="secondary"
                 onPress={() => router.push('/review')}
+                style={styles.spaced}
+              />
+            </Card>
+          ) : null}
+
+          {cutCount > 0 ? (
+            <Card style={styles.compactCard}>
+              <Text style={text.label}>Formes inconnues</Text>
+              <Text style={[text.heading, styles.compactTitle]}>
+                {cutCount} aliment{cutCount > 1 ? 's' : ''} sans forme
+              </Text>
+              <Text style={[text.small, styles.compactHint]}>
+                Entier, en escalopes, émincé : la cuisson en dépend. Un appui par aliment, retenu pour les
+                prochains achats.
+              </Text>
+              <Button
+                label="Préciser les formes"
+                variant="secondary"
+                onPress={() => router.push('/cuts')}
                 style={styles.spaced}
               />
             </Card>

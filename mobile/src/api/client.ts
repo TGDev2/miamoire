@@ -2,6 +2,7 @@ import { getApiBaseUrl } from './config';
 import type {
   ConfirmationResponse,
   ConsumptionLine,
+  CutQueueItem,
   DietaryExclusion,
   FoodNature,
   FoodProfile,
@@ -508,6 +509,12 @@ export const api = {
     request<{ items: ReviewCandidate[] }>(
       `/inventory/review-queue${limit !== undefined ? `?limit=${limit}` : ''}`,
     ),
+
+  /**
+   * The foods in stock whose cut is unknown although it would change a
+   * recipe. Correcting the cut of `stockItemId` answers for the whole food.
+   */
+  cutQueue: () => request<{ items: CutQueueItem[] }>('/inventory/cut-queue'),
 
   /**
    * Confirme, depuis « Vérifier mon stock », qu'un lot signalé est toujours

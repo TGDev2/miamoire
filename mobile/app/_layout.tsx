@@ -96,6 +96,7 @@ export default function RootLayout() {
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen name="add" options={{ title: 'Ajouter au stock' }} />
                 <Stack.Screen name="review" options={{ title: 'Vérifier mon stock' }} />
+                <Stack.Screen name="cuts" options={{ title: 'Préciser les formes' }} />
                 <Stack.Screen name="quick-consume" options={{ title: "J'ai utilisé quelque chose" }} />
                 <Stack.Screen name="meal-plan" options={{ title: 'Mon plan de repas' }} />
                 <Stack.Screen name="meal-plan-entry/[id]" options={{ title: 'Repas planifié' }} />

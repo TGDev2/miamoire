@@ -62,12 +62,17 @@ export interface ShoppingSessionLine {
   storageLocation: StorageLocation;
   traits: ProductTraitValue[];
   /**
-   * La forme de l'aliment, reprise de la variante du foyer quand elle existe.
-   *
-   * Voyage sans interface dédiée, comme les traits : ce que le foyer a déjà
-   * corrigé une fois ne doit pas être reperdu au retour de courses suivant.
+   * La forme de l'aliment, reprise de la variante du foyer quand elle existe,
+   * sinon suggérée par le serveur (libellé, habitude du foyer, produit frais)
+   * et modifiable sur l'écran de validation.
    */
   cut: ProductCutValue | null;
+  /**
+   * The cut was chosen — by hand, or by a past purchase of this very product:
+   * a later suggestion must not overwrite it. Optional so that a basket saved
+   * before this field existed still loads.
+   */
+  cutTouched?: boolean;
   /** Aucune habitude d'achat connue pour ce produit : à confirmer. */
   isNew: boolean;
   /** Code-barres inconnu du catalogue partagé : le nom reste à saisir. */
@@ -215,6 +220,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             storageLocation: householdVariant.usualStorageLocation ?? 'pantry',
             traits: householdVariant.traits,
             cut: householdVariant.cut,
+            cutTouched: null !== householdVariant.cut,
             isNew: false,
             isUnknown: false,
             usualPackageSize: householdVariant.usualPackageSize,

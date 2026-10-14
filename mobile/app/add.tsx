@@ -192,13 +192,15 @@ export default function AddScreen() {
         if (cancelled) return;
 
         setProfile(found);
-        // « Escalopes de poulet » nomme déjà sa forme : la puce arrive cochée.
-        // Un choix fait à la main tient, sauf s'il n'a plus de sens pour
-        // l'aliment qu'on est en train de saisir.
+        // « Escalopes de poulet » nomme déjà sa forme, et ce foyer a peut-être
+        // déjà dit la sienne : la puce suggérée arrive cochée — c'est celle que
+        // le serveur enregistrerait. Un choix fait à la main tient, sauf s'il
+        // n'a plus de sens pour l'aliment qu'on est en train de saisir.
+        const suggested = found.suggestedCut ?? found.detectedCut;
         setCut((current) => {
-          if (!cutTouched) return found.detectedCut;
+          if (!cutTouched) return suggested;
 
-          return null !== current && found.plausibleCuts.includes(current) ? current : found.detectedCut;
+          return null !== current && found.plausibleCuts.includes(current) ? current : suggested;
         });
       } catch {
         // Un profil indisponible ne bloque pas une saisie : on retombe sur le

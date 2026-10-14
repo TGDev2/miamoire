@@ -1,10 +1,11 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../src/api/client';
-import type { Reference } from '../src/api/types';
+import type { FoodProfile, Reference } from '../src/api/types';
+import { CutPicker } from '../src/components/CutPicker';
 import { Badge, Button, Card, Chip, EmptyState, ErrorBanner, Field, Loader } from '../src/components/ui';
 import type { ShoppingSessionBatch, ShoppingSessionLine } from '../src/shopping/ShoppingSessionContext';
 import { useShoppingSession } from '../src/shopping/ShoppingSessionContext';
@@ -91,7 +92,8 @@ export default function ShoppingReviewScreen() {
             unit: line.unit,
             storageLocation: line.storageLocation,
             traits: line.traits.length > 0 ? line.traits : undefined,
-            // Omise, la découpe est déduite du libellé par le serveur.
+            // Shown on the line before it is sent: what the user saw is what is
+            // saved. Omitted, the server suggests one the same way.
             cut: line.cut ?? undefined,
             expirationDate: line.estimateExpiration || !line.expirationDate ? undefined : line.expirationDate,
             estimateExpiration: line.estimateExpiration || undefined,
@@ -219,6 +221,10 @@ function ShoppingLineCard({
     Math.abs(perPackage - line.usualPackageSize) > 0.001;
 
   const batches = line.batches;
+  const profile = useCutProfile(line, onChange);
+  const cutOptions = (reference?.productCuts ?? []).filter((option) =>
+    (profile?.plausibleCuts ?? []).includes(option.value),
+  );
 
   function startBatches() {
     onChange({
@@ -287,6 +293,17 @@ function ShoppingLineCard({
         onChangeText={(value) => onChange({ name: value })}
         placeholder="Tomates, riz, reste de gratin…"
       />
+
+      {/* Right under the name: the cut is part of what the food is, and the
+          product is in hand right now — the one moment it costs a single tap. */}
+      <View style={cutOptions.length > 0 ? styles.cut : null}>
+        <CutPicker
+          options={cutOptions}
+          value={line.cut}
+          onChange={(cut) => onChange({ cut, cutTouched: true })}
+          collapsible
+        />
+      </View>
 
       <View style={styles.pair}>
         <Field
@@ -459,6 +476,66 @@ function ShoppingLineCard({
   );
 }
 
+/**
+ * What the server knows of the line's food: which cuts it can take, and the
+ * one it would save. The suggestion fills the line only while nobody chose a
+ * cut; a choice is kept unless the food, renamed, can no longer take it.
+ *
+ * The line is read through a ref when the answer arrives, not from the render
+ * that sent the request: a chip tapped meanwhile must win (lesson 9).
+ */
+function useCutProfile(
+  line: ShoppingSessionLine,
+  onChange: (patch: Partial<ShoppingSessionLine>) => void,
+): FoodProfile | null {
+  const [profile, setProfile] = useState<FoodProfile | null>(null);
+  const lineRef = useRef(line);
+  lineRef.current = line;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const name = line.name.trim();
+  const traitsKey = line.traits.join(',');
+
+  useEffect(() => {
+    if ('' === name) {
+      setProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const found = await api.foodProfile({
+          name,
+          traits: lineRef.current.traits,
+          scanned: null !== lineRef.current.barcode,
+        });
+        if (cancelled) return;
+
+        setProfile(found);
+
+        const current = lineRef.current;
+        if (!current.cutTouched) {
+          if (current.cut !== found.suggestedCut) onChangeRef.current({ cut: found.suggestedCut });
+        } else if (null !== current.cut && !found.plausibleCuts.includes(current.cut)) {
+          onChangeRef.current({ cut: found.suggestedCut, cutTouched: false });
+        }
+      } catch {
+        // Without a profile the line still validates: the server suggests a cut itself.
+        if (!cancelled) setProfile(null);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [name, traitsKey]);
+
+  return profile;
+}
+
 function addDays(days: number): Date {
   const date = new Date();
   date.setDate(date.getDate() + days);
@@ -497,6 +574,7 @@ const styles = StyleSheet.create({
   pairInput: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   hint: { ...text.small, color: thermal.soon.line, marginTop: -spacing.sm, marginBottom: spacing.md },
+  cut: { marginBottom: spacing.md },
   batchRow: {
     borderTopWidth: 1,
     borderTopColor: colors.border,
