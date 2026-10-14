@@ -266,6 +266,10 @@ class StockItemRepository extends ServiceEntityRepository
      * trois lots sans date — c'est le paquet déjà ouvert (ou refermé) qui part,
      * et lui seul.
      *
+     * Frozen lots come last, ordered among themselves by their quality date: a
+     * frozen lot does not expire, it waits. Ordered by date alone, a lot past
+     * its freezer quality date went before a fridge lot due in two days.
+     *
      * @param list<StockItem> $items
      *
      * @return list<StockItem>
@@ -273,15 +277,23 @@ class StockItemRepository extends ServiceEntityRepository
     private function sortForFefo(array $items): array
     {
         $usable = array_map(
-            fn (StockItem $item): array => [$item, $this->effectiveUseBy->compute($item)->date],
+            function (StockItem $item): array {
+                $effective = $this->effectiveUseBy->compute($item);
+
+                return [$item, $effective->date, $effective->isFrozen()];
+            },
             $items,
         );
 
         usort($usable, static function (array $a, array $b): int {
-            /** @var array{0: StockItem, 1: ?\DateTimeImmutable} $a */
-            /** @var array{0: StockItem, 1: ?\DateTimeImmutable} $b */
-            [$itemA, $dateA] = $a;
-            [$itemB, $dateB] = $b;
+            /** @var array{0: StockItem, 1: ?\DateTimeImmutable, 2: bool} $a */
+            /** @var array{0: StockItem, 1: ?\DateTimeImmutable, 2: bool} $b */
+            [$itemA, $dateA, $frozenA] = $a;
+            [$itemB, $dateB, $frozenB] = $b;
+
+            if ($frozenA !== $frozenB) {
+                return $frozenA ? 1 : -1;
+            }
 
             if ((null === $dateA) !== (null === $dateB)) {
                 return null === $dateA ? 1 : -1;
