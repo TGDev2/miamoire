@@ -114,6 +114,38 @@ class RecipeSafetyFilterTest extends TestCase
         self::assertStringContainsString('déduction de stock', $result['rejected'][0]['reason']);
     }
 
+    /**
+     * An ingredient named by its key is the household's food, whatever the
+     * recipe calls it. A hand-edited or imported recipe can say "Pâte à
+     * tartiner" for the peanut butter of the stock.
+     */
+    public function testAnIngredientIsJudgedOnTheRealInventoryLabelOfItsKey(): void
+    {
+        $recipe = $this->recipe([
+            'ingredientsFromInventory' => [['key' => 'beurre-de-cacahuete', 'label' => 'Pâte à tartiner']],
+        ]);
+
+        $result = $this->filter->apply(
+            [$recipe],
+            $this->guard('arachide'),
+            ['beurre-de-cacahuete' => 'Beurre de cacahuète'],
+        );
+
+        self::assertSame([], $result['recipes']);
+        self::assertStringContainsString('les ingrédients', $result['rejected'][0]['reason']);
+    }
+
+    public function testAnIngredientsRealLabelStillHonoursTheCounterExamples(): void
+    {
+        $recipe = $this->recipe([
+            'ingredientsFromInventory' => [['key' => 'lait-de-coco', 'label' => 'Coco']],
+        ]);
+
+        $result = $this->filter->apply([$recipe], $this->guard('lait'), ['lait-de-coco' => 'Lait de coco']);
+
+        self::assertCount(1, $result['recipes']);
+    }
+
     public function testOnlyTheOffendingRecipeIsRemoved(): void
     {
         $result = $this->filter->apply(

@@ -69,11 +69,11 @@ class RecipeSafetyFilter
         return [
             'le titre' => is_string($recipe['recipeName'] ?? null) ? $recipe['recipeName'] : '',
             'le résumé' => is_string($recipe['summary'] ?? null) ? $recipe['summary'] : '',
-            'les ingrédients' => $this->labels($recipe['ingredientsFromInventory'] ?? null),
+            'les ingrédients' => $this->keyedLabels($recipe['ingredientsFromInventory'] ?? null, $inventoryLabels),
             'les ingrédients à acheter' => $this->labels($recipe['missingIngredients'] ?? null),
             'les adaptations' => $this->substitutions($recipe['substitutions'] ?? null),
             'l\'étape' => $this->steps($recipe['steps'] ?? null),
-            'la déduction de stock' => $this->proposal($recipe['stockConsumptionProposal'] ?? null, $inventoryLabels),
+            'la déduction de stock' => $this->keyedLabels($recipe['stockConsumptionProposal'] ?? null, $inventoryLabels),
         ];
     }
 
@@ -126,15 +126,16 @@ class RecipeSafetyFilter
     }
 
     /**
-     * La proposition de consommation se juge sur le libellé réel de l'inventaire,
-     * pas sur celui que le modèle a recopié : c'est ce libellé-là qui décrit
-     * l'aliment qui serait retiré du stock.
+     * A line that carries a key is judged on the inventory's real label too, not
+     * only on the one the recipe wrote: the key is what designates the food that
+     * is used and deducted. An imported recipe can call the stock's peanut
+     * butter "Pâte à tartiner".
      *
      * @param array<string, string> $inventoryLabels
      *
      * @return list<string>
      */
-    private function proposal(mixed $entries, array $inventoryLabels): array
+    private function keyedLabels(mixed $entries, array $inventoryLabels): array
     {
         if (!is_array($entries)) {
             return [];
