@@ -361,6 +361,34 @@ les membres du foyer. Les lignes de déduction inexploitables — sans clé, san
 connue, sans quantité — sont retirées à l'enregistrement plutôt que découvertes six
 mois plus tard, au moment où l'utilisateur appuie sur « retirer du stock ».
 
+### Bringing a recipe back from another assistant
+
+The export (`/recipes/prompt`) and the "Modifier avec un autre assistant" button
+on any recipe (`/recipes/modification-prompt`) ask the other assistant to end
+each recipe with an **import block**: one JSON object in exactly the shape
+`RecipeNormalizer` keeps (`RecipeImportFormat`), with the stock's keys copied
+from the data. The user pastes the answer — whole, or one recipe — into
+"Importer une recette"; `/recipes/import` reads it and writes nothing.
+
+- **Finding the blocks** (`RecipeBlockExtractor`): balanced JSON anywhere in the
+  text, fenced or not. A stray brace in the prose cannot hide the blocks after
+  it, the prompt's own example and data are never read as recipes, and a cut or
+  malformed block is reported by name — never repaired.
+- **Tying lines to the stock** (`ImportedLineResolver`): a known key is kept; a
+  missing key is found only by the exact culinary label of one food in stock
+  ("Tomates" never falls back on canned tomatoes). A deduction line that cannot
+  be tied, or whose unit is not the food's family, is **dropped and said** —
+  kept, it would make "Retirer du stock" fail for the whole recipe.
+- **What is checked again**, and only this, as the prompts state: the
+  household's exclusions (a recipe breaking one is refused, judged on the real
+  label of every food it names by key) and what the stock can supply. The
+  required food, composition, time and equipment are left to the assistant.
+
+Keeping the chosen recipe goes through `POST /recipes/saved`, like any
+proposal: it is then visible to the whole household, planned again on each
+opening, and cooked through the usual confirmation. A modified version is a new
+recipe; the original stays.
+
 ## Les exclusions alimentaires sont vérifiées, pas demandées
 
 Écrire « ne propose aucune recette avec des arachides » dans la consigne du modèle
@@ -959,7 +987,9 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `GET` | `/inventory/summary` | Inventaire agrégé par ingrédient |
 | `GET` | `/inventory/cut-queue` | In-stock meat and fish whose cut is unknown |
 | `POST` | `/recipes/suggest` | 3 propositions (aucune écriture) ; `priorities` impose jusqu'à 3 aliments et, facultativement, la quantité à écouler de chacun |
-| `POST` | `/recipes/prompt` | Même corps que `/recipes/suggest` : la consigne et l'inventaire en un texte à coller dans un autre assistant, réponse lisible attendue. Aucun modèle sollicité, aucune écriture |
+| `POST` | `/recipes/prompt` | Même corps que `/recipes/suggest` : la consigne et l'inventaire en un texte à coller dans un autre assistant ; chaque recette de la réponse se termine par un bloc d'import. Aucun modèle sollicité, aucune écriture |
+| `POST` | `/recipes/modification-prompt` | `{savedRecipeId}` ou `{recipe}` : une recette et l'inventaire, à faire modifier par un autre assistant. Aucune écriture |
+| `POST` | `/recipes/import` | `{text}` : lit les recettes collées depuis un autre assistant, les rattache au stock, refuse celles qui enfreignent une exclusion. Aucune écriture : on garde la sienne avec `POST /recipes/saved` |
 | `POST` | `/recipes/confirm` | Applique la déduction après confirmation |
 | `GET` `POST` | `/recipes/saved` | Recettes conservées par le foyer ; enregistrement idempotent |
 | `GET` `DELETE` | `/recipes/saved/{id}` | Une recette enregistrée, et son retrait |
