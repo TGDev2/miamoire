@@ -14,6 +14,7 @@ use App\Http\JsonPayload;
 use App\Http\RequestContext;
 use App\Repository\MealPlanEntryRepository;
 use App\Repository\SavedRecipeRepository;
+use App\Service\Ai\Import\RecipeImportService;
 use App\Service\Ai\PriorityChoice;
 use App\Service\Ai\RecipeConfirmationService;
 use App\Service\Ai\RecipeNormalizer;
@@ -33,6 +34,9 @@ use Symfony\Component\Routing\Attribute\Route;
 #[Route('/api/recipes')]
 class RecipeController extends AbstractApiController
 {
+    /** A whole conversation fits; a pasted book does not. */
+    private const MAX_IMPORTED_TEXT = 100_000;
+
     /** Génère des propositions. Aucune écriture en stock à cette étape. */
     #[Route('/suggest', methods: ['POST'])]
     public function suggest(
@@ -69,6 +73,39 @@ class RecipeController extends AbstractApiController
 
         return $this->json([
             'prompt' => $service->manualPrompt($household, $this->recipeRequest(JsonPayload::fromRequest($request), $household)),
+        ]);
+    }
+
+    /**
+     * Reads the recipes pasted back from another assistant. Writes nothing:
+     * the user keeps the one they chose through `POST /saved`, like any other
+     * recipe.
+     */
+    #[Route('/import', methods: ['POST'])]
+    public function import(
+        Request $request,
+        RequestContext $context,
+        RecipeImportService $service,
+        ApiPresenter $presenter,
+    ): JsonResponse {
+        $household = $context->household();
+        $text = JsonPayload::fromRequest($request)->requiredString('text');
+
+        if (mb_strlen($text) > self::MAX_IMPORTED_TEXT) {
+            throw new BadRequestHttpException('Ce texte est trop long pour être importé : copiez seulement la ou les recettes choisies.');
+        }
+
+        $result = $service->read($household, $text);
+
+        return $this->json([
+            'recipes' => array_map(
+                static fn (array $imported): array => [
+                    'recipe' => [...$imported['recipe'], 'plan' => $presenter->recipePlan($imported['plan'])],
+                    'notices' => $imported['notices'],
+                ],
+                $result['recipes'],
+            ),
+            'rejected' => $result['rejected'],
         ]);
     }
 
