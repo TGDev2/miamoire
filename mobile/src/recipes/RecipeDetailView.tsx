@@ -6,6 +6,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -69,6 +70,7 @@ export function RecipeDetailView({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sendingOut, setSendingOut] = useState(false);
   // Session seulement : un double ajout est sans risque (le serveur
   // dédoublonne par variante), donc rien n'oblige à retenir cet état au-delà
   // de cet écran.
@@ -331,6 +333,27 @@ export function RecipeDetailView({
     }
   }
 
+  /**
+   * Sends this recipe, with the stock, to another assistant to be changed.
+   * The changed version comes back as a new recipe through "Importer une
+   * recette"; this one stays as it is. Closing the share sheet is not an error.
+   */
+  async function sendOutForChanges() {
+    haptics.tap();
+    setError(null);
+    setSendingOut(true);
+    try {
+      const { prompt } = await api.modificationPrompt(
+        savedId !== null ? { savedRecipeId: savedId } : { recipe },
+      );
+      await Share.share({ message: prompt });
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : "L'envoi a échoué. Réessayez.");
+    } finally {
+      setSendingOut(false);
+    }
+  }
+
   async function toggleSaved() {
     setError(null);
     setSaving(true);
@@ -437,7 +460,7 @@ export function RecipeDetailView({
       <Text style={styles.help}>
         {savedId === null
           ? 'Conservée sur le serveur, elle reste accessible à tout le foyer, même après avoir quitté cet écran.'
-          : 'Enregistrée : vous la retrouverez dans « Mes recettes » depuis l\'onglet Cuisiner.'}
+          : 'Enregistrée et visible par tout le foyer : chacun la retrouve dans « Mes recettes », depuis l\'onglet Cuisiner.'}
       </Text>
 
       {undefined === mealPlanEntryId ? (
@@ -474,6 +497,21 @@ export function RecipeDetailView({
           ) : null}
         </>
       ) : null}
+
+      <Button
+        label="Modifier avec un autre assistant"
+        variant="secondary"
+        icon="share-variant-outline"
+        onPress={sendOutForChanges}
+        loading={sendingOut}
+        disabled={sendingOut}
+        hint="Partage cette recette et votre stock, à coller dans un autre assistant"
+        style={styles.save}
+      />
+      <Text style={styles.help}>
+        Rapportez la version modifiée avec « Importer une recette », dans l'onglet Cuisiner :
+        elle s'ajoute à vos recettes, celle-ci reste telle quelle.
+      </Text>
 
       <SectionTitle>Depuis votre stock</SectionTitle>
       {recipe.ingredientsFromInventory.map((ingredient, position) => {
@@ -586,7 +624,9 @@ export function RecipeDetailView({
         </Text>
       ) : null}
       {recipe.stockConsumptionProposal.length === 0 ? (
-        <Text style={styles.help}>Cette recette ne consomme rien de votre inventaire.</Text>
+        // Not "consumes nothing": an imported recipe may use stock foods whose
+        // deduction could not be tied to a lot, and was dropped on import.
+        <Text style={styles.help}>Rien à retirer automatiquement de votre stock pour cette recette.</Text>
       ) : (
         <Card>
           <Text style={styles.help}>
