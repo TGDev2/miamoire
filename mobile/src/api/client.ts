@@ -19,6 +19,7 @@ import type {
   ProductVariant,
   QuickConsumeCandidate,
   Recipe,
+  RecipeImportResponse,
   RecipePlan,
   RecipeRequestBody,
   Reference,
@@ -604,6 +605,20 @@ export const api = {
    */
   recipePrompt: (body: RecipeRequestBody) =>
     request<{ prompt: string }>('/recipes/prompt', { method: 'POST', body }),
+
+  /**
+   * One recipe written out for another assistant to change. The changed
+   * version comes back through `importRecipes`.
+   */
+  modificationPrompt: (source: { savedRecipeId: string } | { recipe: Recipe }) =>
+    request<{ prompt: string }>('/recipes/modification-prompt', { method: 'POST', body: source }),
+
+  /**
+   * Reads the recipes in an answer pasted from another assistant. Writes
+   * nothing: the chosen one is kept with `saveRecipe`, like any other.
+   */
+  importRecipes: (text: string) =>
+    request<RecipeImportResponse>('/recipes/import', { method: 'POST', body: { text } }),
 
   savedRecipes: () => request<{ recipes: SavedRecipe[] }>('/recipes/saved'),
 

@@ -408,6 +408,7 @@ export function Field({
   hint,
   hideLabel = false,
   containerStyle,
+  style,
   ...inputProps
 }: TextInputProps & {
   label: string;
@@ -424,7 +425,9 @@ export function Field({
         placeholderTextColor={colors.inkMuted}
         accessibilityLabel={label}
         accessibilityHint={hint}
-        style={styles.input}
+        // Composed, not replaced: a caller's style used to wipe the base input
+        // style out, since it was spread after it.
+        style={[styles.input, inputProps.multiline && styles.inputMultiline, style]}
         {...inputProps}
       />
       {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
@@ -793,6 +796,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.ink,
   },
+  /** A pasted text, read from its first line: taller, and scrolled inside rather than pushing the screen. */
+  inputMultiline: { minHeight: 160, maxHeight: 280, textAlignVertical: 'top' },
   inputRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
   stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },

@@ -109,6 +109,7 @@ export default function RootLayout() {
                 <Stack.Screen name="recipe/[index]" options={{ title: 'Recette' }} />
                 <Stack.Screen name="saved/index" options={{ title: 'Mes recettes' }} />
                 <Stack.Screen name="saved/[id]" options={{ title: 'Recette enregistrée' }} />
+                <Stack.Screen name="recipe-import" options={{ title: 'Importer une recette' }} />
               </Stack>
             </ShoppingSessionProvider>
           </RecipeProvider>

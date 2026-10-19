@@ -4,7 +4,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import { api } from '../../src/api/client';
 import type { SavedRecipe } from '../../src/api/types';
-import { Badge, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
+import { Badge, Button, EmptyState, ErrorBanner, Loader } from '../../src/components/ui';
 import { colors, feasibilityPresentation, font, radius, spacing, text, thermal } from '../../src/theme';
 
 /**
@@ -70,7 +70,15 @@ export default function SavedRecipesScreen() {
         <EmptyState
           icon="content-save-outline"
           title="Aucune recette enregistrée"
-          description="Ouvrez une proposition depuis l'onglet Cuisiner et touchez « Enregistrer cette recette » pour la conserver ici."
+          description="Ouvrez une proposition depuis l'onglet Cuisiner et touchez « Enregistrer cette recette », ou importez une recette écrite par un autre assistant."
+          action={
+            <Button
+              label="Importer une recette"
+              variant="secondary"
+              icon="tray-arrow-down"
+              onPress={() => router.push('/recipe-import')}
+            />
+          }
         />
       </View>
     );
@@ -117,6 +125,14 @@ export default function SavedRecipesScreen() {
         );
       })}
 
+      <Button
+        label="Importer une recette"
+        variant="secondary"
+        icon="tray-arrow-down"
+        onPress={() => router.push('/recipe-import')}
+        hint="Rapporte une recette écrite par un autre assistant"
+      />
+
       <Text style={styles.footer}>
         Une recette enregistrée garde ses quantités d'origine. Les ajuster au moment de
         déduire le stock ne les modifie pas ici.
@@ -155,5 +171,5 @@ const styles = StyleSheet.create({
     fontFamily: font.sansMedium,
     marginTop: spacing.md,
   },
-  footer: { ...text.small, marginTop: spacing.sm },
+  footer: { ...text.small, marginTop: spacing.lg },
 });

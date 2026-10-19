@@ -504,10 +504,18 @@ export default function CookScreen() {
         hint="Partage la demande et votre inventaire, à coller dans un autre assistant"
         style={styles.export}
       />
+      <Button
+        label="Importer une recette"
+        variant="secondary"
+        icon="tray-arrow-down"
+        onPress={() => router.push('/recipe-import')}
+        hint="Rapporte une recette écrite par l'autre assistant"
+        style={styles.stateAction}
+      />
       <Text style={[text.small, styles.disclaimer]}>
-        L'export contient votre inventaire, vos notes et vos exclusions. Les aliments exclus en
-        sont retirés, mais la réponse de l'autre assistant n'est pas revérifiée, et le stock se
-        déduit à la main.
+        L'export contient votre inventaire, vos notes et vos exclusions ; les aliments exclus en
+        sont retirés. Une recette importée est revérifiée — exclusions et stock — puis se garde
+        et se cuisine comme les autres.
       </Text>
     </ScrollView>
   );

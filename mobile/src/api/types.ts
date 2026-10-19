@@ -621,6 +621,24 @@ export interface SuggestionResponse {
 }
 
 /**
+ * A recipe read from another assistant's answer, before the user keeps it.
+ *
+ * `notices` names what will not be deducted from the stock and why: a line
+ * the server could not tie to a food of the household, or whose unit cannot
+ * apply to it. They are said before saving, never discovered at cooking time.
+ */
+export interface ImportedRecipe {
+  recipe: Recipe;
+  notices: string[];
+}
+
+export interface RecipeImportResponse {
+  recipes: ImportedRecipe[];
+  /** Refused (an excluded food) or unreadable (a cut block), with the reason. */
+  rejected: RejectedRecipe[];
+}
+
+/**
  * Une recette que le foyer a décidé de garder.
  *
  * Elle vit sur le serveur et non dans la mémoire de l'application : quitter
