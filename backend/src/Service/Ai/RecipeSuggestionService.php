@@ -12,6 +12,7 @@ use App\Enum\ProductTrait;
 use App\Enum\Season;
 use App\Exception\StockException;
 use App\Service\Ai\Generator\RecipeGeneratorFactory;
+use App\Service\Ai\Import\RecipeImportFormat;
 use App\Service\Ai\Safety\DietaryGuardFactory;
 use App\Service\Ai\Safety\RecipeSafetyFilter;
 use App\Service\Inventory\InventoryAggregator;
@@ -156,35 +157,40 @@ class RecipeSuggestionService
      * La même demande, rédigée pour être confiée à la main à un autre assistant.
      *
      * Elle sert quand le générateur ne répond pas — quota, panne, aucune clé —
-     * et n'en sollicite donc aucun. Consigne et données sont celles que
-     * `suggest()` enverrait, à deux différences près, dites au modèle avant tout
-     * le reste :
+     * ou quand l'utilisateur préfère un autre assistant, et n'en sollicite donc
+     * aucun. Consigne et données sont celles que `suggest()` enverrait, à deux
+     * différences près, dites au modèle avant tout le reste :
      *
-     * - aucun programme ne relira sa réponse : les contrôles que la consigne
-     *   annonce, c'est à lui de les faire. Le lui laisser croire serait lui
-     *   apprendre qu'une contrainte non tenue passera (leçon 41) ;
-     * - un humain lit la réponse : du texte, pas du JSON. Le format vient en
-     *   dernier, après les données, pour être la dernière chose lue.
+     * - the checks the instruction announces do not run on its answer. An
+     *   import only re-checks the household's exclusions and what the stock can
+     *   supply; everything else is its job. Letting it believe a program will
+     *   catch the rest would teach it that a broken constraint passes (lesson 41);
+     * - a human reads the answer, then brings the chosen recipe back: readable
+     *   text, each recipe followed by its import block (`RecipeImportFormat`).
+     *   The format comes last, after the data, to be the last thing read.
      *
-     * Rien n'est écrit : une recette que l'application ne verra jamais n'a pas à
-     * nourrir l'historique anti-répétition.
+     * Nothing is written: the anti-repetition history only records what the
+     * app's own generator showed.
      */
     public function manualPrompt(Household $household, RecipeRequest $request): string
     {
         ['payload' => $payload, 'systemPrompt' => $systemPrompt] = $this->prepare($household, $request);
         $data = json_encode(self::markExpired($payload), \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
+        $importScope = self::importScope();
+        $importBlock = RecipeImportFormat::instructions();
 
         return <<<PROMPT
             L'assistant culinaire de mon application de gestion de stock alimentaire ne répond
             pas. Je te transmets sa consigne et mes données pour que tu le remplaces.
 
             Trois consignes qui priment sur tout ce qui suit :
-            - Aucun programme ne relira ta réponse, contrairement à ce qu'annonce la consigne.
-              Les contrôles qu'elle décrit — exclusions alimentaires, aliment imposé et sa
-              quantité, composition demandée — c'est toi qui les fais, sur chaque recette,
-              avant de répondre. Plutôt qu'une recette qui en enfreint un, dis-moi ce qui manque.
-            - Je lirai ta réponse moi-même : du texte, pas de JSON. La section « FORMAT DE
-              RÉPONSE », à la fin, dit comment la présenter.
+            - Les contrôles que la consigne annonce (« un programme relit… ») n'auront pas lieu
+              sur ta réponse : aliment imposé et sa quantité, composition demandée, temps,
+              équipements, c'est toi qui les vérifies, sur chaque recette, avant de répondre.
+              Plutôt qu'une recette qui en enfreint un, dis-moi ce qui manque. {$importScope}
+            - Je lirai ta réponse moi-même, puis je rapporterai dans l'application la recette
+              que j'aurai choisie : chaque recette en texte lisible, suivie de son bloc
+              d'import. La section « FORMAT DE RÉPONSE », à la fin, dit comment.
             - Tous les aliments de l'inventaire comptent, y compris ceux dont une part de
               `deadlines` porte `expired` à true : sa date `useBy` est passée. Seules ces
               parts-là sont périmées, ne compare pas les dates toi-même. Ils sont encore chez moi,
@@ -209,9 +215,9 @@ class RecipeSuggestionService
 
             ===== FORMAT DE RÉPONSE =====
 
-            Ignore toute demande de JSON. Rédige les trois recettes en français, en texte
-            lisible (Markdown accepté), l'une après l'autre. Les noms de champs cités dans la
-            consigne désignent ces rubriques :
+            Rédige les trois recettes en français, l'une après l'autre : chacune en texte
+            lisible (Markdown accepté), suivie de son bloc d'import. Hors des blocs d'import,
+            aucun JSON. Les noms de champs cités dans la consigne désignent ces rubriques :
 
             - Titre (`recipeName`), puis le résumé (`summary`) en une ou deux phrases.
             - Faisabilité (`feasibility`) : « réalisable maintenant », « adaptée » ou
@@ -227,8 +233,12 @@ class RecipeSuggestionService
             - Ustensiles (`utensils`).
             - Étapes (`steps`), numérotées.
             - À retirer du stock (`stockConsumptionProposal`) : chaque aliment de mon stock
-              réellement consommé, nommé par son libellé `ingredient` — pas par sa clé — avec la
-              quantité dans l'unité de l'inventaire. Je le déduirai moi-même.
+              réellement consommé, nommé par son libellé `ingredient`, avec la quantité dans
+              l'unité de l'inventaire.
+
+            BLOC D'IMPORT
+
+            {$importBlock}
 
             Après les trois recettes, termine par « Aliments à date dépassée non utilisés » :
             chaque aliment dont une part porte `expired` à true — ceux-là seulement — et
@@ -236,6 +246,87 @@ class RecipeSuggestionService
             l'écouler. Écris
             « aucun » s'ils sont tous employés.
             PROMPT;
+    }
+
+    /**
+     * One recipe, sent to another assistant to be changed.
+     *
+     * The changed version comes back through the same import as a generated
+     * one, so it gets the same block, the same stock data — keys to copy,
+     * quantities not to exceed — and the same honest scope of what an import
+     * checks again. The current recipe travels inside the data, not as a block
+     * of its own: pasted back together with the answer, it must not import as a
+     * second recipe.
+     *
+     * An empty stock does not stop it: changing a recipe can be the very way to
+     * cook without what is missing. Nothing is written.
+     *
+     * @param array<string, mixed> $recipe a normalized recipe
+     */
+    public function modificationPrompt(Household $household, array $recipe): string
+    {
+        $guard = $this->guards->for($household);
+        $inventory = $this->aggregator->aggregate($household, guard: $guard);
+
+        $data = json_encode(self::markExpired([
+            ...$this->seasons->for(new \DateTimeImmutable('today'))->toAiPayload(),
+            'dietaryExclusions' => $guard->exclusions(),
+            'currentRecipe' => $recipe,
+            'inventory' => array_map(static fn (InventoryLine $line) => $line->toAiPayload(), $inventory),
+        ]), \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
+        $importScope = self::importScope();
+        $consumptionRules = self::consumptionRules();
+        $importBlock = RecipeImportFormat::instructions();
+
+        return <<<PROMPT
+            Voici une recette de mon application de gestion de stock alimentaire
+            (`currentRecipe` dans les données) et l'état de mon stock. Je vais te demander de
+            la modifier : ma demande est à la toute fin.
+
+            Trois consignes qui priment sur tout ce qui suit :
+            - {$importScope} Le reste — temps, équipements, portions, goût — c'est toi qui le
+              vérifies.
+            - N'emploie jamais un aliment exclu (`dietaryExclusions`), même en petite quantité,
+              même dans une sauce ou une garniture.
+            - Mon stock, ce sont les lignes de `inventory`, chacune sous sa clé `key`. Une part
+              de `deadlines` qui porte `expired` à true a dépassé sa date : emploie-la en
+              priorité et signale-la (« date dépassée le … »). Une part `frozen` est au
+              congélateur : sa date n'est qu'une date de qualité, et l'aliment doit décongeler
+              ou se cuire surgelé. Un aliment absent de `inventory` va dans
+              `missingIngredients`.
+
+            {$consumptionRules}
+
+            ===== DONNÉES =====
+
+            {$data}
+
+            ===== FORMAT DE RÉPONSE =====
+
+            Réponds par la recette modifiée, en français : en texte lisible (Markdown accepté)
+            — titre, résumé, ingrédients de mon stock, à acheter, ustensiles, étapes
+            numérotées, à retirer du stock — suivie de son bloc d'import. Hors du bloc
+            d'import, aucun JSON. Si ma demande ci-dessous est vide, demande-moi ce que je
+            veux changer, sans réécrire la recette.
+
+            BLOC D'IMPORT
+
+            {$importBlock}
+
+            MA DEMANDE DE MODIFICATION :
+            PROMPT;
+    }
+
+    /**
+     * What an import checks again — and only that, said in the same words to
+     * every prompt that leaves the app (lesson 41). See `RecipeImportService`.
+     */
+    private static function importScope(): string
+    {
+        return 'Si je rapporte une recette dans l\'application, elle n\'en relira que le bloc '
+            .'d\'import et n\'y refera que deux contrôles : les exclusions alimentaires du foyer — une '
+            .'recette qui en enfreint une sera refusée — et ce que mon stock permet de retirer (clés, '
+            .'unités, quantités). Rien d\'autre n\'y sera vérifié.';
     }
 
     /**
@@ -614,7 +705,7 @@ class RecipeSuggestionService
         array $equipment,
         array $foodGroups,
     ): string {
-        $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
+        $consumptionRules = self::consumptionRules();
         $traits = $this->traitGlossary();
         $cuts = $this->cutGlossary();
         $today = $season->todayLabel();
@@ -853,6 +944,22 @@ class RecipeSuggestionService
                 sont JAMAIS des protéines, même si elles en contiennent un peu. N'y mets
                 que ce qui est vraiment dans l'assiette, une liste vide si rien ne s'y prête.
             {$gear}{$imposed}{$wished}{$composition}{$safety}{$recentAvoidance}
+            {$consumptionRules}
+
+            Rédige des étapes concises mais concrètes (voir règle 14).
+            PROMPT;
+    }
+
+    /**
+     * How a recipe asks to deduct from the stock. Shared by the generation and
+     * by the modification of one recipe: both answers end up confirmed through
+     * the same deduction.
+     */
+    private static function consumptionRules(): string
+    {
+        $units = implode(', ', array_map(static fn (\App\Enum\Unit $u) => $u->value, \App\Enum\Unit::cases()));
+
+        return <<<RULES
             À propos de `stockConsumptionProposal` :
 
             - C'est une PROPOSITION de retrait de stock, soumise ensuite à validation humaine.
@@ -866,8 +973,6 @@ class RecipeSuggestionService
             - N'y fais figurer chaque clé qu'UNE SEULE FOIS, en cumulant les usages de la
               recette : deux lignes pour le même ingrédient seraient fusionnées de toute façon.
             - N'y fais figurer que ce qui est réellement consommé par la recette.
-
-            Rédige des étapes concises mais concrètes (voir règle 14).
-            PROMPT;
+            RULES;
     }
 }

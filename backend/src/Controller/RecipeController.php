@@ -77,6 +77,24 @@ class RecipeController extends AbstractApiController
     }
 
     /**
+     * One recipe written out for another assistant to change; the changed
+     * version comes back through `import`. Calls no generator, writes nothing.
+     */
+    #[Route('/modification-prompt', methods: ['POST'])]
+    public function modificationPrompt(
+        Request $request,
+        RequestContext $context,
+        RecipeSuggestionService $service,
+        RecipeNormalizer $normalizer,
+        SavedRecipeRepository $savedRecipes,
+    ): JsonResponse {
+        $household = $context->household();
+        $recipe = $this->recipeDocument(JsonPayload::fromRequest($request), $household, $normalizer, $savedRecipes);
+
+        return $this->json(['prompt' => $service->modificationPrompt($household, $recipe)]);
+    }
+
+    /**
      * Reads the recipes pasted back from another assistant. Writes nothing:
      * the user keeps the one they chose through `POST /saved`, like any other
      * recipe.
@@ -157,7 +175,7 @@ class RecipeController extends AbstractApiController
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
         $household = $context->household();
-        $recipe = $this->confirmedRecipeDocument($payload, $household, $normalizer, $savedRecipes);
+        $recipe = $this->recipeDocument($payload, $household, $normalizer, $savedRecipes);
 
         // Résolu avec tolérance : un id périmé, étranger, ou déjà effacé ne doit
         // jamais empêcher la confirmation réelle — seul le nettoyage du plan
@@ -207,17 +225,17 @@ class RecipeController extends AbstractApiController
     }
 
     /**
-     * La recette à revérifier avant confirmation : celle enregistrée sous
-     * `savedRecipeId`, ou celle tout juste normalisée sous `recipe` si elle n'a
-     * pas encore été enregistrée.
+     * The recipe a request is about: the one saved under `savedRecipeId`, or
+     * the one sent under `recipe`, normalized, if it has not been saved — a
+     * fresh proposal or a meal-plan snapshot.
      *
-     * On ne se fie plus à la seule proposition de retrait renvoyée par le
-     * client : c'est ce document que `RecipeConfirmationService` revérifie
-     * (exclusions, réassociation, stock) juste avant d'écrire quoi que ce soit.
+     * For a confirmation, the proposal sent back by the client is not trusted
+     * alone: this document is what `RecipeConfirmationService` checks again
+     * (exclusions, reassociation, stock) right before writing anything.
      *
      * @return array<string, mixed>
      */
-    private function confirmedRecipeDocument(
+    private function recipeDocument(
         JsonPayload $payload,
         Household $household,
         RecipeNormalizer $normalizer,
@@ -235,7 +253,7 @@ class RecipeController extends AbstractApiController
         $recipe = $payload->object('recipe');
 
         if ([] === $recipe) {
-            throw new BadRequestHttpException('La recette à confirmer est requise (`recipe` ou `savedRecipeId`).');
+            throw new BadRequestHttpException('La recette est requise (`recipe` ou `savedRecipeId`).');
         }
 
         return $normalizer->normalize($recipe);

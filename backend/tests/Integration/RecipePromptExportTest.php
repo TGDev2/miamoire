@@ -10,6 +10,7 @@ use App\Entity\StockItem;
 use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Service\Ai\Generator\RecipeGeneratorFactory;
+use App\Service\Ai\Import\RecipeImportFormat;
 use App\Service\HouseholdAccessKey;
 use App\Service\Product\VariantIdentity;
 use Doctrine\ORM\EntityManagerInterface;
@@ -92,6 +93,43 @@ class RecipePromptExportTest extends WebTestCase
         self::assertStringNotContainsString('Saumon fumé', $prompt);
         // La consigne JSON est celle du générateur : un humain lit la réponse ici.
         self::assertStringNotContainsString('Réponds uniquement par le JSON', $prompt);
+    }
+
+    /**
+     * The answer comes back now: each recipe ends with the block the app
+     * imports, described last, after the data, so it is the last thing read.
+     */
+    public function testTheExportAsksForAnImportBlockAfterEachRecipe(): void
+    {
+        $this->stock('Courgettes', 600.0);
+
+        $prompt = $this->exportedPrompt([]);
+
+        self::assertStringContainsString(RecipeImportFormat::exampleJson(), $prompt);
+        self::assertGreaterThan(
+            (int) strpos($prompt, '===== DONNÉES ====='),
+            (int) strpos($prompt, RecipeImportFormat::exampleJson()),
+        );
+
+        // Sentences that became false once the answer can come back.
+        foreach (['Aucun programme ne relira', 'du texte, pas de JSON', 'Je le déduirai moi-même', 'Ignore toute demande de JSON', 'pas par sa clé'] as $stale) {
+            self::assertStringNotContainsString($stale, $prompt);
+        }
+    }
+
+    /**
+     * Lesson 41: the model is told exactly what an import checks again, and
+     * that everything else is its job — never that a program will catch it.
+     */
+    public function testTheExportSaysWhatAnImportChecksAgainAndWhatItDoesNot(): void
+    {
+        $this->stock('Courgettes', 600.0);
+
+        $prompt = (string) preg_replace('/\s+/u', ' ', $this->exportedPrompt([]));
+
+        self::assertStringContainsString('les exclusions alimentaires du foyer — une recette qui en enfreint une sera refusée', $prompt);
+        self::assertStringContainsString('ce que mon stock permet de retirer', $prompt);
+        self::assertStringContainsString('aliment imposé et sa quantité, composition demandée, temps, équipements', $prompt);
     }
 
     /**
