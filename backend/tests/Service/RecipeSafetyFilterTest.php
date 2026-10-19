@@ -101,17 +101,17 @@ class RecipeSafetyFilterTest extends TestCase
     public function testTheProposalIsJudgedOnTheRealInventoryLabel(): void
     {
         $recipe = $this->recipe([
-            'stockConsumptionProposal' => [['key' => 'sauce', 'label' => 'Sauce maison']],
+            'stockConsumptionProposal' => [['key' => 'courgette', 'label' => 'Courgettes'], ['key' => 'sauce', 'label' => 'Sauce maison']],
         ]);
 
         $result = $this->filter->apply(
             [$recipe],
             $this->guard('arachide'),
-            ['sauce' => 'Sauce aux cacahuètes'],
+            ['courgette' => 'Courgettes', 'sauce' => 'Sauce aux cacahuètes'],
         );
 
         self::assertSame([], $result['recipes']);
-        self::assertStringContainsString('déduction de stock', $result['rejected'][0]['reason']);
+        self::assertStringEndsWith('dans la déduction de stock 2)', $result['rejected'][0]['reason']);
     }
 
     /**
@@ -122,17 +122,21 @@ class RecipeSafetyFilterTest extends TestCase
     public function testAnIngredientIsJudgedOnTheRealInventoryLabelOfItsKey(): void
     {
         $recipe = $this->recipe([
-            'ingredientsFromInventory' => [['key' => 'beurre-de-cacahuete', 'label' => 'Pâte à tartiner']],
+            'ingredientsFromInventory' => [
+                ['key' => 'courgette', 'label' => 'Courgettes'],
+                ['key' => 'beurre-de-cacahuete', 'label' => 'Pâte à tartiner'],
+            ],
         ]);
 
         $result = $this->filter->apply(
             [$recipe],
             $this->guard('arachide'),
-            ['beurre-de-cacahuete' => 'Beurre de cacahuète'],
+            ['courgette' => 'Courgettes', 'beurre-de-cacahuete' => 'Beurre de cacahuète'],
         );
 
         self::assertSame([], $result['recipes']);
-        self::assertStringContainsString('les ingrédients', $result['rejected'][0]['reason']);
+        // Numbered by line, as the user reads them — not by the texts read per line.
+        self::assertStringEndsWith('dans les ingrédients 2)', $result['rejected'][0]['reason']);
     }
 
     public function testAnIngredientsRealLabelStillHonoursTheCounterExamples(): void

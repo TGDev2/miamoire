@@ -78,21 +78,29 @@ final class DietaryGuard
     }
 
     /**
-     * @param array<string, string|list<string>> $fields texte indexé par emplacement lisible
+     * A list field is numbered by line, as the user reads it. A line may carry
+     * several texts — what the recipe wrote and the stock's real label — each
+     * judged on its own, so that one text's exception (« sans gluten ») never
+     * excuses another's match.
+     *
+     * @param array<string, string|list<string|list<string>>> $fields texte indexé par emplacement lisible
      */
     public function inspectFields(array $fields): ?DietaryViolation
     {
         foreach ($fields as $location => $value) {
-            foreach (is_array($value) ? $value : [$value] as $index => $text) {
-                if (!is_string($text)) {
-                    continue;
-                }
-
+            foreach (is_array($value) ? $value : [$value] as $index => $line) {
                 $where = is_array($value) ? sprintf('%s %d', $location, $index + 1) : $location;
-                $violation = $this->inspect($text, $where);
 
-                if (null !== $violation) {
-                    return $violation;
+                foreach (is_array($line) ? $line : [$line] as $text) {
+                    if (!is_string($text)) {
+                        continue;
+                    }
+
+                    $violation = $this->inspect($text, $where);
+
+                    if (null !== $violation) {
+                        return $violation;
+                    }
                 }
             }
         }

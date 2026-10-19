@@ -62,7 +62,7 @@ class RecipeSafetyFilter
      * @param array<string, mixed>  $recipe
      * @param array<string, string> $inventoryLabels
      *
-     * @return array<string, string|list<string>>
+     * @return array<string, string|list<string|list<string>>>
      */
     public function inspectableFields(array $recipe, array $inventoryLabels): array
     {
@@ -133,7 +133,7 @@ class RecipeSafetyFilter
      *
      * @param array<string, string> $inventoryLabels
      *
-     * @return list<string>
+     * @return list<list<string>> one list of texts per line
      */
     private function keyedLabels(mixed $entries, array $inventoryLabels): array
     {
@@ -141,11 +141,13 @@ class RecipeSafetyFilter
             return [];
         }
 
-        $texts = [];
+        $lines = [];
         foreach ($entries as $entry) {
             if (!is_array($entry)) {
                 continue;
             }
+
+            $texts = [];
 
             if (is_string($entry['label'] ?? null)) {
                 $texts[] = $entry['label'];
@@ -155,8 +157,10 @@ class RecipeSafetyFilter
             if (null !== $key && isset($inventoryLabels[$key])) {
                 $texts[] = $inventoryLabels[$key];
             }
+
+            $lines[] = $texts;
         }
 
-        return $texts;
+        return $lines;
     }
 }
