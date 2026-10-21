@@ -845,6 +845,11 @@ export interface GroceryReturnLineInput {
   nature: FoodNature | null;
   expirationDate: string | null;
   estimateExpiration: boolean | null;
+  /**
+   * The household food the line already names — a receipt label the household
+   * taught. The server takes it as the identity before the name.
+   */
+  variantId?: string | null;
 }
 
 export interface GroceryReturnResolvedLine {
@@ -910,6 +915,18 @@ export interface GroceryReturnConfirmLineInput {
   estimateExpiration: boolean;
   /** One entry per expiration date, or `null` for a single lot. */
   batches: GroceryReturnConfirmBatchInput[] | null;
+  /**
+   * The printed line this food came from. The server remembers that this
+   * label at this shop means the confirmed food: the next receipt resolves it
+   * alone.
+   */
+  receipt?: GroceryReturnReceiptLabel | null;
+}
+
+/** A printed label at a shop, as `confirm` learns it — as a food, or as not food. */
+export interface GroceryReturnReceiptLabel {
+  store: string | null;
+  rawLabel: string;
 }
 
 export interface GroceryReturnConfirmResult {
@@ -917,6 +934,40 @@ export interface GroceryReturnConfirmResult {
   removedShoppingListItemIds: string[];
   /** The server recognised an operation already applied: same payload, nothing written twice. */
   replayed?: boolean;
+  /** Receipt labels remembered by this confirmation (foods and lines set aside). */
+  learntLabels?: number;
+}
+
+/** The printed line a basket line came from, kept on the line until it is written. */
+export interface ReceiptLineOrigin {
+  store: string | null;
+  rawLabel: string;
+  lineTotal: number | null;
+}
+
+/** A receipt line that is not food — said by the model, or by a label the household taught (`learned`). */
+export interface ReceiptIgnoredLine {
+  store: string | null;
+  rawLabel: string;
+  /** The label in plain words, when the model could expand it; may be empty. */
+  expandedName: string;
+  learned: boolean;
+}
+
+/** One food of the receipt: resolved like any basket line, plus the printed line it came from. */
+export type ReceiptReadLine = GroceryReturnResolvedLine & { receipt: ReceiptLineOrigin };
+
+/**
+ * What one receipt yielded (see `api.readReceipt`): the foods, already
+ * resolved, and the lines set aside. `store`, `receiptDate` and `total` are
+ * `null` when the photo did not show them.
+ */
+export interface ReceiptReading {
+  store: string | null;
+  receiptDate: string | null;
+  total: number | null;
+  lines: ReceiptReadLine[];
+  ignored: ReceiptIgnoredLine[];
 }
 
 /** One refused line of a `422`: nothing was written, the message goes next to the line. */

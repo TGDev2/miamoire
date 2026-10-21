@@ -74,10 +74,14 @@ class GroceryReturnController extends AbstractApiController
     }
 
     /**
-     * Reads one receipt (one to three photos, multipart `images[]`) into lines
-     * of the basket, filled in like any other line. Nothing is written: the
-     * lines go to the phone's basket and come back through `confirm`, with
-     * the printed label of each so that the household's answer is learnt.
+     * Reads one receipt (one to three photos) into lines of the basket, filled
+     * in like any other line. Nothing is written: the lines go to the phone's
+     * basket and come back through `confirm`, with the printed label of each
+     * so that the household's answer is learnt.
+     *
+     * Two bodies are accepted: multipart `images[]` (curl, tests), or JSON
+     * `{images: [{mediaType, data}]}` with the photo in base64 — the app
+     * sends the latter, its `fetch` having no file part to offer a form.
      */
     #[Route('/receipt', methods: ['POST'])]
     public function receipt(
@@ -86,40 +90,7 @@ class GroceryReturnController extends AbstractApiController
         ReceiptReader $reader,
         ApiPresenter $presenter,
     ): JsonResponse {
-        $raw = $request->files->get('images') ?? $request->files->get('image');
-        /** @var list<UploadedFile|null> $files */
-        $files = is_array($raw) ? array_values($raw) : (null !== $raw ? [$raw] : []);
-
-        if ([] === $files) {
-            throw new BadRequestHttpException('Joignez au moins une photo du ticket (champ « images »).');
-        }
-
-        if (count($files) > ReceiptReader::MAX_IMAGES) {
-            throw new BadRequestHttpException(sprintf('Au plus %d photos par ticket.', ReceiptReader::MAX_IMAGES));
-        }
-
-        $images = [];
-        foreach ($files as $file) {
-            if (!$file instanceof UploadedFile || !$file->isValid()) {
-                throw new BadRequestHttpException('Une des photos n\'a pas pu être reçue. Reprenez-la.');
-            }
-
-            // Read from the bytes, never from the name the phone gave the file:
-            // `finfo` is already there, the Mime component is not.
-            $mediaType = (string) (new \finfo(\FILEINFO_MIME_TYPE))->file($file->getPathname());
-            if (!in_array($mediaType, self::RECEIPT_MEDIA_TYPES, true)) {
-                throw new BadRequestHttpException('Les photos doivent être des images JPEG, PNG ou WebP.');
-            }
-
-            if ($file->getSize() > self::RECEIPT_MAX_BYTES) {
-                throw new BadRequestHttpException('Une photo dépasse 8 Mo : réduisez sa taille avant de l\'envoyer.');
-            }
-
-            $images[] = [
-                'mediaType' => $mediaType,
-                'data' => base64_encode((string) file_get_contents($file->getPathname())),
-            ];
-        }
+        $images = $this->receiptImages($request);
 
         $reading = $reader->read($context->household(), $images);
 
@@ -146,6 +117,64 @@ class GroceryReturnController extends AbstractApiController
 
     private const RECEIPT_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
     private const RECEIPT_MAX_BYTES = 8_000_000;
+
+    /**
+     * The photos of the request, whichever way they came, each checked the
+     * same way: the type read from the bytes (never from a name or a declared
+     * type), the size bounded, the count bounded.
+     *
+     * @return list<array{mediaType: string, data: string}>
+     */
+    private function receiptImages(Request $request): array
+    {
+        $raw = $request->files->get('images') ?? $request->files->get('image');
+        /** @var list<mixed> $files */
+        $files = is_array($raw) ? array_values($raw) : (null !== $raw ? [$raw] : []);
+
+        $blobs = [];
+        if ([] !== $files) {
+            foreach ($files as $file) {
+                if (!$file instanceof UploadedFile || !$file->isValid()) {
+                    throw new BadRequestHttpException('Une des photos n\'a pas pu être reçue. Reprenez-la.');
+                }
+                $blobs[] = (string) file_get_contents($file->getPathname());
+            }
+        } elseif (str_contains((string) $request->headers->get('Content-Type'), 'json')) {
+            foreach (JsonPayload::fromRequest($request)->objectList('images') as $entry) {
+                $data = JsonPayload::fromArray($entry)->string('data') ?? '';
+                $bytes = base64_decode($data, true);
+                if (false === $bytes || '' === $bytes) {
+                    throw new BadRequestHttpException('Une des photos n\'a pas pu être lue (base64 attendu). Reprenez-la.');
+                }
+                $blobs[] = $bytes;
+            }
+        }
+
+        if ([] === $blobs) {
+            throw new BadRequestHttpException('Joignez au moins une photo du ticket (champ « images »).');
+        }
+
+        if (count($blobs) > ReceiptReader::MAX_IMAGES) {
+            throw new BadRequestHttpException(sprintf('Au plus %d photos par ticket.', ReceiptReader::MAX_IMAGES));
+        }
+
+        $finfo = new \finfo(\FILEINFO_MIME_TYPE);
+        $images = [];
+        foreach ($blobs as $bytes) {
+            if (strlen($bytes) > self::RECEIPT_MAX_BYTES) {
+                throw new BadRequestHttpException('Une photo dépasse 8 Mo : réduisez sa taille avant de l\'envoyer.');
+            }
+
+            $mediaType = (string) $finfo->buffer($bytes);
+            if (!in_array($mediaType, self::RECEIPT_MEDIA_TYPES, true)) {
+                throw new BadRequestHttpException('Les photos doivent être des images JPEG, PNG ou WebP.');
+            }
+
+            $images[] = ['mediaType' => $mediaType, 'data' => base64_encode($bytes)];
+        }
+
+        return $images;
+    }
 
     /** The request's fingerprint, minus the transport details — as the stock routes compute it. */
     private function requestHash(JsonPayload $payload): string

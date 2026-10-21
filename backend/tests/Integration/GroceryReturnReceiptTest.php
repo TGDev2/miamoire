@@ -163,6 +163,33 @@ class GroceryReturnReceiptTest extends WebTestCase
         self::assertTrue($second['ignored'][0]['learned'], 'Set aside once, set aside again — by the household, not the model.');
     }
 
+    /** The app sends the photo in base64 inside a JSON body: same reading, same checks. */
+    public function testAReceiptCanBeSentAsBase64Json(): void
+    {
+        $this->fakeReceipt($this->leclercReceipt());
+
+        $this->client->request(
+            'POST',
+            '/api/grocery-returns/receipt',
+            server: $this->server + ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode(['images' => [['mediaType' => 'image/png', 'data' => self::PNG]]], \JSON_THROW_ON_ERROR),
+        );
+        $reading = $this->decode(Response::HTTP_OK);
+
+        self::assertCount(2, $reading['lines']);
+        self::assertSame('Lait demi-écrémé', $reading['lines'][0]['name']);
+
+        // Not an image, whatever the declared type says.
+        $this->freshClient();
+        $this->client->request(
+            'POST',
+            '/api/grocery-returns/receipt',
+            server: $this->server + ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode(['images' => [['mediaType' => 'image/png', 'data' => base64_encode('LAIT 5,40')]]], \JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(Response::HTTP_BAD_REQUEST, $this->client->getResponse()->getStatusCode());
+    }
+
     public function testAnUnreadableAnswerIsRefusedWithoutAGuess(): void
     {
         $generator = $this->createMock(RecipeGeneratorInterface::class);
