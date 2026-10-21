@@ -268,6 +268,28 @@ class ShelfLifeEstimator
         return self::LOCATION_DAYS[$location->value];
     }
 
+    /**
+     * Where a food is normally kept, when the lexicon knows the food at all.
+     *
+     * Each entry of the table lists its locations in order of use: milk keeps
+     * in the fridge first, a squash in the pantry first. That order is what a
+     * grocery return needs when nothing else says where a new food goes —
+     * better than "pantry for everything packaged", which sent a carton of
+     * milk to the cupboard. `null` when the food is unknown: no guess.
+     */
+    public function naturalLocation(string $name): ?StorageLocation
+    {
+        $food = $this->matcher->match($name, self::FOODS, self::EXACT_FOODS, PreparedDish::TERMS);
+
+        if (null === $food) {
+            return null;
+        }
+
+        $first = array_key_first($food['value']);
+
+        return null !== $first ? StorageLocation::from((string) $first) : null;
+    }
+
     /** @param list<ProductTrait> $traits */
     public function estimate(
         string $name,

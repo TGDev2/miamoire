@@ -22,6 +22,7 @@ use App\Service\Food\FreshFood;
 use App\Service\Freshness\EffectiveUseBy;
 use App\Service\Freshness\EffectiveUseByCalculator;
 use App\Service\Freshness\ShelfLifeEstimate;
+use App\Service\GroceryReturn\ResolvedGroceryLine;
 use App\Service\MealPlan\MealPlanCrossReference;
 use App\Service\MealPlan\MealPlanEntryView;
 use App\Service\MealPlan\MealPlanLine;
@@ -491,6 +492,48 @@ class ApiPresenter
             // Ask only when the cut decides the cooking; a known cut is still shown.
             'cutMatters' => $cut->matters,
             'shelfLife' => $this->shelfLife($shelfLife),
+        ];
+    }
+
+    /**
+     * One line of a grocery return as the triage screen shows it: the values
+     * it will write, where each one comes from, and the question it still
+     * asks, if any.
+     *
+     * @return array<string, mixed>
+     */
+    public function groceryReturnLine(ResolvedGroceryLine $line): array
+    {
+        return [
+            'lineKey' => $line->lineKey,
+            'status' => $line->decision->status(),
+            'decision' => $line->decision->value,
+            'decisionLabel' => $line->decision->label(),
+            'name' => $line->name,
+            'brand' => $line->brand,
+            'productId' => null !== $line->product ? (string) $line->product->getId() : null,
+            'barcode' => $line->barcode,
+            'variant' => null !== $line->variant ? $this->variant($line->variant) : null,
+            'shoppingListItem' => null !== $line->shoppingListItem ? $this->shoppingListItem($line->shoppingListItem) : null,
+            'unit' => $line->unit->value,
+            'unitFamily' => $line->unitFamily->value,
+            'quantityPerPackage' => null !== $line->quantityPerPackage ? round($line->quantityPerPackage, 3) : null,
+            'numberOfPackages' => $line->numberOfPackages,
+            'storageLocation' => $line->storageLocation->value,
+            'nature' => $line->nature->value,
+            'natureLabel' => $line->nature->label(),
+            'traits' => ProductTrait::toValues($line->traits),
+            'cut' => $line->cut?->value,
+            'plausibleCuts' => FoodCut::toValues($line->plausibleCuts),
+            'cutMatters' => $line->cutMatters,
+            'expirationDate' => $line->expirationDate?->format('Y-m-d'),
+            'expirationIsEstimated' => $line->expirationIsEstimated,
+            'expirationExplanation' => $line->expirationExplanation,
+            'provenance' => [
+                'storage' => $line->storageProvenance,
+                'package' => $line->packageProvenance,
+                'date' => $line->dateProvenance,
+            ],
         ];
     }
 }

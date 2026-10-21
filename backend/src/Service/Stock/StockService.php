@@ -80,6 +80,8 @@ class StockService
         ?string $note = null,
         bool $quantityIsEstimated = false,
         bool $expirationIsEstimated = false,
+        ?string $reason = null,
+        ?StockOperation $operation = null,
     ): StockItem {
         if ($numberOfPackages < 1) {
             throw new StockException('Le nombre d\'exemplaires doit être au moins égal à 1.');
@@ -122,7 +124,9 @@ class StockService
         }
 
         $this->entityManager->persist($item);
-        $this->record($item, MovementType::Addition, $total, $author, 'Ajout au stock');
+        // A grocery return names itself and its operation in the journal: the
+        // movement says "this is where the return came in", one lot at a time.
+        $this->record($item, MovementType::Addition, $total, $author, $reason ?? 'Ajout au stock', $operation);
         $this->flush();
 
         return $item;

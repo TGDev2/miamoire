@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\EventListener;
 
+use App\Exception\GroceryReturnRejectedException;
 use App\Exception\IncompatibleUnitException;
 use App\Exception\StockConflictException;
 use App\Exception\StockException;
@@ -77,6 +78,11 @@ class ApiExceptionListener
         // The app asks whether to merge instead of showing a dead end.
         if ($exception instanceof VariantCollisionException) {
             $payload += ['code' => 'variant_collision', 'existing' => $exception->existing->getCulinaryLabel()];
+        }
+
+        // Every line at fault, so the person fixes them all before trying again.
+        if ($exception instanceof GroceryReturnRejectedException) {
+            $payload += ['lines' => $exception->getLines()];
         }
 
         if ($this->debug && $status >= 500) {

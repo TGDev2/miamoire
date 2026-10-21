@@ -23,12 +23,20 @@ enum StockOperationType: string
      */
     case InventoryReset = 'inventory_reset';
 
+    /**
+     * Every lot of one shopping trip, written together. The journal can say
+     * "this is where Tuesday's groceries came in", lot by lot, and a lost
+     * answer never writes the trip twice.
+     */
+    case GroceryReturn = 'grocery_return';
+
     public function label(): string
     {
         return match ($this) {
             self::RecipeConfirmation => 'Confirmation de recette',
             self::StockItemMutation => 'Modification de lot',
             self::InventoryReset => 'Inventaire remis à zéro',
+            self::GroceryReturn => 'Retour de courses',
         };
     }
 }

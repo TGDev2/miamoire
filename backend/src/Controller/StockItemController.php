@@ -20,13 +20,10 @@ use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
 use App\Http\RequestContext;
 use App\Repository\HouseholdProductVariantRepository;
-use App\Repository\ProductRepository;
 use App\Repository\StockItemRepository;
 use App\Repository\StockMovementRepository;
-use App\Service\Freshness\ShelfLifeEstimator;
-use App\Service\OpenFoodFacts\OpenFoodFactsUnavailableException;
 use App\Service\Product\VariantResolver;
-use App\Service\ProductLookupService;
+use App\Service\Stock\StockIntake;
 use App\Service\Stock\StockOperationGuard;
 use App\Service\Stock\StockService;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -114,17 +111,19 @@ class StockItemController extends AbstractApiController
         RequestContext $context,
         StockService $stockService,
         StockOperationGuard $guard,
-        ProductLookupService $lookup,
-        ProductRepository $products,
+        StockIntake $intake,
         VariantResolver $variants,
-        ShelfLifeEstimator $shelfLife,
         ApiPresenter $presenter,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
         $household = $context->household();
         $author = $context->requireMember();
 
-        $product = $this->resolveCatalogProduct($payload, $lookup, $products);
+        $product = $intake->catalogProduct(
+            $payload->string('productId'),
+            $payload->string('barcode'),
+            $payload->string('name'),
+        );
         $name = $payload->string('name') ?? $product?->getName();
 
         if (null === $name) {
@@ -184,11 +183,9 @@ class StockItemController extends AbstractApiController
             // un inventaire que personne n'a saisi. Tout ou rien : une erreur de saisie
             // sur un batch n'est pas rattrapée ici (voir StockOperationGuard), elle
             // remonte et fait annuler toute la transaction, batches déjà créés compris.
-            function () use ($stockService, $shelfLife, $household, $author, $variant, $unit, $defaults, $batches, $presenter): array {
+            function () use ($intake, $household, $author, $variant, $unit, $defaults, $batches, $presenter): array {
                 $items = array_map(
-                    fn (array $batch): StockItem => $this->addBatch(
-                        $stockService,
-                        $shelfLife,
+                    static fn (array $batch): StockItem => $intake->addBatch(
                         $household,
                         $author,
                         $variant,
@@ -233,7 +230,7 @@ class StockItemController extends AbstractApiController
         StockService $stockService,
         StockOperationGuard $guard,
         VariantResolver $variants,
-        ShelfLifeEstimator $shelfLife,
+        StockIntake $intake,
         ApiPresenter $presenter,
     ): JsonResponse {
         $payload = JsonPayload::fromRequest($request);
@@ -252,7 +249,7 @@ class StockItemController extends AbstractApiController
                 $stockItems,
                 $stockService,
                 $variants,
-                $shelfLife,
+                $intake,
                 $presenter,
                 $payload,
                 $expectedRevision,
@@ -283,8 +280,7 @@ class StockItemController extends AbstractApiController
                 // « Je n'ai pas de date, mais estime-la » : recalculée depuis l'aliment,
                 // son état et l'endroit où il est rangé.
                 if ($payload->bool('estimateExpiration')) {
-                    $item->setEstimatedExpirationDate($this->estimateFor(
-                        $shelfLife,
+                    $item->setEstimatedExpirationDate($intake->estimateFor(
                         $item->getVariant(),
                         $item->getStorageLocation(),
                         $item->getPurchaseDate(),
@@ -923,129 +919,6 @@ class StockItemController extends AbstractApiController
                 $movements->findForStockItem($item),
             ),
         ]);
-    }
-
-    /**
-     * @param array{numberOfPackages: int, quantityPerPackage: float, storageLocation: StorageLocation, note: ?string, quantityIsEstimated: bool, expirationDate: ?\DateTimeImmutable, estimateExpiration: bool} $defaults
-     * @param array<string, mixed>                                                                                                                                                                              $batch
-     */
-    private function addBatch(
-        StockService $stockService,
-        ShelfLifeEstimator $shelfLife,
-        \App\Entity\Household $household,
-        \App\Entity\Member $author,
-        HouseholdProductVariant $variant,
-        Unit $unit,
-        array $defaults,
-        array $batch,
-    ): StockItem {
-        $line = JsonPayload::fromArray($batch);
-
-        $location = $line->enum('storageLocation', StorageLocation::class) ?? $defaults['storageLocation'];
-        $purchaseDate = $line->date('purchaseDate');
-        $expiration = $line->has('expirationDate') ? $line->date('expirationDate') : $defaults['expirationDate'];
-        $estimate = $line->has('estimateExpiration') ? $line->bool('estimateExpiration') : $defaults['estimateExpiration'];
-
-        // Un aliment frais ne porte aucune date imprimée. Sans consigne explicite,
-        // on l'estime donc d'office : sans elle il entrait sans date, et restait
-        // invisible pour les alertes, « Aujourd'hui » et les recettes — l'aliment
-        // qui pourrit était précisément celui que l'application ne voyait pas.
-        // Un `false` explicite reste respecté : c'est quelqu'un qui a tranché.
-        $estimate ??= $variant->isFresh();
-
-        // Une date lue sur l'emballage prime toujours : on n'estime que ce qui manque.
-        $estimated = false;
-        if (null === $expiration && $estimate) {
-            $expiration = $this->estimateFor($shelfLife, $variant, $location, $purchaseDate);
-            $estimated = true;
-        }
-
-        return $stockService->add(
-            household: $household,
-            author: $author,
-            variant: $variant,
-            numberOfPackages: $line->int('numberOfPackages') ?? $defaults['numberOfPackages'],
-            quantityPerPackage: $line->float('quantityPerPackage') ?? $defaults['quantityPerPackage'],
-            unit: $unit,
-            location: $location,
-            purchaseDate: $purchaseDate,
-            expirationDate: $expiration,
-            note: $line->string('note') ?? $defaults['note'],
-            quantityIsEstimated: $line->has('quantityIsEstimated')
-                ? $line->bool('quantityIsEstimated')
-                : $defaults['quantityIsEstimated'],
-            expirationIsEstimated: $estimated,
-        );
-    }
-
-    /**
-     * `$from` fait partir la durée estimée de la date d'achat quand elle est
-     * connue, plutôt que d'aujourd'hui : un aliment acheté il y a trois jours
-     * n'a pas trois jours de conservation en plus rien que parce qu'on l'a
-     * saisi aujourd'hui.
-     */
-    private function estimateFor(
-        ShelfLifeEstimator $shelfLife,
-        HouseholdProductVariant $variant,
-        StorageLocation $location,
-        ?\DateTimeImmutable $from = null,
-    ): \DateTimeImmutable {
-        return $shelfLife->estimate(
-            $variant->getName(),
-            $variant->getCategory(),
-            $variant->getTraits(),
-            $location,
-        )->until($from);
-    }
-
-    /**
-     * La fiche canonique, quand il y en a une.
-     *
-     * Une saisie libre — fruits et légumes, vrac, restes, préparations maison —
-     * n'en crée plus : elle crée une variante du foyer et rien d'autre. Le
-     * catalogue partagé mondialement ne se remplit que par code-barres.
-     *
-     * Un code-barres scanné mais inconnu d'Open Food Facts, complété par un nom
-     * saisi à la main, contribue tout de même une fiche minimale : sans ça, le
-     * même code-barres redeviendrait « inconnu » à chaque scan suivant.
-     */
-    private function resolveCatalogProduct(
-        JsonPayload $payload,
-        ProductLookupService $lookup,
-        ProductRepository $products,
-    ): ?Product {
-        $productId = $payload->string('productId');
-        if (null !== $productId && Uuid::isValid($productId)) {
-            $product = $products->find(Uuid::fromString($productId));
-            if (null !== $product) {
-                return $product;
-            }
-        }
-
-        $barcode = $payload->string('barcode');
-        if (null === $barcode) {
-            return null;
-        }
-
-        try {
-            $product = $lookup->findByBarcode($barcode);
-        } catch (OpenFoodFactsUnavailableException) {
-            // On ignore si Open Food Facts connaît ce code : le lot entre sans
-            // fiche, plutôt que de figer au catalogue partagé une fiche manuelle
-            // — jamais rafraîchie — qui masquerait la vraie pour tous les foyers.
-            return null;
-        }
-
-        if (null !== $product) {
-            return $product;
-        }
-
-        $name = trim((string) $payload->string('name'));
-        if ('' === $name || 1 !== preg_match('/^\d{6,20}$/', $barcode)) {
-            return null;
-        }
-
-        return $lookup->createManual(name: $name, barcode: $barcode);
     }
 
     /**
