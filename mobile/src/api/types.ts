@@ -810,10 +810,10 @@ export type GroceryReturnStatus = 'ready' | 'needs_decision' | 'unknown';
  * The one question a resolved line may ask. `none`: nothing to decide.
  * `unknown_food`: no name, the user must type one. `unit_mismatch`: the
  * household counts this food in another unit family. `fridge_or_freezer`: a
- * protein with no habit. `short_date`: a chilled packaged food whose estimate
- * is short — the printed date decides the FEFO order.
+ * protein with no habit. A short estimate asks nothing: the estimated date
+ * is shown on the line, and « Date imprimée… » corrects it when it matters.
  */
-export type GroceryReturnDecision = 'none' | 'unknown_food' | 'unit_mismatch' | 'fridge_or_freezer' | 'short_date';
+export type GroceryReturnDecision = 'none' | 'unknown_food' | 'unit_mismatch' | 'fridge_or_freezer';
 
 /** Where each filled field comes from, shown as a caption, never as a colour. */
 export interface GroceryReturnProvenance {
@@ -957,10 +957,19 @@ export interface ReceiptIgnoredLine {
 /** One food of the receipt: resolved like any basket line, plus the printed line it came from. */
 export type ReceiptReadLine = GroceryReturnResolvedLine & { receipt: ReceiptLineOrigin };
 
+/** An earlier read of the same receipt by this household: same shop, date and total, within 60 days. */
+export interface ReceiptDuplicate {
+  /** When it was read, ISO 8601 with its time. */
+  readAt: string;
+  lineCount: number;
+}
+
 /**
  * What one receipt yielded (see `api.readReceipt`): the foods, already
  * resolved, and the lines set aside. `store`, `receiptDate` and `total` are
- * `null` when the photo did not show them.
+ * `null` when the photo did not show them. `duplicateOf` names the earlier
+ * read of the same receipt, if any: the lines still come in full, the
+ * screen asks before adding them a second time.
  */
 export interface ReceiptReading {
   store: string | null;
@@ -968,6 +977,7 @@ export interface ReceiptReading {
   total: number | null;
   lines: ReceiptReadLine[];
   ignored: ReceiptIgnoredLine[];
+  duplicateOf: ReceiptDuplicate | null;
 }
 
 /** One refused line of a `422`: nothing was written, the message goes next to the line. */

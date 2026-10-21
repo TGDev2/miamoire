@@ -287,9 +287,9 @@ test('a printed date given by the user is not an estimate', () => {
 });
 
 test('an answered decision survives a resolution that asks the same one, not another', () => {
-  const answered = line({ resolution: resolution({ decision: 'short_date' }), decided: true });
+  const answered = line({ resolution: resolution({ decision: 'fridge_or_freezer' }), decided: true });
 
-  assert.equal(mergeResolved(answered, resolved({ decision: 'short_date' })).decided, true);
+  assert.equal(mergeResolved(answered, resolved({ decision: 'fridge_or_freezer' })).decided, true);
   assert.equal(mergeResolved(answered, resolved({ decision: 'unit_mismatch' })).decided, false);
   assert.equal(mergeResolved(answered, resolved({ decision: 'none' })).decided, false);
 });

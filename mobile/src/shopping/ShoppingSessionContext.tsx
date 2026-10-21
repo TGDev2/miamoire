@@ -133,7 +133,7 @@ export interface ShoppingSessionLine {
   touched?: ResolvableField[];
   /** The last answer of `resolve` for this line; `null` or absent until the first one. */
   resolution?: ShoppingSessionResolution | null;
-  /** The current decision was answered on the screen (a chip, « Garder l'estimation »): the line is ready. */
+  /** The current decision was answered on the screen (a chip, a place tile): the line is ready. */
   decided?: boolean;
   /**
    * The printed line of the receipt this line came from. Sent back at the

@@ -329,6 +329,12 @@ export default function TodayScreen() {
           onPress={() => router.push('/scan')}
         />
         <Row
+          icon="receipt-text-outline"
+          label="Lire un ticket de caisse"
+          subtitle="Une photo à la caisse, le retour se remplit"
+          onPress={() => router.push('/receipt')}
+        />
+        <Row
           icon="format-list-checks"
           label="Liste de courses"
           subtitle="Voir et compléter votre liste"

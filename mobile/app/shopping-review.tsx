@@ -70,7 +70,6 @@ const DECISION_QUESTIONS: Record<Exclude<GroceryReturnDecision, 'none'>, string>
   unknown_food: 'Quel est cet aliment ?',
   unit_mismatch: 'Dans quelle unité ?',
   fridge_or_freezer: 'Frigo ou congélateur ?',
-  short_date: 'Quelle est la date imprimée ?',
 };
 
 /** Until the reference answers, the three places still have a name. */
@@ -503,7 +502,6 @@ export default function ShoppingReviewScreen() {
                   expirationDate: iso,
                   estimateExpiration: false,
                   touched: touch(line, 'expirationDate'),
-                  decided: answers(line, 'short_date'),
                 }));
                 return;
               }
@@ -582,9 +580,9 @@ function ReadyRow({
 
 /**
  * One line, open. `decide` shows only what its question needs — the name for
- * an unknown food, two places for a protein, the date for a short one, the
- * units of the family — plus the quantity and the copies. `full` is the whole
- * editor, as « Modifier » opens it on a ready line.
+ * an unknown food, two places for a protein, the units of the family — plus
+ * the quantity and the copies. `full` is the whole editor, as « Modifier »
+ * opens it on a ready line.
  */
 function LineEditor({
   line,
@@ -644,7 +642,7 @@ function LineEditor({
   const showName = full || '' === line.name.trim() || 'unknown_food' === open;
   const showUnits = full || 'unit_mismatch' === open;
   const showStorage = full || 'fridge_or_freezer' === open;
-  const showDate = full || 'short_date' === open || null !== batches;
+  const showDate = full || null !== batches;
 
   function startBatches() {
     onPatch((current) => {
@@ -872,13 +870,6 @@ function LineEditor({
           ) : null}
           <View style={styles.chips}>
             <Chip label="Date imprimée…" selected={null !== intent.expirationDate} onPress={() => onOpenDatePicker(null)} />
-            {'short_date' === open ? (
-              <Chip
-                label="Garder l'estimation"
-                selected={false}
-                onPress={() => onPatch(() => ({ decided: true }))}
-              />
-            ) : null}
             {full ? (
               <>
                 <Chip

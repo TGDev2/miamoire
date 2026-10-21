@@ -1,10 +1,11 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError, api } from '../src/api/client';
+import type { ReceiptDuplicate, ReceiptReading } from '../src/api/types';
 import { useFeedback } from '../src/components/Feedback';
 import { Button, Card, ErrorBanner, Icon, Loader } from '../src/components/ui';
 import * as haptics from '../src/haptics';
@@ -21,6 +22,9 @@ const MAX_PHOTOS = 3;
  * 8 MB without resizing it — the one thing that would blur the small print.
  */
 const PHOTO_QUALITY = 0.6;
+
+/** Said when the reading service itself is out: the two other ways in still work. */
+const DEGRADED_HINT = 'Le scanner et la liste de courses fonctionnent sans le service de lecture.';
 
 interface Photo {
   uri: string;
@@ -57,6 +61,8 @@ export default function ReceiptScreen() {
   const camera = useRef<CameraView>(null);
   /** The reading in flight: « Annuler » and leaving the screen abort it. */
   const controller = useRef<AbortController | null>(null);
+  /** False once the screen is gone: a read that ends then has no state left to update. */
+  const mounted = useRef(true);
 
   useFocusEffect(
     useCallback(() => {
@@ -69,7 +75,17 @@ export default function ReceiptScreen() {
     }, []),
   );
 
-  useEffect(() => () => controller.current?.abort(), []);
+  // Leaving the screen aborts the read in flight, and nothing of it may land
+  // afterwards. The app going to the background is not leaving: the request
+  // goes on, and its answer is there when the person comes back.
+  useEffect(() => {
+    mounted.current = true;
+
+    return () => {
+      mounted.current = false;
+      controller.current?.abort();
+    };
+  }, []);
 
   const count = photos.length;
   const plural = count > 1 ? 's' : '';
@@ -135,27 +151,57 @@ export default function ReceiptScreen() {
       );
       if (own.signal.aborted) return;
 
-      const added = addReceiptReading(reading);
-      if (0 === added.length && 0 === reading.ignored.length) {
+      if (0 === reading.lines.length && 0 === reading.ignored.length) {
         haptics.failure();
         setError("Aucune ligne d'article n'a été lue sur ce ticket. Reprenez la photo de plus près, le ticket bien à plat.");
         return;
       }
 
-      const { toDecide, ready } = groupLines(added);
-      haptics.success();
-      notify(summary(added.length, ready.length, toDecide.length), 'safe');
-      router.replace('/shopping-review');
+      if (null !== reading.duplicateOf) {
+        askBeforeDuplicate(reading, reading.duplicateOf);
+        return;
+      }
+
+      accept(reading);
     } catch (exception) {
       // A cancellation is a gesture, not a failure: nothing to say.
       if (exception instanceof ApiError && exception.isAborted) return;
 
       haptics.failure();
-      setError(exception instanceof Error ? exception.message : 'Lecture du ticket impossible.');
+      setError(failureMessage(exception));
     } finally {
       if (controller.current === own) controller.current = null;
-      setReading(false);
+      // Gone meanwhile: the cleanup aborted the read, the screen is not there to update.
+      if (mounted.current) setReading(false);
     }
+  }
+
+  /** The lines join the basket and the triage opens: the normal end of a read. */
+  function accept(reading: ReceiptReading) {
+    const added = addReceiptReading(reading);
+    const { toDecide, ready } = groupLines(added);
+    haptics.success();
+    notify(summary(added.length, ready.length, toDecide.length), 'safe');
+    router.replace('/shopping-review');
+  }
+
+  /**
+   * The same receipt was read these last weeks — same shop, date and total.
+   * Nothing is added before the person says so; « Ne pas ajouter » keeps the
+   * photos and shows no error, since reading twice says nothing about them.
+   */
+  function askBeforeDuplicate(reading: ReceiptReading, duplicate: ReceiptDuplicate) {
+    const lines = `${duplicate.lineCount} ligne${duplicate.lineCount > 1 ? 's' : ''}`;
+
+    Alert.alert(
+      'Ticket déjà lu',
+      `Ce ticket a été lu le ${formatReadAt(duplicate.readAt)} (${lines}). L'ajouter quand même ?`,
+      [
+        { text: 'Ne pas ajouter', style: 'cancel', onPress: () => haptics.removed() },
+        { text: 'Ajouter quand même', onPress: () => accept(reading) },
+      ],
+      { cancelable: true, onDismiss: () => haptics.removed() },
+    );
   }
 
   function cancel() {
@@ -301,6 +347,26 @@ export default function ReceiptScreen() {
       </Text>
     </ScrollView>
   );
+}
+
+/**
+ * The banner of a failed read. A `503` is the reading service itself (the
+ * provider down, the quota spent) and no answer at all is the network: in
+ * both cases the scanner and the list still work, and the banner says so.
+ */
+function failureMessage(exception: unknown): string {
+  const message = exception instanceof Error ? exception.message : 'Lecture du ticket impossible.';
+  const serviceDown = exception instanceof ApiError && (503 === exception.status || 0 === exception.status);
+
+  return serviceDown ? `${message} ${DEGRADED_HINT}` : message;
+}
+
+/** « 21/10 à 14:05 » — the earlier read, in the phone's time. */
+function formatReadAt(iso: string): string {
+  const date = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, '0');
+
+  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)} à ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /** « Ticket lu : 12 lignes, 9 rangées d'avance, 3 à préciser ». */
