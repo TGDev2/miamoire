@@ -19,6 +19,7 @@ final readonly class PreparedGroceryLine
     /**
      * @param array{numberOfPackages: int, quantityPerPackage: float, storageLocation: StorageLocation, note: ?string, quantityIsEstimated: bool, expirationDate: ?\DateTimeImmutable, estimateExpiration: ?bool} $defaults
      * @param list<array<string, mixed>>                                                                                                                                                                               $batches
+     * @param array{storeKey: string, labelKey: string, rawLabel: string}|null                                                                                                                                         $receipt the printed label this line came from, to be learnt
      */
     public function __construct(
         public string $lineKey,
@@ -27,6 +28,7 @@ final readonly class PreparedGroceryLine
         public array $defaults,
         public array $batches,
         public ?ShoppingListItem $shoppingListItem,
+        public ?array $receipt = null,
     ) {
     }
 }

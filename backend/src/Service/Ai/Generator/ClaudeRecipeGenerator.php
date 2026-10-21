@@ -41,8 +41,26 @@ class ClaudeRecipeGenerator implements RecipeGeneratorInterface
         return 'ANTHROPIC_API_KEY';
     }
 
-    public function generate(string $systemPrompt, string $userPayload, array $schema): string
+    public function generate(string $systemPrompt, string $userPayload, array $schema, array $images = []): string
     {
+        // Claude reads best with the images before the text that asks about them.
+        $content = [] === $images
+            ? $userPayload
+            : [
+                ...array_map(
+                    static fn (array $image): array => [
+                        'type' => 'image',
+                        'source' => [
+                            'type' => 'base64',
+                            'media_type' => $image['mediaType'],
+                            'data' => $image['data'],
+                        ],
+                    ],
+                    $images,
+                ),
+                ['type' => 'text', 'text' => $userPayload],
+            ];
+
         $arguments = [
             'model' => self::MODEL,
             'maxTokens' => 16000,
@@ -51,7 +69,7 @@ class ClaudeRecipeGenerator implements RecipeGeneratorInterface
                 'text' => $systemPrompt,
                 'cacheControl' => ['type' => 'ephemeral'],
             ]],
-            'messages' => [['role' => 'user', 'content' => $userPayload]],
+            'messages' => [['role' => 'user', 'content' => $content]],
             'outputConfig' => [
                 'effort' => $this->effort,
                 'format' => ['type' => 'json_schema', 'schema' => $schema],

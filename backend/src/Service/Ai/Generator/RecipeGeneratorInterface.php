@@ -23,9 +23,12 @@ interface RecipeGeneratorInterface
     public function configurationHint(): string;
 
     /**
-     * @param array<string, mixed> $schema Schéma JSON imposé à la réponse
+     * @param array<string, mixed>                          $schema Schéma JSON imposé à la réponse
+     * @param list<array{mediaType: string, data: string}> $images photos jointes au message,
+     *                                                              en base64 — un ticket de
+     *                                                              caisse à lire, par exemple
      *
      * @return string Le JSON brut renvoyé par le modèle
      */
-    public function generate(string $systemPrompt, string $userPayload, array $schema): string;
+    public function generate(string $systemPrompt, string $userPayload, array $schema, array $images = []): string;
 }

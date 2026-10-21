@@ -84,9 +84,11 @@ final class GroceryReturnResolver
             ? ProductTrait::fromValues($line->stringList('traits'))
             : null;
 
-        // The product is the surest identity (the scan), then the list line
-        // (resolved to a variant when it was written), then the name alone.
+        // The product is the surest identity (the scan), then a food named
+        // outright (a receipt label the household already taught), then the
+        // list line (resolved to a variant when it was written), then the name.
         $variant = (null !== $product ? $this->variants->findOneByProduct($household, $product) : null)
+            ?? $this->ownedVariant($household, $line->string('variantId'))
             ?? $listItem?->getVariant()
             ?? (null !== $givenName ? $this->variantByName($household, $givenName, $givenUnit, $givenTraits) : null);
 
@@ -198,6 +200,17 @@ final class GroceryReturnResolver
         $barcode = $line->string('barcode');
 
         return null !== $barcode ? $this->products->findOneByBarcode($barcode) : null;
+    }
+
+    private function ownedVariant(Household $household, ?string $id): ?HouseholdProductVariant
+    {
+        if (null === $id || !Uuid::isValid($id)) {
+            return null;
+        }
+
+        $variant = $this->variants->find(Uuid::fromString($id));
+
+        return null !== $variant && $variant->getHousehold()->getId()->equals($household->getId()) ? $variant : null;
     }
 
     private function listItem(Household $household, JsonPayload $line): ?ShoppingListItem

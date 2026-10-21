@@ -148,7 +148,7 @@ class FallbackRecipeGeneratorTest extends TestCase
                 return $this->hint;
             }
 
-            public function generate(string $systemPrompt, string $userPayload, array $schema): string
+            public function generate(string $systemPrompt, string $userPayload, array $schema, array $images = []): string
             {
                 ++$this->calls;
 

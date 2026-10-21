@@ -18,8 +18,10 @@ use App\Enum\StorageLocation;
 use App\Enum\Unit;
 use App\Exception\GroceryReturnRejectedException;
 use App\Exception\StockException;
+use App\Entity\ReceiptAlias;
 use App\Http\ApiPresenter;
 use App\Http\JsonPayload;
+use App\Repository\ReceiptAliasRepository;
 use App\Repository\ShoppingListItemRepository;
 use App\Service\Product\VariantResolver;
 use App\Service\Stock\StockIntake;
@@ -50,6 +52,8 @@ final class GroceryReturnService
         private readonly StockIntake $intake,
         private readonly VariantResolver $variants,
         private readonly ShoppingListItemRepository $shoppingList,
+        private readonly ReceiptAliasRepository $aliases,
+        private readonly ReceiptAliasKey $aliasKeys,
         private readonly EntityManagerInterface $entityManager,
         private readonly ApiPresenter $presenter,
     ) {
@@ -57,6 +61,10 @@ final class GroceryReturnService
 
     /**
      * @param list<array<string, mixed>> $rawLines
+     * @param list<array<string, mixed>> $rawIgnored receipt lines the person set
+     *                                               aside as "not food": `{store,
+     *                                               rawLabel}`, remembered so the
+     *                                               next receipt skips them alone
      *
      * @return array<string, mixed>
      */
@@ -66,8 +74,9 @@ final class GroceryReturnService
         string $operationKey,
         string $requestHash,
         array $rawLines,
+        array $rawIgnored = [],
     ): array {
-        if ([] === $rawLines) {
+        if ([] === $rawLines && [] === $rawIgnored) {
             throw new StockException('Le retour de courses est vide : rien à ranger.');
         }
 
@@ -85,6 +94,14 @@ final class GroceryReturnService
             }
         }
 
+        $ignored = [];
+        foreach ($rawIgnored as $raw) {
+            $receipt = $this->receiptLabel(JsonPayload::fromArray($raw));
+            if (null !== $receipt) {
+                $ignored[] = $receipt;
+            }
+        }
+
         if ([] !== $errors) {
             throw new GroceryReturnRejectedException($errors);
         }
@@ -96,9 +113,11 @@ final class GroceryReturnService
             $requestHash,
             $author,
             $this->stockService,
-            function (StockOperation $operation) use ($household, $author, $prepared): array {
+            function (StockOperation $operation) use ($household, $author, $prepared, $ignored): array {
                 $items = [];
                 $removed = [];
+                /** @var array<string, ReceiptAlias> $learnt aliases touched in this transaction, by key */
+                $learnt = [];
 
                 foreach ($prepared as $entry) {
                     foreach ($entry->batches as $batch) {
@@ -123,14 +142,67 @@ final class GroceryReturnService
                             $removed[] = $id;
                         }
                     }
+
+                    // A confirmed line teaches what its printed label means
+                    // here: the next receipt from this shop resolves it alone.
+                    if (null !== $entry->receipt) {
+                        $this->learn($household, $entry->receipt, $entry->variant, false, $learnt);
+                    }
+                }
+
+                foreach ($ignored as $receipt) {
+                    $this->learn($household, $receipt, null, true, $learnt);
                 }
 
                 return [
                     'items' => array_map(fn (StockItem $item): array => $this->presenter->stockItem($item), $items),
                     'removedShoppingListItemIds' => $removed,
+                    'learntLabels' => count($learnt),
                 ];
             },
         );
+    }
+
+    /**
+     * @param array{storeKey: string, labelKey: string, rawLabel: string} $receipt
+     * @param array<string, ReceiptAlias>                                 $learnt
+     */
+    private function learn(Household $household, array $receipt, ?HouseholdProductVariant $variant, bool $ignored, array &$learnt): void
+    {
+        $key = $receipt['storeKey'].'|'.$receipt['labelKey'];
+
+        // The same label twice on one receipt: one alias, learnt once; a
+        // second lookup would not see the entity created a moment ago.
+        $alias = $learnt[$key]
+            ?? $this->aliases->findOne($household, $receipt['storeKey'], $receipt['labelKey']);
+
+        if (null === $alias) {
+            $alias = new ReceiptAlias($household, $receipt['storeKey'], $receipt['labelKey'], $receipt['rawLabel']);
+            $this->entityManager->persist($alias);
+        }
+
+        $alias->learn($variant, $ignored, $receipt['rawLabel']);
+        $learnt[$key] = $alias;
+    }
+
+    /** @return array{storeKey: string, labelKey: string, rawLabel: string}|null */
+    private function receiptLabel(JsonPayload $receipt): ?array
+    {
+        $rawLabel = $receipt->string('rawLabel');
+        if (null === $rawLabel) {
+            return null;
+        }
+
+        $labelKey = $this->aliasKeys->of($rawLabel);
+        if ('' === $labelKey) {
+            return null;
+        }
+
+        return [
+            'storeKey' => $this->aliasKeys->of($receipt->string('store')),
+            'labelKey' => $labelKey,
+            'rawLabel' => mb_substr($rawLabel, 0, 255),
+        ];
     }
 
     /**
@@ -208,6 +280,7 @@ final class GroceryReturnService
             ],
             batches: [] === $batches ? [[]] : $batches,
             shoppingListItem: $listItem,
+            receipt: $this->receiptLabel(JsonPayload::fromArray($line->object('receipt'))),
         );
     }
 }

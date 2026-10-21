@@ -32,6 +32,7 @@ services:
             - '../src/Service/Ai/SeasonalContext.php'
             - '../src/Service/Freshness/ShelfLifeEstimate.php'
             - '../src/Service/GroceryReturn/PreparedGroceryLine.php'
+            - '../src/Service/GroceryReturn/ReceiptReading.php'
             - '../src/Service/GroceryReturn/ResolvedGroceryLine.php'
             - '../src/Service/GroceryReturn/UsualPackage.php'
             - '../src/Service/Inventory/InventoryLine.php'

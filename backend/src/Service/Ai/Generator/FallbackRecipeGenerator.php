@@ -46,14 +46,14 @@ class FallbackRecipeGenerator implements RecipeGeneratorInterface
         return $this->first()->configurationHint();
     }
 
-    public function generate(string $systemPrompt, string $userPayload, array $schema): string
+    public function generate(string $systemPrompt, string $userPayload, array $schema, array $images = []): string
     {
         $attempts = \count($this->generators);
         $last = null;
 
         foreach ($this->generators as $index => $generator) {
             try {
-                return $generator->generate($systemPrompt, $userPayload, $schema);
+                return $generator->generate($systemPrompt, $userPayload, $schema, $images);
             } catch (RecipeGeneratorUnavailableException $exception) {
                 $last = $exception;
 

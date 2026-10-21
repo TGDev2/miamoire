@@ -70,9 +70,26 @@ class GeminiRecipeGenerator implements RecipeGeneratorInterface
         return new self($this->httpClient, $this->logger, $this->apiKey, $model);
     }
 
-    public function generate(string $systemPrompt, string $userPayload, array $schema): string
+    public function generate(string $systemPrompt, string $userPayload, array $schema, array $images = []): string
     {
         $model = $this->models()[0];
+
+        // A bare string stays a bare string; photos turn the input into parts,
+        // the text first, then each image inline (the request must stay under
+        // 20 MB, which three phone photos do).
+        $input = [] === $images
+            ? $userPayload
+            : [
+                ['type' => 'text', 'text' => $userPayload],
+                ...array_map(
+                    static fn (array $image): array => [
+                        'type' => 'image',
+                        'data' => $image['data'],
+                        'mime_type' => $image['mediaType'],
+                    ],
+                    $images,
+                ),
+            ];
 
         try {
             $response = $this->httpClient->request('POST', self::ENDPOINT, [
@@ -83,7 +100,7 @@ class GeminiRecipeGenerator implements RecipeGeneratorInterface
                 'json' => [
                     'model' => $model,
                     'system_instruction' => $systemPrompt,
-                    'input' => $userPayload,
+                    'input' => $input,
                     'response_format' => [
                         'type' => 'text',
                         'mime_type' => 'application/json',
