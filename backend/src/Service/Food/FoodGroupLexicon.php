@@ -97,6 +97,7 @@ final class FoodGroupLexicon
         'dinde' => self::PROTEIN,
         'canard' => self::PROTEIN,
         'boeuf' => self::PROTEIN,
+        'steak' => self::PROTEIN,
         'veau' => self::PROTEIN,
         'porc' => self::PROTEIN,
         'agneau' => self::PROTEIN,

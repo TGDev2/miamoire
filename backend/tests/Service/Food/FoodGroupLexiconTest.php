@@ -34,6 +34,8 @@ class FoodGroupLexiconTest extends TestCase
         yield 'pomme de terre, pas légume' => ['Pommes de terre', [FoodGroup::Starch]];
         yield 'légumineuse, deux groupes' => ['Lentilles corail', [FoodGroup::Starch, FoodGroup::Protein]];
         yield 'pois chiches' => ['Pois chiches', [FoodGroup::Starch, FoodGroup::Protein]];
+        // Read off a receipt: no "viande", no "boeuf", still meat.
+        yield 'steak haché' => ['Steak haché', [FoodGroup::Protein]];
         // Le terme le plus long gagne : vert, c'est un légume.
         yield 'haricots verts' => ['Haricots verts', [FoodGroup::Vegetable]];
         yield 'haricots rouges' => ['Haricots rouges en conserve', [FoodGroup::Starch, FoodGroup::Protein]];
