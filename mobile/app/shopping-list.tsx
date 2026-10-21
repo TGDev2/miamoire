@@ -15,6 +15,7 @@ import {
   Loader,
   SectionTitle,
 } from '../src/components/ui';
+import { useShoppingSession } from '../src/shopping/ShoppingSessionContext';
 import { colors, font, spacing, text } from '../src/theme';
 
 /**
@@ -24,6 +25,7 @@ import { colors, font, spacing, text } from '../src/theme';
  */
 export default function ShoppingListScreen() {
   const router = useRouter();
+  const { addListLines } = useShoppingSession();
   const [reference, setReference] = useState<Reference | null>(null);
   const [items, setItems] = useState<ShoppingListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +115,12 @@ export default function ShoppingListScreen() {
   const toBuy = items.filter((item) => !item.checked);
   const bought = items.filter((item) => item.checked);
 
+  /** What was ticked in the store is what came home: it goes to the return, where the server fills the rest. */
+  function addBoughtToReturn() {
+    addListLines(bought);
+    router.push('/shopping-review');
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <ErrorBanner message={error} />
@@ -151,6 +159,14 @@ export default function ShoppingListScreen() {
               {bought.map((item) => (
                 <ListRow key={item.id} item={item} busy={busyId === item.id} onToggle={toggle} onRemove={remove} />
               ))}
+              <Button
+                label={`Ajouter au retour (${bought.length})`}
+                variant="secondary"
+                icon="basket-outline"
+                onPress={addBoughtToReturn}
+                hint="Ouvre le retour de courses avec ces lignes déjà remplies"
+                style={styles.returnButton}
+              />
             </>
           ) : null}
         </>
@@ -235,6 +251,7 @@ const styles = StyleSheet.create({
   container: { padding: spacing.xl, paddingBottom: spacing.xxl * 2 },
   flex: { flex: 1 },
   advisorButton: { marginBottom: spacing.sm },
+  returnButton: { marginTop: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   unitLabel: { ...text.label, marginBottom: spacing.sm },
   addButton: { marginTop: spacing.sm, marginBottom: spacing.lg },

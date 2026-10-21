@@ -6,6 +6,11 @@ import type {
   DietaryExclusion,
   FoodNature,
   FoodProfile,
+  GroceryReturnConfirmLineInput,
+  GroceryReturnConfirmResult,
+  GroceryReturnLineError,
+  GroceryReturnLineInput,
+  GroceryReturnResolvedLine,
   Household,
   HouseholdWithKey,
   InventorySummary,
@@ -61,9 +66,26 @@ export class ApiError extends Error {
     public readonly status: number,
     /** A machine-readable reason, when the API gives one (`variant_collision`). */
     public readonly code: string | null = null,
+    /** The whole JSON body of the refusal, for the few callers that need more than a message. */
+    public readonly details: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
+  }
+
+  /**
+   * The per-line messages of a refused batch (`422` on the grocery return):
+   * each goes next to its line. Empty for any other failure.
+   */
+  get lineErrors(): GroceryReturnLineError[] {
+    const lines = this.details?.lines;
+    if (!Array.isArray(lines)) return [];
+
+    return lines.flatMap((entry: unknown) =>
+      entry && typeof entry === 'object' && 'lineKey' in entry && 'message' in entry
+        ? [{ lineKey: String(entry.lineKey), message: String(entry.message) }]
+        : [],
+    );
   }
 
   /** L'utilisateur a renoncé : aucun écran n'a de message à en tirer. */
@@ -214,7 +236,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         ? String((payload as { code: unknown }).code)
         : null;
 
-    throw new ApiError(message, response.status, code);
+    const details = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
+
+    throw new ApiError(message, response.status, code, details);
   }
 
   return payload as T;
@@ -723,6 +747,28 @@ export const api = {
 
   deleteShoppingListItem: (id: string) =>
     request<{ removed: boolean }>(`/shopping-list/${id}`, { method: 'DELETE' }),
+
+  /**
+   * The basket of a grocery return, filled by the server in one call: habits,
+   * catalog, estimated date, storage, cut, nature — and at most one decision
+   * per line. Writes nothing, like the recipe import: it can be called again
+   * for one line after a name is typed.
+   */
+  resolveGroceryReturn: (lines: GroceryReturnLineInput[]) =>
+    request<{ lines: GroceryReturnResolvedLine[] }>('/grocery-returns/resolve', { method: 'POST', body: { lines } }),
+
+  /**
+   * Writes the whole return as one atomic operation: every lot, the matched
+   * list lines removed, in one transaction. `operationKey` is stable for the
+   * basket: a replay with the same body answers `replayed: true` and writes
+   * nothing twice. A `422` refuses everything and names each line in
+   * `ApiError.lineErrors`; the key stays reusable.
+   */
+  confirmGroceryReturn: (lines: GroceryReturnConfirmLineInput[], operationKey: string) =>
+    request<GroceryReturnConfirmResult>('/grocery-returns/confirm', {
+      method: 'POST',
+      body: { operationKey, lines },
+    }),
 
   /**
    * « Qu'est-ce que je ne dois surtout pas racheter ? » — un petit nombre de

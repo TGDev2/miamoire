@@ -24,6 +24,7 @@ import {
 import { deadlineOf } from '../../src/deadline';
 import { useEnterAnimation, useReducedMotion } from '../../src/motion';
 import { resyncExpiryAlerts } from '../../src/notifications/useExpiryAlerts';
+import { useShoppingSession } from '../../src/shopping/ShoppingSessionContext';
 import { colors, deadlineSentence, spacing, text, thermalFor, type ThermalLevel } from '../../src/theme';
 
 type LoadState<T> =
@@ -48,6 +49,8 @@ export default function TodayScreen() {
   const topInset = useTopInset();
 
   const { commitWithUndo } = useFeedback();
+  /** A return scanned and not yet put away waits on the phone: it is said here, where the day starts. */
+  const pendingReturn = useShoppingSession().lines.length;
 
   const [urgent, setUrgent] = useState<LoadState<SaveTodayCandidate[]>>({ status: 'loading' });
   const [review, setReview] = useState<LoadState<number>>({ status: 'loading' });
@@ -311,6 +314,14 @@ export default function TodayScreen() {
           subtitle="Retirer une quantité du stock"
           onPress={() => router.push('/quick-consume')}
         />
+        {pendingReturn > 0 ? (
+          <Row
+            icon="basket-outline"
+            label={`Retour en attente · ${pendingReturn} produit${pendingReturn > 1 ? 's' : ''}`}
+            subtitle="Reprendre le retour de courses là où il en était"
+            onPress={() => router.push('/shopping-review')}
+          />
+        ) : null}
         <Row
           icon="barcode-scan"
           label="Enregistrer un retour de courses"

@@ -522,6 +522,73 @@ PostgreSQL peut alors interrompre l'une des deux (interblocage, erreur 500). Ell
 n'a rien écrit ; l'application abandonne la clé sur toute erreur qui n'est pas une
 panne réseau, et le geste se refait aussitôt.
 
+## The grocery return: a basket the server fills, one tap writes
+
+Putting groceries away used to be a form: every scanned line had to be
+completed by hand on one long screen (date, place, package), then each line
+was written by its own request. Fifteen known products cost fifty taps. The
+return is now a draft that the household confirms, in three moves.
+
+**The basket stays on the phone** (`ShoppingSessionContext`, persisted), as
+before: it survives a killed app, and nothing on the server has to exist for a
+trip that is still in the bags. The scanner, the manual line and the shopping
+list ("Ajouter au retour" on the checked lines) all feed it.
+
+**`POST /grocery-returns/resolve` fills what is empty and never overrides
+what was given.** For each line it finds the household's food (the scanned
+product's variant, else the list line's variant, else the one variant that
+matches the typed name in the same unit family and state), then fills the
+name, brand, unit, package, place, nature, cut and date in this order of
+trust: the household's own last purchase of this very product, the catalogue,
+the lexicons, the defaults. Every filled value says where it comes from
+(`provenance.storage`, `.package`, `.date`: `given`, `habit`, `catalog`,
+`default`, `printed`, `estimated`, `none`), and the screen prints it
+("comme d'habitude", "date estimée"). **Every line gets a date**: a printed
+one when the person typed it, otherwise an estimate flagged as such, with its
+explanation; `estimateExpiration: false` keeps a cleared date cleared. The
+place of a food nobody bought before comes from the shelf-life lexicon's
+first location for that food (milk: fridge, rice: pantry), so a carton of
+milk no longer defaults to the cupboard. Nothing is written.
+
+**A line asks at most one question**, and only when the answer changes what
+is written (`GroceryReturnDecider`):
+
+| `decision` | When | What the screen shows |
+| --- | --- | --- |
+| `unknown_food` | no name at all (an unknown barcode) | the name field |
+| `unit_mismatch` | the household counts this food in another unit family | the units of that family |
+| `fridge_or_freezer` | a protein headed to the fridge with no habit and no instruction: the freezer stops the clock | two chips |
+| `short_date` | a packaged food kept in the fridge whose estimate is ten days or less: the printed date decides the FEFO order | the estimate, and a button for the printed date |
+
+Everything else is "rangé d'avance": one row per line, expandable. Fresh
+produce is never asked for a printed date (it has none), the pantry has
+enough slack, and a habit is an answer.
+
+**`POST /grocery-returns/confirm` writes the whole return as one operation**
+(`StockOperationType::GroceryReturn`): every lot through the same
+`StockIntake` as `POST /stock-items`, the matched shopping-list lines removed
+in the same transaction, one `StockMovement` "Retour de courses" per lot
+linked to the operation, the purchase habit remembered per food. A replay of
+the same key returns the same answer with `replayed: true`. Validation runs
+**before** the guard reserves the key: a line at fault answers 422 with every
+faulty `lineKey` and its message, nothing is written, and the corrected
+return is sent again with the same key at once. Lines still "à préciser" are
+not sent; they stay in the basket.
+
+```json
+{ "operationKey": "…", "lines": [ { "lineKey": "1", "barcode": "…", "name": "Pâte à tartiner",
+  "unit": "g", "quantityPerPackage": 400, "numberOfPackages": 1, "storageLocation": "pantry",
+  "estimateExpiration": true, "shoppingListItemId": null, "batches": null } ] }
+```
+
+What is deliberately not there: a server-side return shared between members
+(the basket is per phone, as before; a hand-off is a later evolution), a bulk
+revert (each lot archives on its own, as for "Refaire l'inventaire"), and any
+write without a tap — the model never touches the inventory, and neither does
+a resolution. The receipt, the dictation and the share intakes described in
+`tasks/grocery-return.md` are the next phases; they feed the same basket and
+the same two routes.
+
 ## Démarrer
 
 ### Prérequis
@@ -970,6 +1037,8 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `GET` | `/reference` | Unités, emplacements, catégories, équipements |
 | `GET` | `/products/barcode/{barcode}` | Résolution d'un code-barres (cache puis Open Food Facts) |
 | `GET` | `/products/shelf-life` | Durée de conservation estimée d'un aliment, et sa justification |
+| `POST` | `/grocery-returns/resolve` | Fills the empty fields of a basket's lines from habits, catalogue and lexicons, with provenance and at most one question per line. No write |
+| `POST` | `/grocery-returns/confirm` | Every lot of the return in one idempotent operation; matched shopping-list lines removed in the same transaction |
 | `POST` | `/products` | Contribue une fiche au catalogue — **code-barres obligatoire** |
 | `GET` `POST` | `/stock-items` | Inventaire filtrable ; ajout d'un ou plusieurs lots (`batches`) |
 | `GET` `PATCH` | `/stock-items/{id}` | Fiche d'un lot et ses lots frères |

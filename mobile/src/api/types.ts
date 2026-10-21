@@ -798,3 +798,129 @@ export interface ConfirmationResponse {
     }>;
   }>;
 }
+
+/**
+ * The grocery return: the basket resolved by the server in one call, then
+ * written in one atomic operation (see `api.resolveGroceryReturn` and
+ * `api.confirmGroceryReturn`).
+ */
+export type GroceryReturnStatus = 'ready' | 'needs_decision' | 'unknown';
+
+/**
+ * The one question a resolved line may ask. `none`: nothing to decide.
+ * `unknown_food`: no name, the user must type one. `unit_mismatch`: the
+ * household counts this food in another unit family. `fridge_or_freezer`: a
+ * protein with no habit. `short_date`: a chilled packaged food whose estimate
+ * is short — the printed date decides the FEFO order.
+ */
+export type GroceryReturnDecision = 'none' | 'unknown_food' | 'unit_mismatch' | 'fridge_or_freezer' | 'short_date';
+
+/** Where each filled field comes from, shown as a caption, never as a colour. */
+export interface GroceryReturnProvenance {
+  storage: 'given' | 'habit' | 'default';
+  package: 'given' | 'habit' | 'catalog' | 'list' | 'none';
+  date: 'printed' | 'estimated' | 'none';
+}
+
+/**
+ * One basket line as sent to `resolve`. Every field the user has not set by
+ * hand is `null`: the server fills only nulls and never overrides a given
+ * value. `name` may be "" (unknown). `estimateExpiration`: `null` lets the
+ * server estimate, `false` means the user cleared the date, `true` asks for
+ * an estimate.
+ */
+export interface GroceryReturnLineInput {
+  lineKey: string;
+  barcode: string | null;
+  productId: string | null;
+  shoppingListItemId: string | null;
+  name: string;
+  brand: string | null;
+  unit: Unit | null;
+  quantityPerPackage: number | null;
+  numberOfPackages: number;
+  storageLocation: StorageLocation | null;
+  traits: ProductTraitValue[] | null;
+  cut: ProductCutValue | null;
+  nature: FoodNature | null;
+  expirationDate: string | null;
+  estimateExpiration: boolean | null;
+}
+
+export interface GroceryReturnResolvedLine {
+  lineKey: string;
+  status: GroceryReturnStatus;
+  decision: GroceryReturnDecision;
+  /** The French question to display, e.g. « Frigo ou congélateur ? ». */
+  decisionLabel: string | null;
+  name: string;
+  brand: string | null;
+  productId: string | null;
+  barcode: string | null;
+  /** The household food when known. */
+  variant: ProductVariant | null;
+  /** The matched shopping list line. */
+  shoppingListItem: ShoppingListItem | null;
+  unit: Unit;
+  unitFamily: UnitFamily;
+  /** `null` when nothing is known: the user must type it. */
+  quantityPerPackage: number | null;
+  numberOfPackages: number;
+  storageLocation: StorageLocation;
+  nature: FoodNature;
+  natureLabel: string;
+  traits: ProductTraitValue[];
+  cut: ProductCutValue | null;
+  plausibleCuts: ProductCutValue[];
+  cutMatters: boolean;
+  /** The estimate when `expirationIsEstimated`, else the printed date the user gave; `null` when cleared. */
+  expirationDate: string | null;
+  expirationIsEstimated: boolean;
+  expirationExplanation: string | null;
+  provenance: GroceryReturnProvenance;
+}
+
+export interface GroceryReturnConfirmBatchInput {
+  numberOfPackages: number;
+  expirationDate: string | null;
+  estimateExpiration: boolean;
+}
+
+/**
+ * One line as written by `confirm`. `expirationDate` only for a printed date
+ * (then `estimateExpiration: false`); `estimateExpiration: true` and no date
+ * for an estimated one; both off when the user cleared the date.
+ */
+export interface GroceryReturnConfirmLineInput {
+  lineKey: string;
+  barcode: string | null;
+  productId: string | null;
+  shoppingListItemId: string | null;
+  name: string;
+  brand: string | null;
+  unit: Unit;
+  quantityPerPackage: number;
+  numberOfPackages: number;
+  storageLocation: StorageLocation;
+  traits: ProductTraitValue[] | null;
+  nature: FoodNature | null;
+  cut: ProductCutValue | null;
+  note: string | null;
+  expirationDate: string | null;
+  estimateExpiration: boolean;
+  /** One entry per expiration date, or `null` for a single lot. */
+  batches: GroceryReturnConfirmBatchInput[] | null;
+}
+
+export interface GroceryReturnConfirmResult {
+  items: StockItem[];
+  removedShoppingListItemIds: string[];
+  /** The server recognised an operation already applied: same payload, nothing written twice. */
+  replayed?: boolean;
+}
+
+/** One refused line of a `422`: nothing was written, the message goes next to the line. */
+export interface GroceryReturnLineError {
+  lineKey: string;
+  message: string;
+}

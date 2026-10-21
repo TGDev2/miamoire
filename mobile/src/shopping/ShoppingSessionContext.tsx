@@ -3,6 +3,10 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 
 import { generateOperationKey } from '../api/client';
 import type {
+  FoodNature,
+  GroceryReturnDecision,
+  GroceryReturnProvenance,
+  GroceryReturnStatus,
   Product,
   ProductCutValue,
   ProductTraitValue,
@@ -10,6 +14,7 @@ import type {
   ShoppingListItem,
   StorageLocation,
   Unit,
+  UnitFamily,
 } from '../api/types';
 import { useSession } from '../session/SessionContext';
 
@@ -17,6 +22,10 @@ import { useSession } from '../session/SessionContext';
  * Un rechargement, un plantage ou la fermeture de l'application par Android
  * pendant les courses ne doit pas effacer ce qui a déjà été scanné : c'est
  * précisément le geste que ce panier existe pour éviter de ressaisir.
+ *
+ * Still version 1: every field added since (`touched`, `resolution`,
+ * `decided`, the return key) is optional with a tolerant default, so a basket
+ * saved before them loads as it is.
  */
 const SCHEMA_VERSION = 1;
 
@@ -27,8 +36,8 @@ function storageKey(householdId: string): string {
 interface PersistedSession {
   schemaVersion: number;
   lines: ShoppingSessionLine[];
-  /** `Map` ne se sérialise pas telle quelle : conservée comme objet simple. */
-  operationKeys: Record<string, string>;
+  /** One key for the whole basket; `null` until the first confirmation attempt. */
+  returnOperationKey?: string | null;
 }
 
 /**
@@ -44,10 +53,37 @@ export interface ShoppingSessionBatch {
 }
 
 /**
+ * The fields the user can set by hand on the review. The resolution sends
+ * `null` for the others and never overrides one of these once touched.
+ */
+export type ResolvableField = 'name' | 'unit' | 'quantityPerPackage' | 'storageLocation' | 'cut' | 'expirationDate';
+
+/**
+ * What the server answered for the line (see `GroceryReturnResolvedLine`),
+ * kept apart from the editable values: the line shows and sends its own
+ * fields, the resolution only says what they mean and what is still asked.
+ */
+export interface ShoppingSessionResolution {
+  status: GroceryReturnStatus;
+  decision: GroceryReturnDecision;
+  decisionLabel: string | null;
+  variantId: string | null;
+  nature: FoodNature | null;
+  unitFamily: UnitFamily;
+  plausibleCuts: ProductCutValue[];
+  cutMatters: boolean;
+  /** The server's estimate, shown as « date estimée »; `null` when it could not estimate or a printed date was given. */
+  estimatedExpirationDate: string | null;
+  expirationExplanation: string | null;
+  provenance: GroceryReturnProvenance;
+}
+
+/**
  * Une ligne du panier de « Retour de courses » — un produit distinct, pas
  * encore écrit en stock. Préremplie depuis les habitudes d'achat du foyer
  * (`householdVariant`) quand elles existent, sinon depuis le catalogue,
- * sinon laissée à saisir (code-barres inconnu).
+ * sinon laissée à saisir (code-barres inconnu). Then filled by the server's
+ * resolution, which never overrides a field the user `touched`.
  */
 export interface ShoppingSessionLine {
   id: string;
@@ -67,12 +103,6 @@ export interface ShoppingSessionLine {
    * et modifiable sur l'écran de validation.
    */
   cut: ProductCutValue | null;
-  /**
-   * The cut was chosen — by hand, or by a past purchase of this very product:
-   * a later suggestion must not overwrite it. Optional so that a basket saved
-   * before this field existed still loads.
-   */
-  cutTouched?: boolean;
   /** Aucune habitude d'achat connue pour ce produit : à confirmer. */
   isNew: boolean;
   /** Code-barres inconnu du catalogue partagé : le nom reste à saisir. */
@@ -86,12 +116,19 @@ export interface ShoppingSessionLine {
    */
   requestedQuantity: number | null;
   requestedUnit: Unit | null;
+  /** A printed date, typed by the user. The server's estimate lives in `resolution`. */
   expirationDate: string | null;
   estimateExpiration: boolean;
   /** Renseigné pour répartir les exemplaires entre plusieurs dates ; sinon la ligne garde une seule date. */
   batches: ShoppingSessionBatch[] | null;
   /** Ce produit était attendu sur la liste de courses : retiré de la liste à la validation. */
   shoppingListItemId: string | null;
+  /** The fields set by hand, in the order they were touched. Absent on a basket saved before it existed. */
+  touched?: ResolvableField[];
+  /** The last answer of `resolve` for this line; `null` or absent until the first one. */
+  resolution?: ShoppingSessionResolution | null;
+  /** The current decision was answered on the screen (a chip, « Garder l'estimation »): the line is ready. */
+  decided?: boolean;
 }
 
 interface ShoppingLookup {
@@ -100,14 +137,55 @@ interface ShoppingLookup {
   shoppingListItem?: ShoppingListItem | null;
 }
 
+/** A patch, or a function of the line as it is when the update applies — never of the render that asked (lesson 9). */
+export type ShoppingLinePatch =
+  | Partial<ShoppingSessionLine>
+  | ((line: ShoppingSessionLine) => Partial<ShoppingSessionLine>);
+
 let nextLineId = 1;
+
+/** Every field at its default: a line to complete by hand. */
+function newLine(overrides: Partial<ShoppingSessionLine>): ShoppingSessionLine {
+  return {
+    id: String(nextLineId++),
+    barcode: null,
+    productId: null,
+    name: '',
+    brand: null,
+    unit: 'g',
+    quantityPerPackage: '',
+    numberOfPackages: 1,
+    storageLocation: 'pantry',
+    traits: [],
+    cut: null,
+    isNew: true,
+    isUnknown: false,
+    usualPackageSize: null,
+    requestedQuantity: null,
+    requestedUnit: null,
+    expirationDate: null,
+    estimateExpiration: false,
+    batches: null,
+    shoppingListItemId: null,
+    touched: [],
+    resolution: null,
+    decided: false,
+    ...overrides,
+  };
+}
 
 interface ShoppingSessionState {
   lines: ShoppingSessionLine[];
   /** Une ligne par produit distinct : un code déjà présent incrémente son compte plutôt que d'en dupliquer une. */
   addScannedLine: (barcode: string, lookup: ShoppingLookup) => void;
   addManualLine: () => void;
-  updateLine: (id: string, patch: Partial<ShoppingSessionLine>) => void;
+  /**
+   * One line per shopping list item — its label, its unit, nothing else: the
+   * server resolves the rest from the list line. An item already in the
+   * basket is skipped.
+   */
+  addListLines: (items: ShoppingListItem[]) => void;
+  updateLine: (id: string, patch: ShoppingLinePatch) => void;
   removeLine: (id: string) => void;
   /**
    * Défait exactement le dernier `addScannedLine` de ce code-barres : le compte
@@ -119,8 +197,18 @@ interface ShoppingSessionState {
    */
   undoScan: (barcode: string) => void;
   clear: () => void;
-  /** Clé d'opération stable par ligne, tant qu'elle n'a pas été validée. */
-  operationKeyFor: (lineId: string) => string;
+  /**
+   * The key of the whole basket's confirmation, stable until something is
+   * written: a replay after a lost answer is recognised, a `422` or a
+   * transport failure keeps it. Persisted with the basket.
+   */
+  returnOperationKey: () => string;
+  /**
+   * The lines a confirmation just wrote leave the basket, and the next attempt
+   * gets a new key — the lines left to decide are another return. The basket
+   * is cleared when nothing remains.
+   */
+  completeReturn: (lineIds: string[]) => void;
 }
 
 const ShoppingSessionContext = createContext<ShoppingSessionState | null>(null);
@@ -130,7 +218,9 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   const householdId = household?.id ?? null;
 
   const [lines, setLines] = useState<ShoppingSessionLine[]>([]);
-  const operationKeys = useRef(new Map<string, string>());
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
+  const returnKey = useRef<string | null>(null);
   /**
    * Faux tant que la restauration asynchrone n'a pas résolu : sans ce garde,
    * l'effet de sauvegarde écrirait un panier vide par-dessus celui déjà
@@ -141,10 +231,17 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   const persist = useCallback(
     (currentLines: ShoppingSessionLine[]) => {
       if (!householdId || !hydrated.current) return;
+
+      // An empty basket has nothing to restore: the entry goes, key included.
+      if (0 === currentLines.length) {
+        AsyncStorage.removeItem(storageKey(householdId)).catch(() => undefined);
+        return;
+      }
+
       const payload: PersistedSession = {
         schemaVersion: SCHEMA_VERSION,
         lines: currentLines,
-        operationKeys: Object.fromEntries(operationKeys.current),
+        returnOperationKey: returnKey.current,
       };
       AsyncStorage.setItem(storageKey(householdId), JSON.stringify(payload)).catch(() => undefined);
     },
@@ -157,7 +254,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
 
     if (!householdId) {
       setLines([]);
-      operationKeys.current.clear();
+      returnKey.current = null;
       return;
     }
 
@@ -171,7 +268,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         if (parsed.schemaVersion !== SCHEMA_VERSION) return;
 
         setLines(parsed.lines);
-        operationKeys.current = new Map(Object.entries(parsed.operationKeys ?? {}));
+        returnKey.current = parsed.returnOperationKey ?? null;
         nextLineId = Math.max(nextLineId, ...parsed.lines.map((line) => Number(line.id) + 1), 1);
       })
       .catch(() => undefined)
@@ -183,6 +280,13 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
       cancelled = true;
     };
   }, [householdId]);
+
+  // A basket that became empty — last line removed, last scan undone — is
+  // over: the next one is a new operation. Before the save below, so that the
+  // reset is what gets persisted.
+  useEffect(() => {
+    if (hydrated.current && 0 === lines.length) returnKey.current = null;
+  }, [lines]);
 
   // Sauvegarde après chaque modification — une fois la restauration terminée.
   useEffect(() => {
@@ -199,12 +303,16 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
       }
 
       const { product, householdVariant, shoppingListItem } = lookup;
+      const fromList = {
+        requestedQuantity: shoppingListItem?.quantity ?? null,
+        requestedUnit: shoppingListItem?.unit ?? null,
+        shoppingListItemId: shoppingListItem?.id ?? null,
+      };
 
       if (householdVariant) {
         return [
           ...current,
-          {
-            id: String(nextLineId++),
+          newLine({
             barcode,
             productId: product?.id ?? null,
             name: householdVariant.name,
@@ -213,119 +321,71 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
             // catalogue — jamais d'une quantité demandée par la liste, qui est
             // un besoin (« 500 g de farine »), pas la taille du paquet acheté.
             unit: householdVariant.usualPackageUnit ?? product?.packageUnit ?? 'g',
-            quantityPerPackage: String(
-              householdVariant.usualPackageSize ?? product?.packageQuantity ?? '',
-            ),
-            numberOfPackages: 1,
+            quantityPerPackage: String(householdVariant.usualPackageSize ?? product?.packageQuantity ?? ''),
             storageLocation: householdVariant.usualStorageLocation ?? 'pantry',
             traits: householdVariant.traits,
             cut: householdVariant.cut,
-            cutTouched: null !== householdVariant.cut,
             isNew: false,
-            isUnknown: false,
             usualPackageSize: householdVariant.usualPackageSize,
-            requestedQuantity: shoppingListItem?.quantity ?? null,
-            requestedUnit: shoppingListItem?.unit ?? null,
-            expirationDate: null,
-            estimateExpiration: false,
-            batches: null,
-            shoppingListItemId: shoppingListItem?.id ?? null,
-          },
+            ...fromList,
+          }),
         ];
       }
 
       if (product) {
         return [
           ...current,
-          {
-            id: String(nextLineId++),
+          newLine({
             barcode,
             productId: product.id,
             name: product.name,
             brand: product.brand,
             unit: product.packageUnit ?? 'g',
             quantityPerPackage: product.packageQuantity !== null ? String(product.packageQuantity) : '',
-            numberOfPackages: 1,
-            storageLocation: 'pantry',
             traits: product.traits,
-            cut: null,
-            isNew: true,
-            isUnknown: false,
-            usualPackageSize: null,
-            requestedQuantity: shoppingListItem?.quantity ?? null,
-            requestedUnit: shoppingListItem?.unit ?? null,
-            expirationDate: null,
-            estimateExpiration: false,
-            batches: null,
-            shoppingListItemId: shoppingListItem?.id ?? null,
-          },
+            ...fromList,
+          }),
         ];
       }
 
       // Code-barres inconnu du catalogue partagé : ligne à compléter manuellement.
-      return [
-        ...current,
-        {
-          id: String(nextLineId++),
-          barcode,
-          productId: null,
-          name: '',
-          brand: null,
-          unit: 'g',
-          quantityPerPackage: '',
-          numberOfPackages: 1,
-          storageLocation: 'pantry',
-          traits: [],
-          cut: null,
-          isNew: true,
-          isUnknown: true,
-          usualPackageSize: null,
-          requestedQuantity: shoppingListItem?.quantity ?? null,
-          requestedUnit: shoppingListItem?.unit ?? null,
-          expirationDate: null,
-          estimateExpiration: false,
-          batches: null,
-          shoppingListItemId: shoppingListItem?.id ?? null,
-        },
-      ];
+      return [...current, newLine({ barcode, isUnknown: true, ...fromList })];
     });
   }, []);
 
   const addManualLine = useCallback(() => {
-    setLines((current) => [
-      ...current,
-      {
-        id: String(nextLineId++),
-        barcode: null,
-        productId: null,
-        name: '',
-        brand: null,
-        unit: 'g',
-        quantityPerPackage: '',
-        numberOfPackages: 1,
-        storageLocation: 'pantry',
-        traits: [],
-        cut: null,
-        isNew: true,
-        isUnknown: true,
-        usualPackageSize: null,
-        requestedQuantity: null,
-        requestedUnit: null,
-        expirationDate: null,
-        estimateExpiration: false,
-        batches: null,
-        shoppingListItemId: null,
-      },
-    ]);
+    setLines((current) => [...current, newLine({ isUnknown: true })]);
   }, []);
 
-  const updateLine = useCallback((id: string, patch: Partial<ShoppingSessionLine>) => {
-    setLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)));
+  const addListLines = useCallback((items: ShoppingListItem[]) => {
+    setLines((current) => {
+      const present = new Set(current.map((line) => line.shoppingListItemId));
+      const added = items
+        .filter((item) => !present.has(item.id))
+        .map((item) =>
+          newLine({
+            name: item.label,
+            unit: item.unit,
+            requestedQuantity: item.quantity,
+            requestedUnit: item.unit,
+            shoppingListItemId: item.id,
+          }),
+        );
+
+      return 0 === added.length ? current : [...current, ...added];
+    });
+  }, []);
+
+  const updateLine = useCallback((id: string, patch: ShoppingLinePatch) => {
+    setLines((current) =>
+      current.map((line) =>
+        line.id === id ? { ...line, ...('function' === typeof patch ? patch(line) : patch) } : line,
+      ),
+    );
   }, []);
 
   const removeLine = useCallback((id: string) => {
     setLines((current) => current.filter((line) => line.id !== id));
-    operationKeys.current.delete(id);
   }, []);
 
   const undoScan = useCallback((barcode: string) => {
@@ -339,53 +399,56 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         );
       }
 
-      operationKeys.current.delete(line.id);
       return current.filter((entry) => entry.id !== line.id);
     });
   }, []);
 
   const clear = useCallback(() => {
+    returnKey.current = null;
+    // Abandon explicite : the save effect removes the entry of an empty basket.
     setLines([]);
-    operationKeys.current.clear();
-    // Abandon explicite : rien à restaurer au prochain lancement.
-    if (householdId) AsyncStorage.removeItem(storageKey(householdId)).catch(() => undefined);
-  }, [householdId]);
+  }, []);
 
-  const operationKeyFor = useCallback(
-    (lineId: string) => {
-      const existing = operationKeys.current.get(lineId);
-      if (existing) return existing;
-
-      const key = generateOperationKey();
-      operationKeys.current.set(lineId, key);
+  const returnOperationKey = useCallback(() => {
+    if (null === returnKey.current) {
+      returnKey.current = generateOperationKey();
       // Ne modifie pas `lines` : sans cet appel explicite, la clé fraîchement
       // créée ne serait jamais persistée avant la prochaine modification du panier.
-      persist(lines);
-      return key;
-    },
-    [lines, persist],
-  );
+      persist(linesRef.current);
+    }
+
+    return returnKey.current;
+  }, [persist]);
+
+  const completeReturn = useCallback((lineIds: string[]) => {
+    returnKey.current = null;
+    setLines((current) => current.filter((line) => !lineIds.includes(line.id)));
+  }, []);
 
   const value = useMemo(
     () => ({
       lines,
       addScannedLine,
       addManualLine,
+      addListLines,
       updateLine,
       removeLine,
       undoScan,
       clear,
-      operationKeyFor,
+      returnOperationKey,
+      completeReturn,
     }),
     [
       lines,
       addScannedLine,
       addManualLine,
+      addListLines,
       updateLine,
       removeLine,
       undoScan,
       clear,
-      operationKeyFor,
+      returnOperationKey,
+      completeReturn,
     ],
   );
 
