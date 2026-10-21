@@ -5,8 +5,11 @@ import {
   confirmPayloadFor,
   dateIntentOf,
   groupLines,
+  linesFromReceipt,
+  mergeIgnored,
   mergeResolved,
   resolvePayloadFor,
+  sameIgnoredLine,
   touch,
 } from './triage.ts';
 
@@ -311,4 +314,157 @@ test('the matched list line and the household habit are folded into the line', (
 test('touch adds a field once', () => {
   assert.deepEqual(touch(line(), 'name'), ['name']);
   assert.deepEqual(touch(line({ touched: ['name'] }), 'name', 'unit'), ['name', 'unit']);
+});
+
+test('a line held by a focused field keeps its group whatever its state', () => {
+  // Typing « 5 » of « 500 » made this one ready: it must not move under the finger.
+  const typed = line({ id: '1', quantityPerPackage: '5', resolution: resolution() });
+  // Backspacing through a quantity in a ready row's editor: not ready any more, but still being edited.
+  const emptied = line({ id: '2', quantityPerPackage: '', resolution: resolution() });
+
+  const free = groupLines([typed, emptied]);
+  assert.deepEqual(free.ready.map((entry) => entry.id), ['1']);
+  assert.deepEqual(free.toDecide.map((entry) => entry.id), ['2']);
+
+  const held = groupLines([typed, emptied], { hold: { 1: 'toDecide', 2: 'ready' } });
+  assert.deepEqual(held.toDecide.map((entry) => entry.id), ['1']);
+  assert.deepEqual(held.ready.map((entry) => entry.id), ['2']);
+
+  // A hold on a line that is not there changes nothing.
+  assert.deepEqual(groupLines([typed], { hold: { 9: 'toDecide' } }).ready.map((entry) => entry.id), ['1']);
+});
+
+test('resolve names the learnt food until the line is renamed', () => {
+  assert.equal(resolvePayloadFor(line()).variantId, null);
+  assert.equal(resolvePayloadFor(line({ variantId: 'variant-1' })).variantId, 'variant-1');
+
+  const renamed = line({ variantId: 'variant-1', name: 'Lait entier', touched: ['name'] });
+  assert.equal(resolvePayloadFor(renamed).variantId, null);
+  assert.equal(resolvePayloadFor(renamed).name, 'Lait entier');
+});
+
+const PRINTED = { store: 'E.LECLERC', rawLabel: 'LAIT 1/2 ECR 6X1L', lineTotal: 5.4 };
+
+test('confirm sends the printed label of a receipt line, nothing for the others', () => {
+  const printed = confirmPayloadFor(line({ receipt: PRINTED, resolution: resolution() }));
+
+  assert.deepEqual(printed.receipt, { store: 'E.LECLERC', rawLabel: 'LAIT 1/2 ECR 6X1L' });
+  assert.equal(confirmPayloadFor(ready()).receipt, null);
+});
+
+/** One food of a receipt, as `api.readReceipt` answers it: a resolved line plus its printed line. */
+function receiptLine(overrides = {}, receipt = {}) {
+  return {
+    ...resolved({ lineKey: 'receipt-0', barcode: null, productId: null, ...overrides }),
+    receipt: { ...PRINTED, ...receipt },
+  };
+}
+
+function reading(overrides = {}) {
+  return { store: 'E.LECLERC', receiptDate: '2026-10-20', total: 42.5, lines: [], ignored: [], ...overrides };
+}
+
+/** The basket's factory, as `newLine` does it: every field at its default, then the overrides. */
+let minted = 0;
+const mint = (overrides) =>
+  line({ id: `r${++minted}`, barcode: null, productId: null, name: '', brand: null, quantityPerPackage: '', ...overrides });
+
+test('a receipt becomes basket lines, resolved on arrival', () => {
+  const lines = linesFromReceipt(
+    reading({
+      lines: [
+        receiptLine({
+          name: 'Lait demi-écrémé',
+          brand: null,
+          unit: 'l',
+          unitFamily: 'volume',
+          quantityPerPackage: 1,
+          numberOfPackages: 6,
+          storageLocation: 'fridge',
+          variant: { id: 'variant-7', usualPackageSize: 1 },
+          provenance: { storage: 'habit', package: 'given', date: 'estimated' },
+        }),
+        receiptLine(
+          {
+            lineKey: 'receipt-1',
+            status: 'unknown',
+            decision: 'unknown_food',
+            decisionLabel: 'Quel est cet aliment ?',
+            name: '',
+            quantityPerPackage: null,
+            expirationDate: null,
+            expirationIsEstimated: false,
+            provenance: { storage: 'default', package: 'none', date: 'none' },
+          },
+          { rawLabel: 'PDT 2KG', lineTotal: 3.2 },
+        ),
+      ],
+    }),
+    mint,
+  );
+
+  assert.equal(lines.length, 2);
+  const [milk, unknown] = lines;
+
+  assert.equal(milk.name, 'Lait demi-écrémé');
+  assert.equal(milk.unit, 'l');
+  assert.equal(milk.quantityPerPackage, '1');
+  assert.equal(milk.numberOfPackages, 6);
+  assert.equal(milk.storageLocation, 'fridge');
+  assert.equal(milk.variantId, 'variant-7');
+  assert.equal(milk.isNew, false);
+  assert.equal(milk.usualPackageSize, 1);
+  assert.deepEqual(milk.receipt, PRINTED);
+  // The receipt printed the quantity and the unit: a later resolve keeps them.
+  assert.deepEqual(milk.touched, ['quantityPerPackage', 'unit']);
+  assert.equal(milk.resolution.decision, 'none');
+  assert.equal(milk.resolution.variantId, 'variant-7');
+  assert.equal(milk.resolution.estimatedExpirationDate, '2026-11-05');
+  assert.equal(resolvePayloadFor(milk).quantityPerPackage, 1);
+  assert.equal(resolvePayloadFor(milk).unit, 'l');
+  assert.equal(resolvePayloadFor(milk).variantId, 'variant-7');
+
+  assert.equal(unknown.name, '');
+  assert.equal(unknown.quantityPerPackage, '');
+  assert.deepEqual(unknown.touched, []);
+  assert.equal(unknown.isUnknown, true);
+  assert.equal(unknown.isNew, true);
+  assert.equal(unknown.variantId, null);
+  assert.equal(unknown.receipt.rawLabel, 'PDT 2KG');
+  assert.equal(unknown.resolution.decision, 'unknown_food');
+
+  // Straight to their groups: one ready, one asking — no second round trip.
+  const groups = groupLines(lines);
+  assert.deepEqual(groups.ready.map((entry) => entry.id), [milk.id]);
+  assert.deepEqual(groups.toDecide.map((entry) => entry.id), [unknown.id]);
+});
+
+test('a quantity the receipt did not print is not touched: a later resolve may change it', () => {
+  const [guessed] = linesFromReceipt(
+    reading({ lines: [receiptLine({ provenance: { storage: 'default', package: 'catalog', date: 'estimated' } })] }),
+    mint,
+  );
+
+  assert.equal(guessed.quantityPerPackage, '400');
+  assert.deepEqual(guessed.touched, []);
+  assert.equal(resolvePayloadFor(guessed).quantityPerPackage, null);
+  assert.equal(resolvePayloadFor(guessed).unit, null);
+});
+
+test('ignored receipt lines are merged once per shop and label', () => {
+  const batteries = { store: 'E.LECLERC', rawLabel: 'PILES AA X4', expandedName: 'Piles', learned: false };
+
+  const merged = mergeIgnored(
+    [batteries],
+    [
+      { ...batteries, store: 'e.leclerc ', rawLabel: 'piles aa x4', learned: true },
+      { store: 'E.LECLERC', rawLabel: 'SAC CABAS', expandedName: 'Sac', learned: false },
+    ],
+  );
+
+  assert.deepEqual(merged.map((entry) => entry.rawLabel), ['PILES AA X4', 'SAC CABAS']);
+  assert.equal(merged[0].learned, false);
+  assert.equal(sameIgnoredLine(batteries, { store: 'E.LECLERC', rawLabel: 'PILES AA X4' }), true);
+  assert.equal(sameIgnoredLine(batteries, { store: 'CARREFOUR', rawLabel: 'PILES AA X4' }), false);
+  assert.equal(sameIgnoredLine(batteries, { store: null, rawLabel: 'PILES AA X4' }), false);
 });

@@ -2,6 +2,8 @@ import type {
   GroceryReturnConfirmLineInput,
   GroceryReturnLineInput,
   GroceryReturnResolvedLine,
+  ReceiptIgnoredLine,
+  ReceiptReading,
 } from '../api/types';
 import type { ResolvableField, ShoppingSessionLine } from './ShoppingSessionContext';
 
@@ -81,15 +83,33 @@ export function needsDecision(line: ShoppingSessionLine): boolean {
   return 'none' !== line.resolution.decision && true !== line.decided;
 }
 
-export function groupLines(lines: ShoppingSessionLine[]): {
+export type LineGroup = 'toDecide' | 'ready';
+
+export interface GroupOptions {
+  /**
+   * Lines kept in the group they are in, whatever their state, by line id: a
+   * field of theirs has focus. A line that becomes ready at the first digit
+   * of its quantity would otherwise jump to the other group, where its editor
+   * is remounted and the next digits are lost (lesson 43). The move happens
+   * when the field is left.
+   */
+  hold?: Partial<Record<string, LineGroup>>;
+}
+
+export function groupLines(
+  lines: ShoppingSessionLine[],
+  options: GroupOptions = {},
+): {
   toDecide: ShoppingSessionLine[];
   ready: ShoppingSessionLine[];
 } {
+  const hold = options.hold ?? {};
   const toDecide: ShoppingSessionLine[] = [];
   const ready: ShoppingSessionLine[] = [];
 
   for (const line of lines) {
-    (needsDecision(line) ? toDecide : ready).push(line);
+    const group = hold[line.id] ?? (needsDecision(line) ? 'toDecide' : 'ready');
+    ('toDecide' === group ? toDecide : ready).push(line);
   }
 
   return { toDecide, ready };
@@ -121,6 +141,9 @@ export function resolvePayloadFor(line: ShoppingSessionLine): GroceryReturnLineI
     nature: null,
     expirationDate: date?.expirationDate ?? null,
     estimateExpiration: date?.estimateExpiration ?? null,
+    // The food a learnt receipt label named. A name typed by hand says the
+    // line is something else: the identity goes with it, the name decides.
+    variantId: isTouched(line, 'name') ? null : (line.variantId ?? null),
   };
 }
 
@@ -159,6 +182,8 @@ export function confirmPayloadFor(line: ShoppingSessionLine): GroceryReturnConfi
     expirationDate: date.expirationDate,
     estimateExpiration: date.estimateExpiration,
     batches,
+    // The printed line, so that the server learns what this label means here.
+    receipt: line.receipt ? { store: line.receipt.store, rawLabel: line.receipt.rawLabel } : null,
   };
 }
 
@@ -205,4 +230,57 @@ export function mergeResolved(
     },
     decided: 'none' !== resolved.decision && sameDecision && true === line.decided,
   };
+}
+
+/** The basket's own line factory: it owns the ids, this module only fills the fields. */
+export type LineFactory = (overrides: Partial<ShoppingSessionLine>) => ShoppingSessionLine;
+
+/**
+ * The foods of a receipt as basket lines, one per printed line, already
+ * resolved: the server answered for each as `resolve` would, so the line
+ * arrives with its `resolution` and goes straight to its group. Nothing is
+ * marked touched — the person set none of it — except the quantity and the
+ * unit when the receipt printed them: a later resolve must keep them.
+ */
+export function linesFromReceipt(reading: ReceiptReading, newLine: LineFactory): ShoppingSessionLine[] {
+  return reading.lines.map((entry) => {
+    const printed = 'given' === entry.provenance.package && null !== entry.quantityPerPackage;
+    const draft = newLine({
+      barcode: entry.barcode,
+      unit: entry.unit,
+      quantityPerPackage: null === entry.quantityPerPackage ? '' : String(entry.quantityPerPackage),
+      numberOfPackages: entry.numberOfPackages,
+      isUnknown: 'unknown' === entry.status,
+      touched: printed ? ['quantityPerPackage', 'unit'] : [],
+      receipt: entry.receipt,
+      variantId: entry.variant?.id ?? null,
+    });
+
+    return { ...draft, ...mergeResolved(draft, entry) };
+  });
+}
+
+/** The receipt lines set aside, plus these — the same label at the same shop counted once. */
+export function mergeIgnored(current: ReceiptIgnoredLine[], added: ReceiptIgnoredLine[]): ReceiptIgnoredLine[] {
+  const merged = [...current];
+  const seen = new Set(current.map(ignoredKey));
+
+  for (const entry of added) {
+    const key = ignoredKey(entry);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    merged.push(entry);
+  }
+
+  return merged;
+}
+
+/** `true` when both name the same printed line of the same shop. */
+export function sameIgnoredLine(left: ReceiptIgnoredLine, right: { store: string | null; rawLabel: string }): boolean {
+  return ignoredKey(left) === ignoredKey(right);
+}
+
+function ignoredKey(entry: { store: string | null; rawLabel: string }): string {
+  return `${(entry.store ?? '').trim().toLowerCase()}|${entry.rawLabel.trim().toLowerCase()}`;
 }

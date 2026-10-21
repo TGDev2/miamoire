@@ -10,6 +10,7 @@ import type {
   GroceryReturnConfirmResult,
   GroceryReturnLineError,
   GroceryReturnLineInput,
+  GroceryReturnReceiptLabel,
   GroceryReturnResolvedLine,
   Household,
   HouseholdWithKey,
@@ -27,6 +28,7 @@ import type {
   RecipeImportResponse,
   RecipePlan,
   RecipeRequestBody,
+  ReceiptReading,
   Reference,
   ResetScope,
   CurrentStockSummary,
@@ -59,6 +61,12 @@ export function generateOperationKey(): string {
  * volontaire n'est pas cela : il ne sera pas rejoué, et rien ne doit s'afficher.
  */
 export const ABORTED = -1;
+
+/** A photo of a receipt as the server reads it: its media type and its bytes in base64. */
+export interface ReceiptPhoto {
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
+  data: string;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -183,12 +191,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
-  } catch {
+  } catch (cause) {
     if (timedOut && timeout) throw new ApiError(timeout.message, 0);
 
     // Un abandon n'est pas une panne : c'est un geste, et l'écran qui l'a
     // demandé n'a rien à afficher.
     if (signal?.aborted) throw new ApiError('Requête annulée.', ABORTED);
+
+    // The message shown blames the network; the real cause (a body fetch
+    // could not serialise, for instance) is only ever visible here.
+    if (__DEV__) console.warn(`Request failed before any answer: ${method} ${path}`, cause);
 
     throw new ApiError(
       `Serveur injoignable (${baseUrl}). Vérifiez que l'API tourne et corrigez au besoin son adresse.`,
@@ -764,10 +776,37 @@ export const api = {
    * nothing twice. A `422` refuses everything and names each line in
    * `ApiError.lineErrors`; the key stays reusable.
    */
-  confirmGroceryReturn: (lines: GroceryReturnConfirmLineInput[], operationKey: string) =>
+  confirmGroceryReturn: (
+    lines: GroceryReturnConfirmLineInput[],
+    operationKey: string,
+    /** Receipt labels the person set aside as not food: remembered, so the next receipt skips them alone. */
+    ignored: GroceryReturnReceiptLabel[] = [],
+  ) =>
     request<GroceryReturnConfirmResult>('/grocery-returns/confirm', {
       method: 'POST',
-      body: { operationKey, lines },
+      body: { operationKey, lines, ignored },
+    }),
+
+  /**
+   * One receipt, one to three photos, read into basket lines already resolved
+   * — the second request of the application that crosses a model, hence the
+   * second that can be cancelled and takes its own timeout. Writes nothing:
+   * the lines come back through `confirmGroceryReturn`, each with its printed
+   * label, so that the household's answer is learnt.
+   */
+  readReceipt: (images: ReceiptPhoto[], options: { signal?: AbortSignal } = {}) =>
+    // JSON with the photos in base64, not a multipart form: the `fetch` of this
+    // runtime rejects a `{uri}` file part ("Unsupported FormDataPart
+    // implementation"), and three phone photos stay a few megabytes.
+    request<ReceiptReading>('/grocery-returns/receipt', {
+      method: 'POST',
+      body: { images },
+      signal: options.signal,
+      timeout: {
+        ms: 120_000,
+        message:
+          'La lecture du ticket prend trop de temps et a été interrompue. Réessayez, ou reprenez la photo de plus près.',
+      },
     }),
 
   /**

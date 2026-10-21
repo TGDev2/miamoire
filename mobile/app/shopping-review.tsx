@@ -5,7 +5,14 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError, api } from '../src/api/client';
-import type { GroceryReturnDecision, Reference, ShoppingListItem, StorageLocation, Unit } from '../src/api/types';
+import type {
+  GroceryReturnDecision,
+  ReceiptIgnoredLine,
+  Reference,
+  ShoppingListItem,
+  StorageLocation,
+  Unit,
+} from '../src/api/types';
 import { CutPicker } from '../src/components/CutPicker';
 import { useFeedback } from '../src/components/Feedback';
 import {
@@ -38,10 +45,17 @@ import {
   resolvePayloadFor,
   touch,
 } from '../src/shopping/triage';
+import type { LineGroup } from '../src/shopping/triage';
 import { colors, font, radius, spacing, text, thermal } from '../src/theme';
 
 /** A name is typed letter by letter: the server is asked once the typing pauses. */
 const NAME_DEBOUNCE_MS = 400;
+
+/**
+ * Leaving one field of an editor for the next is a blur, then a focus: the
+ * line is released only once no field of it took the focus back meanwhile.
+ */
+const HOLD_RELEASE_MS = 80;
 
 /** La date en cours d'édition : celle d'une ligne entière, ou celle d'un lot précis. */
 interface PickerTarget {
@@ -79,7 +93,17 @@ export default function ShoppingReviewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { notify, commitWithUndo } = useFeedback();
-  const { lines, updateLine, removeLine, addListLines, returnOperationKey, completeReturn } = useShoppingSession();
+  const {
+    lines,
+    updateLine,
+    removeLine,
+    addListLines,
+    ignoredReceiptLines,
+    restoreIgnoredLine,
+    ignoreLine,
+    returnOperationKey,
+    completeReturn,
+  } = useShoppingSession();
 
   const [reference, setReference] = useState<Reference | null>(null);
   /** The lines whose resolution is in flight. */
@@ -95,6 +119,15 @@ export default function ShoppingReviewScreen() {
   const [picker, setPicker] = useState<PickerTarget | null>(null);
   /** The ticked lines of the shopping list, offered when the basket is empty. */
   const [checkedListItems, setCheckedListItems] = useState<ShoppingListItem[]>([]);
+  /**
+   * The lines a field of which has focus, by the group they are shown in.
+   * A line that becomes ready at the first digit of its quantity would jump
+   * to the other group, where its editor is remounted and the next digits
+   * are lost (lesson 43): it moves once the field is left.
+   */
+  const [held, setHeld] = useState<Partial<Record<string, LineGroup>>>({});
+  /** « Ignorées » starts folded: what is not food rarely needs a look. */
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
 
   // The basket is read through a ref when an answer arrives, never from the
   // render that sent the request: a chip tapped meanwhile must win (lesson 9).
@@ -108,6 +141,8 @@ export default function ShoppingReviewScreen() {
   /** The lines whose last resolution failed: « Réessayer » sends these. */
   const failed = useRef(new Set<string>());
   const nameTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /** Per line, the pending release of its hold, after a blur. */
+  const releaseTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
     api.reference().then(setReference).catch(() => {});
@@ -115,6 +150,7 @@ export default function ShoppingReviewScreen() {
     return () => {
       mounted.current = false;
       for (const timer of nameTimers.current.values()) clearTimeout(timer);
+      for (const timer of releaseTimers.current.values()) clearTimeout(timer);
     };
   }, []);
 
@@ -218,19 +254,61 @@ export default function ShoppingReviewScreen() {
     setExpanded((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]));
   }
 
+  /** A field of the line took (`focused`) or left the focus: the line stays in `group` meanwhile. */
+  function holdLine(id: string, group: LineGroup, focused: boolean) {
+    const pending = releaseTimers.current.get(id);
+    if (pending) {
+      clearTimeout(pending);
+      releaseTimers.current.delete(id);
+    }
+
+    if (focused) {
+      setHeld((current) => (current[id] === group ? current : { ...current, [id]: group }));
+      return;
+    }
+
+    releaseTimers.current.set(
+      id,
+      setTimeout(() => {
+        releaseTimers.current.delete(id);
+        setHeld((current) => {
+          if (!(id in current)) return current;
+
+          const released = { ...current };
+          delete released[id];
+          return released;
+        });
+      }, HOLD_RELEASE_MS),
+    );
+  }
+
   function remove(id: string) {
     haptics.removed();
     removeLine(id);
   }
 
+  /** « Ignorer (pas de la nourriture) » : the receipt line joins « Ignorées », learnt as such at the confirmation. */
+  function ignore(id: string) {
+    haptics.removed();
+    ignoreLine(id);
+  }
+
+  /** « C'est de la nourriture » : the line comes back to resolve. */
+  function restore(entry: ReceiptIgnoredLine) {
+    haptics.tap();
+    restoreIgnoredLine(entry);
+  }
+
   const visibleLines = lines.filter((line) => !sending.includes(line.id));
-  const { toDecide, ready } = groupLines(visibleLines);
+  const { toDecide, ready } = groupLines(visibleLines, { hold: held });
 
   function confirmReturn() {
     if (0 === ready.length) return;
 
     const ids = ready.map((line) => line.id);
     const payload = ready.map(confirmPayloadFor);
+    // What the receipt set aside is learnt with what it put away.
+    const ignored = ignoredReceiptLines.map(({ store, rawLabel }) => ({ store, rawLabel }));
     const operationKey = returnOperationKey();
     const count = ready.length;
     const plural = count > 1 ? 's' : '';
@@ -248,7 +326,7 @@ export default function ShoppingReviewScreen() {
       commit: async () => {
         try {
           // A replay (`replayed: true`) is the same success: nothing is written twice.
-          await api.confirmGroceryReturn(payload, operationKey);
+          await api.confirmGroceryReturn(payload, operationKey, ignored);
         } catch (exception) {
           // Nothing was written: each refused line gets its message, the key stays.
           if (exception instanceof ApiError && 422 === exception.status) {
@@ -275,14 +353,22 @@ export default function ShoppingReviewScreen() {
     const checked = checkedListItems.length;
 
     return (
-      <View style={styles.container}>
+      <ScrollView contentContainerStyle={styles.container}>
         <EmptyState
           icon="basket-outline"
           title="Panier vide"
-          description="Scannez vos courses, ou partez des lignes déjà cochées de votre liste."
+          description="Scannez vos courses, photographiez le ticket, ou partez des lignes déjà cochées de votre liste."
           action={
             <>
               <Button label="Scanner" icon="barcode-scan" onPress={() => router.replace('/scan')} />
+              <Button
+                label="Photographier le ticket"
+                variant="secondary"
+                icon="receipt-text-outline"
+                onPress={() => router.replace('/receipt')}
+                hint="Une photo du ticket de caisse remplit le panier"
+                style={styles.spaced}
+              />
               {checked > 0 ? (
                 <Button
                   label={`Partir de la liste (${checked} cochée${checked > 1 ? 's' : ''})`}
@@ -296,7 +382,16 @@ export default function ShoppingReviewScreen() {
             </>
           }
         />
-      </View>
+        {/* A line set aside by mistake must come back even once the basket is empty. */}
+        {ignoredReceiptLines.length > 0 ? (
+          <IgnoredSection
+            entries={ignoredReceiptLines}
+            expanded={ignoredOpen}
+            onToggle={() => setIgnoredOpen((current) => !current)}
+            onRestore={restore}
+          />
+        ) : null}
+      </ScrollView>
     );
   }
 
@@ -352,6 +447,8 @@ export default function ShoppingReviewScreen() {
             onNameChange={(name) => editName(line.id, name)}
             onIdentityChange={(patch) => editIdentity(line.id, patch)}
             onRemove={() => remove(line.id)}
+            onIgnore={line.receipt ? () => ignore(line.id) : null}
+            onFocusChange={(focused) => holdLine(line.id, 'toDecide', focused)}
             onOpenDatePicker={(batchId) => setPicker({ lineId: line.id, batchId })}
             onToggleMode={() => toggleExpanded(line.id)}
           />
@@ -371,6 +468,8 @@ export default function ShoppingReviewScreen() {
               onNameChange={(name) => editName(line.id, name)}
               onIdentityChange={(patch) => editIdentity(line.id, patch)}
               onRemove={() => remove(line.id)}
+              onIgnore={line.receipt ? () => ignore(line.id) : null}
+              onFocusChange={(focused) => holdLine(line.id, 'ready', focused)}
               onOpenDatePicker={(batchId) => setPicker({ lineId: line.id, batchId })}
               onToggleMode={() => setExpanded((current) => current.filter((entry) => entry !== line.id))}
             />
@@ -378,6 +477,15 @@ export default function ShoppingReviewScreen() {
             <ReadyRow key={line.id} line={line} reference={reference} onEdit={() => toggleExpanded(line.id)} />
           ),
         )}
+
+        {ignoredReceiptLines.length > 0 ? (
+          <IgnoredSection
+            entries={ignoredReceiptLines}
+            expanded={ignoredOpen}
+            onToggle={() => setIgnoredOpen((current) => !current)}
+            onRestore={restore}
+          />
+        ) : null}
 
         {pickerLine ? (
           <DateTimePicker
@@ -488,6 +596,8 @@ function LineEditor({
   onNameChange,
   onIdentityChange,
   onRemove,
+  onIgnore,
+  onFocusChange,
   onOpenDatePicker,
   onToggleMode,
 }: {
@@ -500,10 +610,15 @@ function LineEditor({
   onNameChange: (name: string) => void;
   onIdentityChange: (patch: LinePatch) => void;
   onRemove: () => void;
+  /** « Ignorer (pas de la nourriture) » — only for a line read off a receipt. */
+  onIgnore: (() => void) | null;
+  /** A field of this editor took or left the focus. */
+  onFocusChange: (focused: boolean) => void;
   onOpenDatePicker: (batchId: number | null) => void;
   onToggleMode: () => void;
 }) {
   const full = 'full' === mode;
+  const focus = { onFocus: () => onFocusChange(true), onBlur: () => onFocusChange(false) };
   const resolution = line.resolution ?? null;
   const open = null !== resolution && 'none' !== resolution.decision && true !== line.decided ? resolution.decision : null;
   const question = questionFor(line, resolving);
@@ -610,6 +725,14 @@ function LineEditor({
         </Pressable>
       </View>
 
+      {/* The printed line it came from: the one clue to why this food is here,
+          and what « Ignorer » would set aside. */}
+      {line.receipt ? (
+        <Text style={styles.receiptCaption} numberOfLines={1}>
+          {`ticket · ${line.receipt.rawLabel}`}
+        </Text>
+      ) : null}
+
       <ErrorBanner message={error} />
 
       {question ? (
@@ -624,6 +747,7 @@ function LineEditor({
           value={line.name}
           onChangeText={onNameChange}
           placeholder="Tomates, riz, reste de gratin…"
+          {...focus}
         />
       ) : null}
 
@@ -667,6 +791,7 @@ function LineEditor({
         onChangeText={(value) => onPatch((current) => ({ quantityPerPackage: value, touched: touch(current, 'quantityPerPackage') }))}
         keyboardType="decimal-pad"
         placeholder="ex. 500"
+        {...focus}
         hint={
           differsFromUsual
             ? `Différent de d'habitude (${formatNumber(line.usualPackageSize as number)} ${line.unit})`
@@ -682,6 +807,7 @@ function LineEditor({
           value={line.numberOfPackages}
           unitLabel={line.numberOfPackages > 1 ? 'exemplaires' : 'exemplaire'}
           onChange={(value) => onPatch(() => ({ numberOfPackages: value }))}
+          {...focus}
         />
       ) : null}
 
@@ -812,6 +938,7 @@ function LineEditor({
                 value={batch.numberOfPackages}
                 onChangeText={(value) => updateBatch(batch.id, { numberOfPackages: value })}
                 keyboardType="number-pad"
+                {...focus}
               />
               <Text style={styles.fieldLabel}>À consommer avant</Text>
               <Pressable
@@ -846,6 +973,15 @@ function LineEditor({
         </>
       ) : null}
 
+      {/* Batteries, a bag, a deposit: the model reads them as food now and
+          then. Offered where the line is open in full, and where the question
+          is « what is this? » — the answer is often « nothing to eat ». */}
+      {onIgnore && (full || 'unknown_food' === open) ? (
+        <View style={styles.chips}>
+          <Chip label="Ignorer (pas de la nourriture)" selected={false} onPress={onIgnore} />
+        </View>
+      ) : null}
+
       <Pressable
         onPress={onToggleMode}
         accessibilityRole="button"
@@ -855,6 +991,63 @@ function LineEditor({
         <Text style={styles.modeToggleText}>{full ? 'Réduire' : 'Plus d\'options ›'}</Text>
       </Pressable>
     </Card>
+  );
+}
+
+/**
+ * The lines of the receipt that are not food, folded: the model or a learnt
+ * label set them aside, and they are right most of the time. Each can come
+ * back as a line to resolve — and that answer is learnt at the confirmation.
+ */
+function IgnoredSection({
+  entries,
+  expanded,
+  onToggle,
+  onRestore,
+}: {
+  entries: ReceiptIgnoredLine[];
+  expanded: boolean;
+  onToggle: () => void;
+  onRestore: (entry: ReceiptIgnoredLine) => void;
+}) {
+  const title = `Ignorées · ${entries.length}`;
+
+  return (
+    <>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityLabel={`${title}, lignes du ticket qui ne sont pas de la nourriture`}
+        accessibilityHint={expanded ? 'Replier la rubrique' : 'Déplier la rubrique'}
+        accessibilityState={{ expanded }}
+        style={styles.foldHeader}
+      >
+        <Text style={styles.foldTitle}>{title}</Text>
+        <View style={styles.foldRule} />
+        <Text style={styles.foldToggle}>{expanded ? 'Masquer' : 'Afficher'}</Text>
+      </Pressable>
+
+      {expanded
+        ? entries.map((entry) => {
+            const name = entry.expandedName.trim();
+            const label = name && name.toLowerCase() !== entry.rawLabel.toLowerCase() ? `${entry.rawLabel} — ${name}` : entry.rawLabel;
+
+            return (
+              <Card key={`${entry.store ?? ''}|${entry.rawLabel}`} style={styles.card}>
+                <Text style={text.subheading} numberOfLines={2}>
+                  {label}
+                </Text>
+                <Text style={[text.small, styles.ignoredCaption]}>
+                  {entry.learned ? "Mise de côté, comme d'habitude" : "Pas de la nourriture, d'après le ticket"}
+                </Text>
+                <View style={styles.chips}>
+                  <Chip label="C'est de la nourriture" selected={false} onPress={() => onRestore(entry)} />
+                </View>
+              </Card>
+            );
+          })
+        : null}
+    </>
   );
 }
 
@@ -906,16 +1099,20 @@ function dateSummary(line: ShoppingSessionLine): { label: string; caption: strin
 
 /** Where the filled values come from, as small words — never as a colour. */
 function provenanceCaptions(line: ShoppingSessionLine): string[] {
-  const provenance = line.resolution?.provenance;
-  if (!provenance) return [];
-
   const captions: string[] = [];
-  if ('habit' === provenance.package || 'habit' === provenance.storage) captions.push("comme d'habitude");
-  else if ('catalog' === provenance.package) captions.push("d'après le catalogue");
-  else if ('list' === provenance.package) captions.push("d'après la liste");
+  const provenance = line.resolution?.provenance;
 
-  const date = dateSummary(line).caption;
-  if (date) captions.push(date);
+  if (provenance) {
+    if ('habit' === provenance.package || 'habit' === provenance.storage) captions.push("comme d'habitude");
+    else if ('catalog' === provenance.package) captions.push("d'après le catalogue");
+    else if ('list' === provenance.package) captions.push("d'après la liste");
+
+    const date = dateSummary(line).caption;
+    if (date) captions.push(date);
+  }
+
+  // The printed line it came from: why this food is here at all.
+  if (line.receipt) captions.push(`ticket · ${line.receipt.rawLabel}`);
 
   return captions;
 }
@@ -952,6 +1149,20 @@ const styles = StyleSheet.create({
   removeText: { ...text.small, color: thermal.critical.line, fontFamily: font.sansMedium },
   question: { ...text.heading, color: thermal.soon.line, marginBottom: spacing.md },
   questionQuiet: { color: colors.inkMuted },
+  receiptCaption: { ...text.data, marginTop: -spacing.xs, marginBottom: spacing.md },
+  /** The folded rubric: the look of a `SectionTitle`, on a tap target. */
+  foldHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 44,
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  foldTitle: { ...text.label, color: colors.ink },
+  foldRule: { flex: 1, height: 1, backgroundColor: colors.border },
+  foldToggle: { ...text.small, color: colors.ink, fontFamily: font.sansMedium },
+  ignoredCaption: { marginTop: spacing.xs, marginBottom: spacing.md },
   fieldLabel: { ...text.label, marginBottom: spacing.sm },
   chips: { flexDirection: 'row', flexWrap: 'wrap' },
   cut: { marginBottom: spacing.md },

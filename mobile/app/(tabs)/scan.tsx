@@ -289,13 +289,14 @@ export default function ScanScreen() {
           )}
         </View>
         <View style={styles.footerRow}>
+          {/* One photo of the receipt instead of one scan per product: the
+              other way into the basket, next to the one that ends it. */}
           <Button
-            label="Saisie manuelle"
+            label="Ticket"
             variant="secondary"
-            onPress={() => {
-              addManualLine();
-              showFeedback('Ligne à compléter');
-            }}
+            icon="receipt-text-outline"
+            onPress={() => router.push('/receipt')}
+            hint="Photographier le ticket de caisse pour remplir le panier"
             style={styles.footerButton}
           />
           <Button
@@ -305,6 +306,17 @@ export default function ScanScreen() {
             style={styles.footerButton}
           />
         </View>
+        {/* Three full buttons would truncate this one on a narrow phone: the
+            rarest of the three becomes a link under the row. */}
+        <Button
+          label="Saisie manuelle"
+          variant="ghost"
+          onPress={() => {
+            addManualLine();
+            showFeedback('Ligne à compléter');
+          }}
+          style={styles.footerLink}
+        />
       </View>
     </View>
   );
@@ -432,4 +444,5 @@ const styles = StyleSheet.create({
   undoText: { ...text.label, color: thermal.critical.line },
   footerRow: { flexDirection: 'row', gap: spacing.sm },
   footerButton: { flex: 1 },
+  footerLink: { alignSelf: 'center', marginTop: spacing.xs },
 });

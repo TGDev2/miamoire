@@ -330,6 +330,8 @@ export function Stepper({
   min = 1,
   max = Number.MAX_SAFE_INTEGER,
   hint,
+  onFocus,
+  onBlur,
 }: {
   /** Omis quand la rubrique juste au-dessus dit déjà ce qu'on compte. */
   label?: string;
@@ -340,6 +342,9 @@ export function Stepper({
   min?: number;
   max?: number;
   hint?: string;
+  /** The typed count took or left focus: a screen that moves its rows holds this one meanwhile. */
+  onFocus?: () => void;
+  onBlur?: () => void;
 }) {
   return (
     <View style={styles.field}>
@@ -369,6 +374,8 @@ export function Stepper({
           }}
           keyboardType="number-pad"
           selectTextOnFocus
+          onFocus={onFocus}
+          onBlur={onBlur}
           accessibilityLabel={`${label ?? unitLabel} : ${value} ${unitLabel}`}
           style={styles.stepperValue}
         />

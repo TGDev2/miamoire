@@ -11,12 +11,16 @@ import type {
   ProductCutValue,
   ProductTraitValue,
   ProductVariant,
+  ReceiptIgnoredLine,
+  ReceiptLineOrigin,
+  ReceiptReading,
   ShoppingListItem,
   StorageLocation,
   Unit,
   UnitFamily,
 } from '../api/types';
 import { useSession } from '../session/SessionContext';
+import { linesFromReceipt, mergeIgnored, sameIgnoredLine } from './triage';
 
 /**
  * Un rechargement, un plantage ou la fermeture de l'application par Android
@@ -38,6 +42,8 @@ interface PersistedSession {
   lines: ShoppingSessionLine[];
   /** One key for the whole basket; `null` until the first confirmation attempt. */
   returnOperationKey?: string | null;
+  /** The receipt lines set aside as not food; absent on a basket saved before receipts. */
+  ignoredReceiptLines?: ReceiptIgnoredLine[];
 }
 
 /**
@@ -129,6 +135,14 @@ export interface ShoppingSessionLine {
   resolution?: ShoppingSessionResolution | null;
   /** The current decision was answered on the screen (a chip, « Garder l'estimation »): the line is ready. */
   decided?: boolean;
+  /**
+   * The printed line of the receipt this line came from. Sent back at the
+   * confirmation so that the server learns what this label means at this
+   * shop. `null` or absent for a scanned, typed or listed line.
+   */
+  receipt?: ReceiptLineOrigin | null;
+  /** The household food a learnt receipt label named: the server's identity for the line until it is renamed. */
+  variantId?: string | null;
 }
 
 interface ShoppingLookup {
@@ -170,6 +184,8 @@ function newLine(overrides: Partial<ShoppingSessionLine>): ShoppingSessionLine {
     touched: [],
     resolution: null,
     decided: false,
+    receipt: null,
+    variantId: null,
     ...overrides,
   };
 }
@@ -196,6 +212,22 @@ interface ShoppingSessionState {
    * validation, deux navigations plus loin.
    */
   undoScan: (barcode: string) => void;
+  /**
+   * The lines of a receipt that are not food — said by the model, by a label
+   * the household taught, or by « Ignorer » on the triage. Remembered by the
+   * server at the confirmation; kept with the basket, cleared with it.
+   */
+  ignoredReceiptLines: ReceiptIgnoredLine[];
+  /**
+   * The foods of a receipt enter the basket already resolved, one line each,
+   * and its other lines go to `ignoredReceiptLines`. Returns the lines added,
+   * for the screen to say what came in.
+   */
+  addReceiptReading: (reading: ReceiptReading) => ShoppingSessionLine[];
+  /** « C'est de la nourriture » : the entry becomes a basket line to resolve, with its printed label. */
+  restoreIgnoredLine: (entry: ReceiptIgnoredLine) => void;
+  /** « Ignorer (pas de la nourriture) » : the receipt line leaves the basket for `ignoredReceiptLines`. Nothing for a line without a printed label. */
+  ignoreLine: (lineId: string) => void;
   clear: () => void;
   /**
    * The key of the whole basket's confirmation, stable until something is
@@ -218,8 +250,11 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   const householdId = household?.id ?? null;
 
   const [lines, setLines] = useState<ShoppingSessionLine[]>([]);
+  const [ignoredReceiptLines, setIgnoredReceiptLines] = useState<ReceiptIgnoredLine[]>([]);
   const linesRef = useRef(lines);
   linesRef.current = lines;
+  const ignoredRef = useRef(ignoredReceiptLines);
+  ignoredRef.current = ignoredReceiptLines;
   const returnKey = useRef<string | null>(null);
   /**
    * Faux tant que la restauration asynchrone n'a pas résolu : sans ce garde,
@@ -229,11 +264,11 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   const hydrated = useRef(false);
 
   const persist = useCallback(
-    (currentLines: ShoppingSessionLine[]) => {
+    (currentLines: ShoppingSessionLine[], currentIgnored: ReceiptIgnoredLine[]) => {
       if (!householdId || !hydrated.current) return;
 
       // An empty basket has nothing to restore: the entry goes, key included.
-      if (0 === currentLines.length) {
+      if (0 === currentLines.length && 0 === currentIgnored.length) {
         AsyncStorage.removeItem(storageKey(householdId)).catch(() => undefined);
         return;
       }
@@ -242,6 +277,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         schemaVersion: SCHEMA_VERSION,
         lines: currentLines,
         returnOperationKey: returnKey.current,
+        ignoredReceiptLines: currentIgnored,
       };
       AsyncStorage.setItem(storageKey(householdId), JSON.stringify(payload)).catch(() => undefined);
     },
@@ -254,6 +290,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
 
     if (!householdId) {
       setLines([]);
+      setIgnoredReceiptLines([]);
       returnKey.current = null;
       return;
     }
@@ -268,6 +305,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
         if (parsed.schemaVersion !== SCHEMA_VERSION) return;
 
         setLines(parsed.lines);
+        setIgnoredReceiptLines(parsed.ignoredReceiptLines ?? []);
         returnKey.current = parsed.returnOperationKey ?? null;
         nextLineId = Math.max(nextLineId, ...parsed.lines.map((line) => Number(line.id) + 1), 1);
       })
@@ -290,8 +328,8 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
 
   // Sauvegarde après chaque modification — une fois la restauration terminée.
   useEffect(() => {
-    persist(lines);
-  }, [lines, persist]);
+    persist(lines, ignoredReceiptLines);
+  }, [lines, ignoredReceiptLines, persist]);
 
   const addScannedLine = useCallback((barcode: string, lookup: ShoppingLookup) => {
     setLines((current) => {
@@ -403,10 +441,42 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
     });
   }, []);
 
+  const addReceiptReading = useCallback((reading: ReceiptReading): ShoppingSessionLine[] => {
+    const added = linesFromReceipt(reading, newLine);
+    if (added.length > 0) setLines((current) => [...current, ...added]);
+    if (reading.ignored.length > 0) setIgnoredReceiptLines((current) => mergeIgnored(current, reading.ignored));
+
+    return added;
+  }, []);
+
+  const restoreIgnoredLine = useCallback((entry: ReceiptIgnoredLine) => {
+    setIgnoredReceiptLines((current) => current.filter((candidate) => !sameIgnoredLine(candidate, entry)));
+    setLines((current) => [
+      ...current,
+      // Named as the model read it, or as printed: the server resolves the rest.
+      newLine({
+        name: entry.expandedName.trim() || entry.rawLabel,
+        receipt: { store: entry.store, rawLabel: entry.rawLabel, lineTotal: null },
+      }),
+    ]);
+  }, []);
+
+  const ignoreLine = useCallback((lineId: string) => {
+    const line = linesRef.current.find((candidate) => candidate.id === lineId);
+    if (!line?.receipt) return;
+
+    const { store, rawLabel } = line.receipt;
+    setLines((current) => current.filter((candidate) => candidate.id !== lineId));
+    setIgnoredReceiptLines((current) =>
+      mergeIgnored(current, [{ store, rawLabel, expandedName: line.name.trim(), learned: false }]),
+    );
+  }, []);
+
   const clear = useCallback(() => {
     returnKey.current = null;
     // Abandon explicite : the save effect removes the entry of an empty basket.
     setLines([]);
+    setIgnoredReceiptLines([]);
   }, []);
 
   const returnOperationKey = useCallback(() => {
@@ -414,7 +484,7 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
       returnKey.current = generateOperationKey();
       // Ne modifie pas `lines` : sans cet appel explicite, la clé fraîchement
       // créée ne serait jamais persistée avant la prochaine modification du panier.
-      persist(linesRef.current);
+      persist(linesRef.current, ignoredRef.current);
     }
 
     return returnKey.current;
@@ -423,6 +493,10 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
   const completeReturn = useCallback((lineIds: string[]) => {
     returnKey.current = null;
     setLines((current) => current.filter((line) => !lineIds.includes(line.id)));
+    // The whole basket was written and the labels set aside were learnt with
+    // it: nothing of this receipt is left to show. Lines still to decide are
+    // another return, which keeps them.
+    if (linesRef.current.every((line) => lineIds.includes(line.id))) setIgnoredReceiptLines([]);
   }, []);
 
   const value = useMemo(
@@ -434,6 +508,10 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
       updateLine,
       removeLine,
       undoScan,
+      ignoredReceiptLines,
+      addReceiptReading,
+      restoreIgnoredLine,
+      ignoreLine,
       clear,
       returnOperationKey,
       completeReturn,
@@ -446,6 +524,10 @@ export function ShoppingSessionProvider({ children }: { children: React.ReactNod
       updateLine,
       removeLine,
       undoScan,
+      ignoredReceiptLines,
+      addReceiptReading,
+      restoreIgnoredLine,
+      ignoreLine,
       clear,
       returnOperationKey,
       completeReturn,
