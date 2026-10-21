@@ -586,8 +586,10 @@ not sent; they stay in the basket.
 Since August 2023 a French shop prints the receipt only on request, but the
 receipt is still the one artefact that lists the whole trip, with quantities
 and weights, for free. `POST /grocery-returns/receipt` takes one to three
-photos (multipart `images[]`, JPEG/PNG/WebP, 8 MB each, the type read from
-the bytes) and asks the recipe model to **transcribe** them — the same
+photos — multipart `images[]`, or a JSON body `{images: [{mediaType, data}]}`
+with the bytes in base64, which is what the app sends: its `fetch` has no
+file part to put in a form — JPEG/PNG/WebP, 8 MB each, the type read from
+the bytes, and asks the recipe model to **transcribe** them — the same
 provider chain as the recipes, with the images attached to the message
 (`RecipeGeneratorInterface::generate(..., $images)`: inline parts for Gemini,
 image blocks before the text for Claude). The model returns `ReceiptSchema`:
@@ -1076,7 +1078,7 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `GET` | `/products/shelf-life` | Durée de conservation estimée d'un aliment, et sa justification |
 | `POST` | `/grocery-returns/resolve` | Fills the empty fields of a basket's lines from habits, catalogue and lexicons, with provenance and at most one question per line. No write |
 | `POST` | `/grocery-returns/confirm` | Every lot of the return in one idempotent operation; matched shopping-list lines removed in the same transaction; the printed labels confirmed or set aside are learnt |
-| `POST` | `/grocery-returns/receipt` | Multipart `images[]` (1–3 photos): a receipt read by the model into resolved lines, with its printed labels; nothing written, the image never stored |
+| `POST` | `/grocery-returns/receipt` | 1–3 photos, multipart `images[]` or JSON `{images: [{mediaType, data}]}` in base64: a receipt read by the model into resolved lines, with its printed labels; nothing written, the image never stored |
 | `POST` | `/products` | Contribue une fiche au catalogue — **code-barres obligatoire** |
 | `GET` `POST` | `/stock-items` | Inventaire filtrable ; ajout d'un ou plusieurs lots (`batches`) |
 | `GET` `PATCH` | `/stock-items/{id}` | Fiche d'un lot et ses lots frères |
