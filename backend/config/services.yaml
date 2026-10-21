@@ -14,6 +14,7 @@ services:
             int $cacheTtlDays: '%env(int:PRODUCT_CACHE_TTL_DAYS)%'
             string $effort: '%env(ANTHROPIC_EFFORT)%'
             string $provider: '%env(RECIPE_PROVIDER)%'
+            string $receiptProvider: '%env(RECEIPT_PROVIDER)%'
             string $model: '%env(GEMINI_MODEL)%'
 
     App\:

@@ -26,8 +26,9 @@ class ProductTraitDetector
      */
     private const PATTERNS = [
         // « boîte » seul est écarté : une « boîte de 6 œufs » n'est pas une conserve.
-        'canned' => ['\bconserve\b', '\bconserves\b', '\bappertise', '\bbocal\b', '\ben boite\b'],
-        'frozen' => ['\bsurgele', '\bcongele'],
+        // « CONS.THON », « POISSON PANE SURG » : les abréviations d'un ticket de caisse.
+        'canned' => ['\bconserve\b', '\bconserves\b', '\bappertise', '\bbocal\b', '\ben boite\b', '\bcons\b'],
+        'frozen' => ['\bsurgele', '\bcongele', '\bsurg\b', '\bsgl\b'],
         'dried' => ['\bdeshydrate', '\blyophilise', '\bseche\b', '\bseches\b'],
         'peeled' => ['\bepluche', '\bpele\b', '\bpeles\b', '\bpelee', '\bsans peau\b', '\bemonde'],
         'precooked' => ['\bprecuit', '\bpre cuit', '\bmi cuit'],

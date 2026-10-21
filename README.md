@@ -614,11 +614,39 @@ the second trip on, a label the household has confirmed once resolves alone,
 and the line asks only what a habit cannot answer (a chilled package with a
 short estimate still asks for its printed date).
 
-Limits, written here rather than suggested by the screen: the receipt is
-read by the configured model, so the provider's terms apply to the photo for
-the duration of the call; a faded or crumpled receipt yields unknown lines,
-never guessed ones; two photos of the same receipt give the lines twice, and
-the triage shows them.
+**The same receipt twice.** Every read leaves a `ReceiptCapture` — the
+shop, the date, the total, the line count, folded into a fingerprint; never
+the image. A read whose fingerprint was seen in the last sixty days answers
+`duplicateOf: {readAt, lineCount}` and the app asks "Ticket déjà lu … l'ajouter
+quand même ?" before putting the lines in the basket. Two receipts from the
+same shop on the same day with different totals are two receipts.
+
+**What the photo costs, and where it goes.** One read is one request to
+the recipe provider with the photo attached — a few seconds, a few thousand
+tokens; three receipts a week stay far under the free quotas, and the
+per-minute quota is the only realistic refusal, handled by the same chain
+and a "Réessayer" button. Under Google's unpaid quota, submitted content may
+be used to improve Google's products and read by human reviewers; for a
+household in the EEA, Switzerland or the UK, Google's own terms apply the
+paid-tier rules to the unpaid quota instead (no use for product improvement,
+retention limited to abuse detection). `RECEIPT_PROVIDER` sends the receipts
+to another chain than the recipes — `claude` alone, for instance — when that
+guarantee must not depend on the household's country. When no provider
+answers, the receipt screen says so and names the scanner and the list, which
+need no model.
+
+**Checking it on one's own receipts.** `php bin/console app:receipt:read
+photo.jpg [photo-2.jpg]` reads a photo exactly as the app would (habits and
+learnt labels of the first household, or `--household=<id>`) and prints each
+printed label with the food, quantity, place and date it got, whether the
+food was known, and the question it would ask. The last line counts the
+questions: the number to watch when tuning the prompt or the lexicons.
+
+Limits, written here rather than suggested by the screen: a faded or
+crumpled receipt yields unknown lines, never guessed ones; a weighed item
+printed on two rows is read as one line when the weight row follows its
+label, which is how French tills print it; a receipt read twice on purpose
+is let through once the person said so.
 
 What is deliberately not there: a server-side return shared between members
 (the basket is per phone, as before; a hand-off is a later evolution), a bulk

@@ -98,6 +98,12 @@ class GroceryReturnController extends AbstractApiController
             'store' => $reading->store,
             'receiptDate' => $reading->receiptDate?->format('Y-m-d'),
             'total' => $reading->total,
+            // The same receipt was read before: the app asks before adding the
+            // lines again. Still answered in full — no second read either way.
+            'duplicateOf' => null !== $reading->duplicateOf ? [
+                'readAt' => $reading->duplicateOf->getReadAt()->format(\DATE_ATOM),
+                'lineCount' => $reading->duplicateOf->getLineCount(),
+            ] : null,
             'lines' => array_map(
                 static fn (array $entry): array => $presenter->groceryReturnLine($entry['line']) + [
                     'receipt' => [

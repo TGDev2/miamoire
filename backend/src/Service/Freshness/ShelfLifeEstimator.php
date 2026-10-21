@@ -133,6 +133,14 @@ class ShelfLifeEstimator
         'lait' => ['fridge' => 5, 'freezer' => 90],
         'yaourt' => ['fridge' => 14],
         'fromage' => ['fridge' => 14, 'freezer' => 120],
+        // Cheeses a receipt names without the word "fromage".
+        'emmental' => ['fridge' => 21, 'freezer' => 120],
+        'gruyere' => ['fridge' => 21, 'freezer' => 120],
+        'comte' => ['fridge' => 21, 'freezer' => 120],
+        'parmesan' => ['fridge' => 30],
+        'mozzarella' => ['fridge' => 7],
+        'camembert' => ['fridge' => 14],
+        'feta' => ['fridge' => 10],
         'beurre' => ['fridge' => 30, 'freezer' => 180],
         'creme' => ['fridge' => 5],
 

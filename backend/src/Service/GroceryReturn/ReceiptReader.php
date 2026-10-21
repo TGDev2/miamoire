@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace App\Service\GroceryReturn;
 
 use App\Entity\Household;
+use App\Entity\ReceiptCapture;
 use App\Enum\Unit;
 use App\Exception\StockException;
 use App\Repository\ReceiptAliasRepository;
+use App\Repository\ReceiptCaptureRepository;
 use App\Service\Ai\Generator\RecipeGeneratorFactory;
+use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -19,19 +22,29 @@ use Psr\Log\LoggerInterface;
  * its food outright, an ignored one is set aside. The rest goes through the
  * same resolver as a scanned line, with the model's readable name as the
  * only hint — and a name the resolver cannot match stays "à préciser".
+ *
+ * The one thing written here is the receipt's fingerprint (ReceiptCapture),
+ * so that the same receipt read twice is recognised. The image is not kept.
  */
 final class ReceiptReader
 {
     public const MAX_IMAGES = 3;
+
+    /** How long a receipt is remembered for the duplicate check. */
+    private const DUPLICATE_WINDOW = '-60 days';
 
     private const USER_TEXT = 'Voici le ticket de caisse (%d photo%s). Réponds uniquement par le JSON demandé, sans texte d\'introduction ni bloc de code.';
 
     public function __construct(
         private readonly RecipeGeneratorFactory $generators,
         private readonly ReceiptAliasRepository $aliases,
+        private readonly ReceiptCaptureRepository $captures,
         private readonly ReceiptAliasKey $keys,
         private readonly GroceryReturnResolver $resolver,
+        private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
+        /** A provider chain for the receipts only (`RECEIPT_PROVIDER`); empty = the recipes' chain. */
+        private readonly string $receiptProvider = '',
     ) {
     }
 
@@ -46,7 +59,9 @@ final class ReceiptReader
             throw new StockException(sprintf('Au plus %d photos par ticket.', self::MAX_IMAGES));
         }
 
-        $generator = $this->generators->create();
+        $generator = '' !== trim($this->receiptProvider)
+            ? $this->generators->forProvider($this->receiptProvider)
+            : $this->generators->create();
         $count = count($images);
 
         $raw = $generator->generate(
@@ -66,6 +81,7 @@ final class ReceiptReader
         $inputs = [];
         $receiptLines = [];
         $ignored = [];
+        $labelKeys = [];
 
         foreach ($data['lines'] ?? [] as $index => $entry) {
             if (!is_array($entry)) {
@@ -77,6 +93,9 @@ final class ReceiptReader
                 continue;
             }
 
+            $labelKey = $this->keys->of($rawLabel);
+            $labelKeys[] = $labelKey;
+
             $expandedName = trim((string) ($entry['expandedName'] ?? ''));
             $isFood = (bool) ($entry['isFood'] ?? true);
             $quantity = max(1, (int) ($entry['quantity'] ?? 1));
@@ -86,7 +105,7 @@ final class ReceiptReader
                 ? round((float) $entry['lineTotal'], 2)
                 : null;
 
-            $alias = $this->aliases->findOne($household, $storeKey, $this->keys->of($rawLabel));
+            $alias = $this->aliases->findOne($household, $storeKey, $labelKey);
             if (null !== $alias && !$alias->isUsable()) {
                 $alias = null;
             }
@@ -103,12 +122,23 @@ final class ReceiptReader
                 continue;
             }
 
+            // "OEUFS X6", "ESCALOPE DE DINDE X4": a count with no package is
+            // N pieces of one. The count is the receipt's fact; nobody is asked
+            // a weight per egg.
+            $unit = $packageUnit;
+            $perPackage = $packageQuantity > 0 ? $packageQuantity : null;
+            if (null === $perPackage && null === $unit && $quantity > 1) {
+                $unit = Unit::Piece;
+                $perPackage = 1.0;
+            }
+
             $inputs[] = [
                 'lineKey' => sprintf('receipt-%d', $index),
                 'variantId' => null !== $alias ? (string) $alias->getVariant()?->getId() : null,
                 'name' => null !== $alias ? null : ('' !== $expandedName ? $expandedName : $rawLabel),
-                'unit' => $packageUnit?->value,
-                'quantityPerPackage' => $packageQuantity > 0 ? $packageQuantity : null,
+                'receiptLabel' => $rawLabel,
+                'unit' => $unit?->value,
+                'quantityPerPackage' => $perPackage,
                 'numberOfPackages' => $quantity,
             ];
             $receiptLines[] = ['rawLabel' => $rawLabel, 'lineTotal' => $lineTotal];
@@ -125,7 +155,59 @@ final class ReceiptReader
             ];
         }
 
-        return new ReceiptReading('' !== $store ? $store : null, $receiptDate, $total, $lines, $ignored);
+        $duplicateOf = $this->remember($household, $storeKey, $store, $receiptDate, $total, $labelKeys, count($lines));
+
+        return new ReceiptReading('' !== $store ? $store : null, $receiptDate, $total, $lines, $ignored, $duplicateOf);
+    }
+
+    /**
+     * Records this read and returns the earlier read of the same receipt, if any.
+     *
+     * The fingerprint prefers what a till prints once per receipt — shop,
+     * date, total — and falls back to the shop plus the printed labels when
+     * one of them was not read. Two readings of one photo differ in details
+     * (an expanded name, a quantity), never in those.
+     *
+     * @param list<string> $labelKeys
+     */
+    private function remember(
+        Household $household,
+        string $storeKey,
+        string $store,
+        ?\DateTimeImmutable $receiptDate,
+        ?float $total,
+        array $labelKeys,
+        int $lineCount,
+    ): ?ReceiptCapture {
+        if ([] === $labelKeys) {
+            return null;
+        }
+
+        if (null !== $receiptDate && null !== $total) {
+            $material = sprintf('%s|%s|%.2f', $storeKey, $receiptDate->format('Y-m-d'), $total);
+        } else {
+            sort($labelKeys);
+            $material = $storeKey.'|'.implode("\n", $labelKeys);
+        }
+        $fingerprint = hash('sha256', $material);
+
+        $earlier = $this->captures->findEarlierRead(
+            $household,
+            $fingerprint,
+            new \DateTimeImmutable(self::DUPLICATE_WINDOW),
+        );
+
+        $this->entityManager->persist(new ReceiptCapture(
+            $household,
+            $fingerprint,
+            '' !== $store ? $store : null,
+            $receiptDate,
+            $total,
+            $lineCount,
+        ));
+        $this->entityManager->flush();
+
+        return $earlier;
     }
 
     /** @return array<string, mixed> */
@@ -170,13 +252,14 @@ final class ReceiptReader
 
             Règles :
             - `rawLabel` : le libellé exactement tel qu'il est imprimé, abréviations et majuscules comprises, sans le corriger.
-            - `expandedName` : le nom lisible de l'aliment, en français, au singulier, sans marque ni contenance ni prix — « LAIT 1/2 ECR 6X1L » donne « Lait demi-écrémé », « YAOURT NAT X12 » donne « Yaourt nature ». Chaîne vide si tu ne sais pas lire la ligne.
+            - `expandedName` : le nom lisible de l'aliment, en français, au singulier, sans marque ni contenance ni prix — « LAIT 1/2 ECR 6X1L » donne « Lait demi-écrémé », « YAOURT NAT X12 » donne « Yaourt nature ». Garde les mots qui disent l'état de l'aliment : surgelé, en conserve, fumé, râpé, frais (« POISSON PANE SURG » donne « Poisson pané surgelé »). Chaîne vide si tu ne sais pas lire la ligne.
             - `isFood` : faux pour tout ce qui ne se mange ni ne se boit (papier, piles, entretien, hygiène, sacs, consigne, bon de réduction).
-            - `quantity` : le nombre d'articles identiques de la ligne. « 3 x 1,20 » ou « x3 » compte 3 ; 1 sinon.
+            - `quantity` : le nombre d'articles identiques de la ligne. « 3 x 1,20 », « x3 », « X6 » après le libellé comptent 3 ou 6 ; 1 sinon.
             - `packageQuantity` et `packageUnit` : la contenance d'un article quand le libellé ou la ligne la donne. « 6X125G » donne 125 et g avec quantity 6 ; « 0,842 KG » donne 0.842 et kg ; « 1L » donne 1 et l. Sinon 0 et chaîne vide.
+            - Un article pesé est souvent imprimé sur deux rangées : le libellé (« TOMATES RONDES »), puis le poids et le prix au kilo (« 0,655 KG X 2,29 »). C'est UNE ligne : le libellé, avec le poids pour contenance. Ne crée jamais une ligne pour la rangée de poids seule.
             - `lineTotal` : le montant de la ligne ; 0 si illisible.
-            - Ignore ce qui n'est pas un article : en-tête, adresse, total, TVA, paiement, carte de fidélité, remises globales, messages.
-            - N'invente aucune ligne et n'en fusionne aucune : chaque article imprimé donne une ligne, une ligne illisible est transcrite telle quelle avec `expandedName` vide.
+            - Ignore ce qui n'est pas un article : en-tête, adresse, total, TVA, paiement, carte de fidélité, remises et bons (« REMISE », « BON DE REDUCTION », « -20% »), messages.
+            - N'invente aucune ligne et n'en fusionne aucune hormis la rangée de poids : chaque article imprimé donne une ligne, une ligne illisible est transcrite telle quelle avec `expandedName` vide.
             - `store` : l'enseigne lue en haut du ticket ; `receiptDate` : la date d'achat au format AAAA-MM-JJ ; `total` : le montant total payé. Chaîne vide ou 0 quand ce n'est pas lisible.
             TXT;
     }

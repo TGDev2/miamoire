@@ -154,13 +154,60 @@ class GroceryReturnReceiptTest extends WebTestCase
         self::assertSame('Lait demi-écrémé', $milkAgain['name']);
         self::assertSame('habit', $milkAgain['provenance']['storage']);
         self::assertSame('fridge', $milkAgain['storageLocation']);
-        // A habit answers where it goes, not what the carton says: a chilled
-        // package with a five-day estimate still asks for its printed date.
-        self::assertSame('short_date', $milkAgain['decision']);
+        self::assertSame('none', $milkAgain['decision'], 'A known food with its habit asks nothing.');
 
         self::assertCount(1, $second['ignored']);
         self::assertSame('PILES AA X4', $second['ignored'][0]['rawLabel']);
         self::assertTrue($second['ignored'][0]['learned'], 'Set aside once, set aside again — by the household, not the model.');
+    }
+
+    /** The same receipt photographed again is recognised, and the lines still come back. */
+    public function testTheSameReceiptReadTwiceIsFlagged(): void
+    {
+        $this->fakeReceipt($this->leclercReceipt());
+        $first = $this->readReceipt();
+        self::assertNull($first['duplicateOf']);
+
+        // Read differently in the details (a name), identical in what the till prints once.
+        $again = $this->leclercReceipt();
+        $again['lines'][1]['expandedName'] = 'Courgette';
+        $this->fakeReceipt($again);
+        $second = $this->readReceipt();
+
+        self::assertNotNull($second['duplicateOf']);
+        self::assertSame(2, $second['duplicateOf']['lineCount']);
+        self::assertCount(2, $second['lines'], 'Flagged, not withheld: the person decides.');
+
+        // Another receipt from the same shop the same day, another total: not a duplicate.
+        $other = $this->leclercReceipt();
+        $other['total'] = 12.3;
+        $this->fakeReceipt($other);
+        self::assertNull($this->readReceipt()['duplicateOf']);
+    }
+
+    /** A count with no package is N pieces of one; a state word on the printed label is kept. */
+    public function testCountedPacksAndPrintedStatesAreReadFromTheReceipt(): void
+    {
+        $this->fakeReceipt([
+            'store' => 'LIDL',
+            'receiptDate' => '2026-10-21',
+            'total' => 9.5,
+            'lines' => [
+                ['rawLabel' => 'OEUFS PLEIN AIR X6', 'expandedName' => 'Œuf plein air', 'isFood' => true, 'quantity' => 6, 'packageQuantity' => 0, 'packageUnit' => '', 'lineTotal' => 2.39],
+                ['rawLabel' => 'POISSON PANE 10 PCS SURG', 'expandedName' => 'Poisson pané', 'isFood' => true, 'quantity' => 1, 'packageQuantity' => 400, 'packageUnit' => 'g', 'lineTotal' => 3.45],
+            ],
+        ]);
+
+        [$eggs, $fish] = $this->readReceipt()['lines'];
+
+        self::assertSame('piece', $eggs['unit']);
+        self::assertEqualsWithDelta(1.0, $eggs['quantityPerPackage'], 0.001);
+        self::assertSame(6, $eggs['numberOfPackages']);
+        self::assertSame('none', $eggs['decision'], 'Eggs are never asked about the freezer.');
+
+        self::assertContains('frozen', $fish['traits']);
+        self::assertSame('freezer', $fish['storageLocation']);
+        self::assertSame('none', $fish['decision'], 'Already in the freezer: nothing to ask.');
     }
 
     /** The app sends the photo in base64 inside a JSON body: same reading, same checks. */

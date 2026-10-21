@@ -120,18 +120,40 @@ class GroceryReturnResolveTest extends WebTestCase
         self::assertSame('default', $line['provenance']['storage']);
     }
 
-    /** Milk is chilled whatever its carton says: the lexicon decides, and asks for the printed date. */
-    public function testAChilledPackageWithAShortEstimateAsksForItsPrintedDate(): void
+    /** Milk is chilled whatever its carton says: the lexicon decides, and the estimate is shown, not asked. */
+    public function testAChilledPackageGetsItsEstimateWithoutAQuestion(): void
     {
         $this->makeProduct('3017620422011', 'Lait demi-écrémé');
 
         $line = $this->resolveOne(['lineKey' => 'c', 'barcode' => '3017620422011']);
 
         self::assertSame('fridge', $line['storageLocation']);
-        self::assertSame('needs_decision', $line['status']);
-        self::assertSame('short_date', $line['decision']);
-        self::assertNotNull($line['decisionLabel']);
+        self::assertSame('ready', $line['status']);
+        self::assertSame('none', $line['decision']);
         self::assertTrue($line['expirationIsEstimated']);
+        self::assertNotNull($line['expirationExplanation']);
+    }
+
+    /** Eggs and cheese are proteins, but nobody freezes them on the way home: no question. */
+    public function testEggsAndCheeseAreNotAskedAboutTheFreezer(): void
+    {
+        $eggs = $this->resolveOne(['lineKey' => 'e2', 'name' => 'Œufs plein air', 'unit' => 'piece', 'quantityPerPackage' => 1, 'numberOfPackages' => 6]);
+        self::assertSame('fridge', $eggs['storageLocation']);
+        self::assertSame('none', $eggs['decision']);
+
+        $cheese = $this->resolveOne(['lineKey' => 'e3', 'name' => 'Emmental râpé']);
+        self::assertSame('fridge', $cheese['storageLocation'], 'The lexicon learnt the cheeses a receipt names without "fromage".');
+        self::assertSame('none', $cheese['decision']);
+    }
+
+    /** "SURG" on the printed label keeps frozen peas in the freezer even when the readable name lost it. */
+    public function testThePrintedLabelKeepsTheStateTheReadableNameDropped(): void
+    {
+        $line = $this->resolveOne(['lineKey' => 'e4', 'name' => 'Petits pois carottes', 'receiptLabel' => 'PETITS POIS CAR.SURGELES 1KG']);
+
+        self::assertContains('frozen', $line['traits']);
+        self::assertSame('freezer', $line['storageLocation']);
+        self::assertSame('none', $line['decision']);
     }
 
     /** A line ticked on the list resolves straight to the food the list already named. */

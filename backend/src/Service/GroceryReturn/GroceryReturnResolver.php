@@ -9,7 +9,6 @@ use App\Entity\HouseholdProductVariant;
 use App\Entity\Product;
 use App\Entity\ShoppingListItem;
 use App\Enum\FoodCut;
-use App\Enum\FoodGroup;
 use App\Enum\FoodNature;
 use App\Enum\ProductTrait;
 use App\Enum\StorageLocation;
@@ -20,8 +19,8 @@ use App\Repository\ProductRepository;
 use App\Repository\ShoppingListItemRepository;
 use App\Service\Food\CutSuggester;
 use App\Service\Food\CutSuggestion;
-use App\Service\Food\FoodGroupLexicon;
 use App\Service\Food\FoodNatureDetector;
+use App\Service\Food\FreezerCandidates;
 use App\Service\Food\FreshFoodLexicon;
 use App\Service\Freshness\ShelfLifeEstimator;
 use App\Service\IngredientKeyGenerator;
@@ -51,7 +50,7 @@ final class GroceryReturnResolver
         private readonly FreshFoodLexicon $freshFoods,
         private readonly CutSuggester $cutSuggester,
         private readonly ShelfLifeEstimator $shelfLife,
-        private readonly FoodGroupLexicon $foodGroups,
+        private readonly FreezerCandidates $freezerCandidates,
         private readonly UnitConverter $converter,
         private readonly GroceryReturnDecider $decider,
     ) {
@@ -95,7 +94,10 @@ final class GroceryReturnResolver
         $name = $givenName ?? $variant?->getName() ?? $product?->getName() ?? $listItem?->getLabel() ?? '';
         $brand = $line->string('brand') ?? $variant?->getBrand() ?? $product?->getBrand();
         $category = $variant?->getCategory() ?? $product?->getCategory();
-        $traits = $givenTraits ?? $this->traitsFor($variant, $product, $name, $category);
+        // The label as the receipt printed it keeps the state words the
+        // readable name may have dropped ("SURG", "CONS."): both are read.
+        $receiptLabel = $line->string('receiptLabel');
+        $traits = $givenTraits ?? $this->traitsFor($variant, $product, $name, $category, $receiptLabel);
 
         $nature = $line->enum('nature', FoodNature::class)
             ?? $variant?->getNature()
@@ -133,7 +135,6 @@ final class GroceryReturnResolver
         $expiration = null;
         $estimated = false;
         $explanation = null;
-        $estimatedDays = null;
         $dateProvenance = ResolvedGroceryLine::PROVENANCE_NONE;
 
         if (null !== $printed) {
@@ -144,18 +145,16 @@ final class GroceryReturnResolver
             $expiration = $estimate->until();
             $estimated = true;
             $explanation = $estimate->explanation();
-            $estimatedDays = $estimate->days;
             $dateProvenance = ResolvedGroceryLine::PROVENANCE_ESTIMATED;
         }
 
         $decision = $this->decider->decide(
             nameKnown: '' !== $name,
             unitMismatch: $unitMismatch,
-            nature: $nature,
             storage: $storage,
             storageProvenance: $storageProvenance,
-            isProtein: '' !== $name && in_array(FoodGroup::Protein, $this->foodGroups->groupsOf($name) ?? [], true),
-            estimatedDays: $estimatedDays,
+            freezerCandidate: ('' !== $name && $this->freezerCandidates->isCandidate($name))
+                || (null !== $receiptLabel && $this->freezerCandidates->isCandidate($receiptLabel)),
         );
 
         return new ResolvedGroceryLine(
@@ -256,7 +255,7 @@ final class GroceryReturnResolver
     }
 
     /** @return list<ProductTrait> */
-    private function traitsFor(?HouseholdProductVariant $variant, ?Product $product, string $name, ?string $category): array
+    private function traitsFor(?HouseholdProductVariant $variant, ?Product $product, string $name, ?string $category, ?string $receiptLabel): array
     {
         if (null !== $variant) {
             return $variant->getTraits();
@@ -266,7 +265,16 @@ final class GroceryReturnResolver
             return $product->getTraits();
         }
 
-        return '' !== $name ? $this->traitDetector->detect($name, $category) : [];
+        $traits = '' !== $name ? $this->traitDetector->detect($name, $category) : [];
+        if (null !== $receiptLabel) {
+            foreach ($this->traitDetector->detect($receiptLabel, $category) as $trait) {
+                if (!in_array($trait, $traits, true)) {
+                    $traits[] = $trait;
+                }
+            }
+        }
+
+        return $traits;
     }
 
     /** The last package bought of this very food, in a readable unit of its family. */

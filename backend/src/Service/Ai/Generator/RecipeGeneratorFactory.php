@@ -32,6 +32,15 @@ class RecipeGeneratorFactory
     ) {
     }
 
+    /**
+     * The same chain, declared by another variable — the receipts may go to
+     * another provider than the recipes (a paid one, for the photos).
+     */
+    public function forProvider(string $provider): RecipeGeneratorInterface
+    {
+        return (new self($this->gemini, $this->claude, $this->logger, $provider))->create();
+    }
+
     public function create(): RecipeGeneratorInterface
     {
         $attempts = array_values(array_filter(

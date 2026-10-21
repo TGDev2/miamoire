@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Tests\Service\GroceryReturn;
 
-use App\Enum\FoodNature;
 use App\Enum\GroceryReturnDecision;
 use App\Enum\StorageLocation;
 use App\Service\GroceryReturn\GroceryReturnDecider;
@@ -32,7 +31,7 @@ class GroceryReturnDeciderTest extends TestCase
     {
         self::assertSame(
             GroceryReturnDecision::UnknownFood,
-            $this->decide(nameKnown: false, unitMismatch: true, isProtein: true, storage: StorageLocation::Fridge),
+            $this->decide(nameKnown: false, unitMismatch: true, freezerCandidate: true, storage: StorageLocation::Fridge),
         );
     }
 
@@ -42,98 +41,55 @@ class GroceryReturnDeciderTest extends TestCase
     }
 
     /** Meat with no habit and no instruction: the freezer stops the clock, so ask. */
-    public function testAProteinHeadedToTheFridgeByDefaultAsksAboutTheFreezer(): void
+    public function testMeatHeadedToTheFridgeByDefaultAsksAboutTheFreezer(): void
     {
         self::assertSame(
             GroceryReturnDecision::FridgeOrFreezer,
-            $this->decide(isProtein: true, storage: StorageLocation::Fridge),
+            $this->decide(freezerCandidate: true, storage: StorageLocation::Fridge),
         );
     }
 
     /** A habit is an answer: the household already keeps this food somewhere. */
-    public function testAProteinWithAHabitDoesNotAsk(): void
+    public function testMeatWithAHabitDoesNotAsk(): void
     {
         self::assertSame(
             GroceryReturnDecision::None,
-            $this->decide(isProtein: true, storage: StorageLocation::Fridge, storageProvenance: GroceryReturnDecider::STORAGE_HABIT),
+            $this->decide(freezerCandidate: true, storage: StorageLocation::Fridge, storageProvenance: GroceryReturnDecider::STORAGE_HABIT),
         );
         self::assertSame(
             GroceryReturnDecision::None,
-            $this->decide(isProtein: true, storage: StorageLocation::Fridge, storageProvenance: GroceryReturnDecider::STORAGE_GIVEN),
+            $this->decide(freezerCandidate: true, storage: StorageLocation::Fridge, storageProvenance: GroceryReturnDecider::STORAGE_GIVEN),
         );
     }
 
-    public function testAProteinAlreadyInTheFreezerDoesNotAsk(): void
+    /** A "surgelé" label already sent the food to the freezer: nothing to ask. */
+    public function testMeatAlreadyInTheFreezerDoesNotAsk(): void
     {
         self::assertSame(
             GroceryReturnDecision::None,
-            $this->decide(isProtein: true, storage: StorageLocation::Freezer, estimatedDays: 180),
+            $this->decide(freezerCandidate: true, storage: StorageLocation::Freezer),
         );
     }
 
-    /** A chilled package with a short estimate has a printed date worth reading. */
-    public function testAShortEstimateOnAChilledPackageAsksForThePrintedDate(): void
+    /** A chilled package is never asked for its printed date: the estimate is shown instead. */
+    public function testAChilledPackageIsNotAskedForItsDate(): void
     {
-        self::assertSame(
-            GroceryReturnDecision::ShortDate,
-            $this->decide(storage: StorageLocation::Fridge, estimatedDays: GroceryReturnDecider::SHORT_DATE_DAYS),
-        );
-    }
-
-    public function testALongerEstimateDoesNotAsk(): void
-    {
-        self::assertSame(
-            GroceryReturnDecision::None,
-            $this->decide(storage: StorageLocation::Fridge, estimatedDays: GroceryReturnDecider::SHORT_DATE_DAYS + 1),
-        );
-    }
-
-    /** Fresh produce has no printed date to read: its short estimate is all there is. */
-    public function testFreshProduceIsNeverAskedForAPrintedDate(): void
-    {
-        self::assertSame(
-            GroceryReturnDecision::None,
-            $this->decide(nature: FoodNature::Fresh, storage: StorageLocation::Fridge, estimatedDays: 3),
-        );
-    }
-
-    public function testThePantryHasEnoughSlackNotToAsk(): void
-    {
-        self::assertSame(GroceryReturnDecision::None, $this->decide(storage: StorageLocation::Pantry, estimatedDays: 3));
-    }
-
-    /** A printed date or a cleared date leaves no estimate, hence nothing to ask. */
-    public function testWithoutAnEstimateThereIsNoDateQuestion(): void
-    {
-        self::assertSame(GroceryReturnDecision::None, $this->decide(storage: StorageLocation::Fridge, estimatedDays: null));
-    }
-
-    /** Where it goes decides what the date means: the freezer question comes first. */
-    public function testTheFreezerQuestionComesBeforeTheDateQuestion(): void
-    {
-        self::assertSame(
-            GroceryReturnDecision::FridgeOrFreezer,
-            $this->decide(isProtein: true, storage: StorageLocation::Fridge, estimatedDays: 3),
-        );
+        self::assertSame(GroceryReturnDecision::None, $this->decide(storage: StorageLocation::Fridge));
     }
 
     private function decide(
         bool $nameKnown = true,
         bool $unitMismatch = false,
-        FoodNature $nature = FoodNature::Packaged,
         StorageLocation $storage = StorageLocation::Pantry,
         string $storageProvenance = GroceryReturnDecider::STORAGE_DEFAULT,
-        bool $isProtein = false,
-        ?int $estimatedDays = 30,
+        bool $freezerCandidate = false,
     ): GroceryReturnDecision {
         return $this->decider->decide(
             nameKnown: $nameKnown,
             unitMismatch: $unitMismatch,
-            nature: $nature,
             storage: $storage,
             storageProvenance: $storageProvenance,
-            isProtein: $isProtein,
-            estimatedDays: $estimatedDays,
+            freezerCandidate: $freezerCandidate,
         );
     }
 }

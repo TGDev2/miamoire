@@ -24,6 +24,7 @@ trait RequiresDatabase
         'stock_item',
         'shopping_list_item',
         'receipt_alias',
+        'receipt_capture',
         'household_product_variant',
         'household_member',
         'household',

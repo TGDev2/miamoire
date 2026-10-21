@@ -38,6 +38,14 @@ class ProductTraitDetectorTest extends TestCase
         self::assertContains(ProductTrait::Dried, $this->detector->detect('Abricots séchés'));
     }
 
+    /** A receipt abbreviates: the printed label must still tell the state. */
+    public function testReceiptAbbreviationsAreRecognised(): void
+    {
+        self::assertContains(ProductTrait::Frozen, $this->detector->detect('POISSON PANE 10 PCS SURG'));
+        self::assertContains(ProductTrait::Canned, $this->detector->detect('CONS.THON HV 3X80G'));
+        self::assertNotContains(ProductTrait::Canned, $this->detector->detect('Consommé de volaille'), '"cons" is a word boundary, not a prefix.');
+    }
+
     /**
      * La forme n'est plus un trait : « râpé » ne dit pas ce qu'on a fait à
      * l'aliment mais la forme qu'il a, et c'est {@see \App\Service\Food\FoodCutDetector}
