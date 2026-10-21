@@ -581,13 +581,50 @@ not sent; they stay in the basket.
   "estimateExpiration": true, "shoppingListItemId": null, "batches": null } ] }
 ```
 
+### The receipt: one photo, the whole trip
+
+Since August 2023 a French shop prints the receipt only on request, but the
+receipt is still the one artefact that lists the whole trip, with quantities
+and weights, for free. `POST /grocery-returns/receipt` takes one to three
+photos (multipart `images[]`, JPEG/PNG/WebP, 8 MB each, the type read from
+the bytes) and asks the recipe model to **transcribe** them — the same
+provider chain as the recipes, with the images attached to the message
+(`RecipeGeneratorInterface::generate(..., $images)`: inline parts for Gemini,
+image blocks before the text for Claude). The model returns `ReceiptSchema`:
+the shop, the date, the total, and one line per printed article with its
+label exactly as printed (`rawLabel`), a readable food name (`expandedName`),
+whether it is food, the quantity, the package when the line gives it
+("6X125G", "0,842 KG") and the line total. It decides nothing.
+
+Each printed label is first looked up in what the household taught
+(`ReceiptAlias`: household, shop, label → food, or "not food"). A known label
+names its food outright (`variantId` on the line) and the food's habits fill
+the rest; an ignored label is set aside; anything else goes through the
+resolver with the readable name as its only hint, and a name the resolver
+cannot match stays "à préciser". The response is the resolved lines, each
+with `receipt: {store, rawLabel, lineTotal}`, and the `ignored` lines. The
+image is sent and discarded; nothing is written.
+
+**Learning happens at `confirm`, from a human.** A confirmed line that
+carries its `receipt` label teaches the alias for that shop; the `ignored`
+list teaches the labels to skip. The model's own guess is never learnt. From
+the second trip on, a label the household has confirmed once resolves alone,
+and the line asks only what a habit cannot answer (a chilled package with a
+short estimate still asks for its printed date).
+
+Limits, written here rather than suggested by the screen: the receipt is
+read by the configured model, so the provider's terms apply to the photo for
+the duration of the call; a faded or crumpled receipt yields unknown lines,
+never guessed ones; two photos of the same receipt give the lines twice, and
+the triage shows them.
+
 What is deliberately not there: a server-side return shared between members
 (the basket is per phone, as before; a hand-off is a later evolution), a bulk
 revert (each lot archives on its own, as for "Refaire l'inventaire"), and any
 write without a tap — the model never touches the inventory, and neither does
-a resolution. The receipt, the dictation and the share intakes described in
+a resolution or a receipt. The dictation and the share intakes described in
 `tasks/grocery-return.md` are the next phases; they feed the same basket and
-the same two routes.
+the same routes.
 
 ## Démarrer
 
@@ -1038,7 +1075,8 @@ voir une dépendance qu'un contrôleur a simplement oublié de déclarer.
 | `GET` | `/products/barcode/{barcode}` | Résolution d'un code-barres (cache puis Open Food Facts) |
 | `GET` | `/products/shelf-life` | Durée de conservation estimée d'un aliment, et sa justification |
 | `POST` | `/grocery-returns/resolve` | Fills the empty fields of a basket's lines from habits, catalogue and lexicons, with provenance and at most one question per line. No write |
-| `POST` | `/grocery-returns/confirm` | Every lot of the return in one idempotent operation; matched shopping-list lines removed in the same transaction |
+| `POST` | `/grocery-returns/confirm` | Every lot of the return in one idempotent operation; matched shopping-list lines removed in the same transaction; the printed labels confirmed or set aside are learnt |
+| `POST` | `/grocery-returns/receipt` | Multipart `images[]` (1–3 photos): a receipt read by the model into resolved lines, with its printed labels; nothing written, the image never stored |
 | `POST` | `/products` | Contribue une fiche au catalogue — **code-barres obligatoire** |
 | `GET` `POST` | `/stock-items` | Inventaire filtrable ; ajout d'un ou plusieurs lots (`batches`) |
 | `GET` `PATCH` | `/stock-items/{id}` | Fiche d'un lot et ses lots frères |
