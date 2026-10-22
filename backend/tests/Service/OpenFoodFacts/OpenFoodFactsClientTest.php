@@ -90,7 +90,7 @@ class OpenFoodFactsClientTest extends TestCase
             new MockHttpClient($response),
             new NullLogger(),
             'https://world.openfoodfacts.org',
-            'Food/test',
+            'Miamoire/test',
         );
     }
 }

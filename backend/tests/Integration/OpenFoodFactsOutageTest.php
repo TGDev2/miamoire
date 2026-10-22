@@ -154,7 +154,7 @@ class OpenFoodFactsOutageTest extends WebTestCase
 
         static::getContainer()->set(
             OpenFoodFactsClient::class,
-            new OpenFoodFactsClient($http, new NullLogger(), 'https://world.openfoodfacts.org', 'Food/test'),
+            new OpenFoodFactsClient($http, new NullLogger(), 'https://world.openfoodfacts.org', 'Miamoire/test'),
         );
     }
 

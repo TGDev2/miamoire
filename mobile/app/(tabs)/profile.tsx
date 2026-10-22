@@ -444,7 +444,7 @@ export default function ProfileScreen() {
             icon="share-variant-outline"
             onPress={() =>
               Share.share({
-                message: `Rejoins notre foyer « ${household!.name} » dans l'application Food avec ce code : ${issuedKey ?? accessKey}`,
+                message: `Rejoins notre foyer « ${household!.name} » dans l'application Miamoire avec ce code : ${issuedKey ?? accessKey}`,
               })
             }
           />
@@ -473,7 +473,7 @@ export default function ProfileScreen() {
           setAlertStatus(
             granted
               ? 'Alertes autorisées sur ce téléphone.'
-              : 'Alertes refusées. Autorisez les notifications de Food dans les réglages Android.',
+              : 'Alertes refusées. Autorisez les notifications de Miamoire dans les réglages Android.',
           );
         }}
       />

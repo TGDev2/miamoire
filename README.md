@@ -1,4 +1,4 @@
-# Food
+# Miamoire
 
 Assistant de gestion domestique. L'application répond à trois questions :
 
@@ -785,7 +785,7 @@ depuis une notification.
 Tant que l'API tournait sur un ordinateur personnel, l'application s'éteignait avec
 lui, et un VPN était imposé à chaque utilisateur. L'API et la base vivent désormais
 sur un hébergement permanent, joignable en HTTPS depuis n'importe quel réseau. Les
-membres du foyer n'installent rien d'autre que **Food**.
+membres du foyer n'installent rien d'autre que **Miamoire**.
 
 ### L'image
 
@@ -801,7 +801,7 @@ même image se déploie donc sur Fly.io, Railway, Render, Koyeb ou Clever Cloud.
 
 ```bash
 cd backend
-docker build -t food-api .
+docker build -t miamoire-api .
 ```
 
 ### Le déploiement
@@ -864,7 +864,7 @@ docker exec food_postgres pg_dump -U food -d food --no-owner > food.sql
 psql "<DATABASE_URL de la base managée>" < food.sql
 
 # Délivrance des codes aux foyers repris
-docker run --rm -e DATABASE_URL="…" food-api php bin/console app:households:issue-keys
+docker run --rm -e DATABASE_URL="…" miamoire-api php bin/console app:households:issue-keys
 ```
 
 Puis, dans `mobile/eas.json`, remplacer `EXPO_PUBLIC_API_URL` par l'URL HTTPS

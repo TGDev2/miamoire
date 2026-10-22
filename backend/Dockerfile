@@ -1,4 +1,4 @@
-# Image de production de l'API Food.
+# Image de production de l'API Miamoire.
 #
 # FrankenPHP — Caddy avec PHP embarqué — remplace à la fois le serveur intégré
 # `php -S`, que la documentation PHP réserve au développement, et l'attelage

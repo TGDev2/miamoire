@@ -109,7 +109,7 @@ export default function SetupScreen() {
   if (issuedKey) {
     return (
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.logo}>Food</Text>
+        <Text style={styles.logo}>Miamoire</Text>
         <SectionTitle>Le code de votre foyer</SectionTitle>
         <Text style={styles.help}>
           Notez-le maintenant. Le serveur n'en conserve qu'une empreinte : il ne pourra
@@ -130,7 +130,7 @@ export default function SetupScreen() {
           variant="secondary"
           onPress={() =>
             Share.share({
-              message: `Rejoins notre foyer « ${household?.name ?? ''} » dans l'application Food avec ce code : ${issuedKey}`,
+              message: `Rejoins notre foyer « ${household?.name ?? ''} » dans l'application Miamoire avec ce code : ${issuedKey}`,
             })
           }
         />
@@ -148,7 +148,7 @@ export default function SetupScreen() {
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         {/* La promesse en grand, le nom en petit : c'est ce que l'application
             fait qui doit ouvrir l'écran, pas la marque. */}
-        <Text style={styles.logo}>Food</Text>
+        <Text style={styles.logo}>Miamoire</Text>
         <Text style={styles.tagline}>
           Ce que vous avez, ce qui va périmer, ce que vous pouvez cuisiner.
         </Text>
