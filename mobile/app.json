@@ -5,23 +5,27 @@
     "scheme": "food",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.theo.food",
       "infoPlist": {
         "NSCameraUsageDescription": "La caméra sert à scanner les codes-barres des produits que vous ajoutez à votre stock."
+      },
+      "icon": {
+        "light": "./assets/images/icon.png",
+        "dark": "./assets/images/ios-dark.png",
+        "tinted": "./assets/images/ios-tinted.png"
       }
     },
     "android": {
       "package": "com.theo.food",
       "versionCode": 15,
       "adaptiveIcon": {
-        "backgroundColor": "#2F6B4F",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "monochromeImage": "./assets/images/adaptive-icon-monochrome.png",
+        "backgroundColor": "#123B35"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -30,11 +34,20 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 122,
+          "resizeMode": "contain",
+          "backgroundColor": "#123B35"
+        }
+      ],
       [
         "expo-build-properties",
         {
@@ -49,7 +62,8 @@
       [
         "expo-notifications",
         {
-          "color": "#C9372C"
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#123B35"
         }
       ],
       "@react-native-community/datetimepicker",
