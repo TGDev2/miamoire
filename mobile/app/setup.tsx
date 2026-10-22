@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,6 +17,8 @@ import { ServerAddressField } from '../src/components/ServerAddressField';
 import { Button, Card, ErrorBanner, Field, Loader, SectionTitle } from '../src/components/ui';
 import { useSession } from '../src/session/SessionContext';
 import { colors, font, radius, spacing, text } from '../src/theme';
+
+const logo = require('../assets/images/logo.png');
 
 /**
  * Mise en route : ouvrir un foyer, puis dire qui l'on est.
@@ -109,7 +112,7 @@ export default function SetupScreen() {
   if (issuedKey) {
     return (
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.logo}>Miamoire</Text>
+        <Image source={logo} style={styles.logo} accessibilityRole="image" accessibilityLabel="Miamoire" />
         <SectionTitle>Le code de votre foyer</SectionTitle>
         <Text style={styles.help}>
           Notez-le maintenant. Le serveur n'en conserve qu'une empreinte : il ne pourra
@@ -148,7 +151,7 @@ export default function SetupScreen() {
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         {/* La promesse en grand, le nom en petit : c'est ce que l'application
             fait qui doit ouvrir l'écran, pas la marque. */}
-        <Text style={styles.logo}>Miamoire</Text>
+        <Image source={logo} style={styles.logo} accessibilityRole="image" accessibilityLabel="Miamoire" />
         <Text style={styles.tagline}>
           Ce que vous avez, ce qui va périmer, ce que vous pouvez cuisiner.
         </Text>
@@ -277,7 +280,8 @@ export default function SetupScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.ground },
   container: { padding: spacing.xl, paddingTop: spacing.xxl * 2, paddingBottom: spacing.xxl },
-  logo: { ...text.label, fontSize: 11, letterSpacing: 3 },
+  // The logotype's own proportions (2400 × 310): small, the promise below is the headline.
+  logo: { width: 186, height: 24 },
   tagline: { ...text.title, marginTop: spacing.md },
   rule: { height: 1, backgroundColor: colors.border, marginTop: spacing.xl, marginBottom: spacing.sm },
   help: { ...text.small, marginBottom: spacing.md },

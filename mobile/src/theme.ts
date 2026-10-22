@@ -1,12 +1,17 @@
 /**
  * Les jetons de l'interface.
  *
- * Une seule règle gouverne l'ensemble : **l'application n'a pas de couleur de
- * marque, la couleur dit le temps qui reste**. Le mobilier — fonds, cartes,
- * boutons, barre d'onglets, icônes — est entièrement en gris froids et en encre
- * bleu-noir. Les quatre teintes de `thermal` sont réservées aux échéances et
- * aux états qui en découlent. Une tache de couleur à l'écran veut donc toujours
- * dire « celui-là réclame quelque chose », et se voit avant d'être lue.
+ * Une seule règle gouverne l'ensemble : **la marque habille, la couleur dit le
+ * temps qui reste**. Le mobilier — fonds, cartes, boutons, barre d'onglets,
+ * icônes — porte l'identité Miamoire : une encre vert profond sur un fond
+ * crème. Les quatre teintes de `thermal` restent les seules couleurs qui
+ * *signifient* quelque chose, réservées aux échéances et aux états qui en
+ * découlent. Une tache de couleur à l'écran veut donc toujours dire
+ * « celui-là réclame quelque chose », et se voit avant d'être lue.
+ *
+ * Le corail de la marque (`#FF7659`) ne vit que dans le logo : illisible en
+ * texte sur le crème (2,4:1), et voisin du rouge `critical`, il se lirait ici
+ * comme « périmé ».
  */
 
 import type { TextStyle } from 'react-native';
@@ -14,18 +19,20 @@ import type { TextStyle } from 'react-native';
 import type { EffectiveUseByBasis } from './api/types';
 
 export const colors = {
-  /** Le givre : le fond de tous les écrans. Froid, parce qu'on conserve au froid. */
-  ground: '#E7ECEF',
-  surface: '#FFFFFF',
+  /** Le crème de la marque : le fond de tous les écrans. */
+  ground: '#FAF4E8',
+  surface: '#FFFCF5',
   /** Les zones creuses : champs de saisie, pistes de sélection. */
-  surfaceSunk: '#F1F4F6',
-  /** L'encre : un noir bleuté, jamais neutre. */
-  ink: '#0F171C',
-  inkMuted: '#5A6B75',
+  surfaceSunk: '#F3ECDE',
+  /** L'encre : le vert de la marque, pour le texte comme pour les aplats (11:1 sur le fond). */
+  ink: '#123B35',
+  /** Un aplat d'encre sous le doigt : un cran plus clair, le texte crème y garde 8:1. */
+  inkPressed: '#1F5048',
+  inkMuted: '#56685F',
   /** Filets d'un pixel — il n'y a aucune ombre dans cette interface. */
-  border: '#CDD7DC',
-  borderStrong: '#B3C1C8',
-  onInk: '#FFFFFF',
+  border: '#E4DACA',
+  borderStrong: '#C9BCA4',
+  onInk: '#FAF4E8',
 } as const;
 
 /**
@@ -36,7 +43,7 @@ export const colors = {
  */
 export const thermal = {
   /** Aucune échéance connue, ou trop lointaine pour compter. */
-  calm: { line: '#5A6B75', wash: '#EAEFF1' },
+  calm: { line: '#56685F', wash: '#EFE8D9' },
   /** Il reste du temps : frais, scellé, réalisable. */
   safe: { line: '#176E7C', wash: '#E1EDEF' },
   /** Trois jours ou moins : entamé, à consommer vite, à compléter. */

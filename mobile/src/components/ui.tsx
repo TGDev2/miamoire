@@ -703,7 +703,7 @@ const buttonVariants: Record<
 > = {
   primary: {
     container: { backgroundColor: colors.ink },
-    pressed: { backgroundColor: '#28353D' },
+    pressed: { backgroundColor: colors.inkPressed },
     text: { color: colors.onInk },
   },
   secondary: {

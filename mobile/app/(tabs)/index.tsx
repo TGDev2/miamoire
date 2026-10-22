@@ -560,5 +560,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addPressed: { backgroundColor: '#28353D' },
+  addPressed: { backgroundColor: colors.inkPressed },
 });
