@@ -6,7 +6,7 @@
   "build": {
     "base": {
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://food-production-4a93.up.railway.app"
+        "EXPO_PUBLIC_API_URL": "https://miamoire-api.onrender.com"
       }
     },
     "preview": {
