@@ -37,6 +37,13 @@ RUN install-php-extensions \
         zip \
         opcache
 
+# L'image officielle donne au binaire la capacité CAP_NET_BIND_SERVICE pour
+# écouter sur les ports 80 et 443. Certains hébergeurs (Render) refusent
+# d'exécuter un binaire porteur de capacités : « exec: frankenphp: Operation not
+# permitted ». L'API écoute sur $PORT, toujours supérieur à 1024 : la capacité
+# est inutile, on la retire pour que l'image démarre partout.
+RUN setcap -r /usr/local/bin/frankenphp
+
 # OPcache : sans lui, chaque requête recompile toute l'application.
 COPY docker/php.ini /usr/local/etc/php/conf.d/app.ini
 
