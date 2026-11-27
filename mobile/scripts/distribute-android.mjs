@@ -182,9 +182,11 @@ function buildOnEasServers(profile) {
  * numéro recule ; mieux vaut échouer ici, bruyamment, que livrer aux testeurs
  * un APK qu'ils ne pourront pas installer.
  */
-const VERSION_CODE_OFFSET = 100;
-
 function versionCodeFromHistory() {
+  // Déclarée ici et non en tête de module : le script appelle cette fonction
+  // pendant son évaluation, avant qu'une constante de module plus bas soit
+  // initialisée (zone morte temporelle → ReferenceError).
+  const VERSION_CODE_OFFSET = 100;
   let count;
 
   try {
