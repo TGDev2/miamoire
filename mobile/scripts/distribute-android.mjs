@@ -160,7 +160,14 @@ function buildOnEasServers(profile) {
 }
 
 /**
- * Le numéro de version de l'APK : le nombre de commits du dépôt.
+ * Le numéro de version de l'APK : le nombre de commits du dépôt, plus un
+ * décalage fixe.
+ *
+ * Le décalage existe parce que l'historique a été réécrit en novembre 2026 : le
+ * dépôt recréé compte moins de commits (99) que le numéro déjà diffusé aux
+ * testeurs (124). Sans lui, chaque nouvel APK porterait un numéro inférieur à
+ * celui installé, et Android refuserait la mise à jour. Un décalage constant
+ * garde les deux propriétés du compteur : monotone et reproductible.
  *
  * Il vivait sur les serveurs d'EAS, qui l'incrémentaient à chaque compilation.
  * Une compilation locale ne passe plus par eux, et l'historique git fait un
@@ -175,11 +182,14 @@ function buildOnEasServers(profile) {
  * numéro recule ; mieux vaut échouer ici, bruyamment, que livrer aux testeurs
  * un APK qu'ils ne pourront pas installer.
  */
+const VERSION_CODE_OFFSET = 100;
+
 function versionCodeFromHistory() {
   let count;
 
   try {
-    count = Number(execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim());
+    count = Number(execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim())
+      + VERSION_CODE_OFFSET;
   } catch {
     fail('Impossible de compter les commits : la diffusion doit être lancée depuis le dépôt.');
   }
@@ -188,7 +198,7 @@ function versionCodeFromHistory() {
 
   if (!Number.isInteger(count) || count <= floor) {
     fail(
-      `Le nombre de commits (${count}) ne dépasse pas le versionCode du manifeste (${floor}).\n`
+      `Le numéro calculé (${count}, décalage de ${VERSION_CODE_OFFSET} compris) ne dépasse pas le versionCode du manifeste (${floor}).\n`
         + 'Android refuserait l\'installation par-dessus la version déjà diffusée.\n\n'
         + 'Cause la plus probable en intégration continue : un clone superficiel.\n'
         + 'Le workflow doit demander `fetch-depth: 0` à actions/checkout.',

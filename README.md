@@ -923,18 +923,25 @@ npm run distribute:android -- --remote          # repli : compiler chez Expo
 npm run distribute:android -- --artifact-url …  # rediffuser un APK déjà compilé
 ```
 
-**Le `versionCode` est le nombre de commits du dépôt** (`git rev-list --count HEAD`).
+**Le `versionCode` est le nombre de commits du dépôt plus 100** (`git rev-list --count HEAD`
++ `VERSION_CODE_OFFSET`).
 Il vivait sur les serveurs d'EAS, qui l'incrémentaient à chaque compilation ; une
 compilation locale ne passe plus par eux. L'historique git fait un meilleur
 compteur qu'un fichier à éditer : monotone tant que l'historique reste linéaire,
 identique ici et en intégration continue, et surtout **reproductible** — le même
 commit produit le même numéro.
 
-`app.json` en garde un, `15`, qui n'est qu'un plancher : la valeur du dernier APK
-diffusé par EAS. Le script refuse de diffuser en dessous, ce qui attrape le piège
-le plus probable — `actions/checkout` clone en `fetch-depth: 1` par défaut, le
-compte vaudrait alors 1, et Android refuse d'installer une version dont le numéro
-recule. D'où le `fetch-depth: 0` du workflow.
+Le décalage de 100 vient de la réécriture de l'historique en novembre 2026 : le
+dépôt recréé comptait 99 commits alors que les testeurs avaient déjà la version
+124. Sans décalage, Android aurait refusé chaque mise à jour comme un retour en
+arrière.
+
+`app.json` en garde un, `124`, qui n'est qu'un plancher : le plus haut numéro
+réellement diffusé avant le décalage. Le script refuse de diffuser en dessous, ce
+qui attrape le piège le plus probable — `actions/checkout` clone en
+`fetch-depth: 1` par défaut, le compte vaudrait alors 1, et Android refuse
+d'installer une version dont le numéro recule. D'où le `fetch-depth: 0` du
+workflow.
 
 ### Mise en place, une fois
 
